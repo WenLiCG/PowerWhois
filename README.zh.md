@@ -179,3 +179,7 @@ make all
 ## 贡献
 
 欢迎贡献！请随时提交 Pull Request。
+
+## 为爱发电
+[爱发电](https://afdian.com/a/Powerwhois)
+
