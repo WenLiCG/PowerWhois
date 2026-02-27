@@ -125,3 +125,6 @@ make all
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 为爱发电
+[爱发电](https://afdian.com/a/Powerwhois)
