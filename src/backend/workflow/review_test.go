@@ -66,6 +66,41 @@ func TestGenerationCannotOverwriteCommittedCancel(t *testing.T) {
 	}
 }
 
+func TestClaimDoesNotWriteWhileAllWorkIsInFlight(t *testing.T) {
+	s := testStore(t)
+	j := imported(t, s, "example.com")
+	if _, err := s.Generate(context.Background(), j.ID, GenerateOptions{Rules: []string{"www"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transition(j.ID, "start"); err != nil {
+		t.Fatal(err)
+	}
+	work, err := s.claim()
+	if err != nil || work == nil {
+		t.Fatal("expected work", err)
+	}
+	s.beforeCommit = func() error { return errors.New("unexpected idle write") }
+	if next, err := s.claim(); err != nil || next != nil {
+		t.Fatal("idle worker opened a write transaction", err)
+	}
+	s.beforeCommit = nil
+	if err := s.finish(*work, Result{Status: "registered"}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Get(j.ID)
+	if err != nil || current.State != "completed" {
+		t.Fatal("completion failed", err)
+	}
+}
+
+func TestInvalidUTF8DomainIsRejected(t *testing.T) {
+	for _, raw := range []string{"\xff.com", "exam\xc0\xafple.com", "\xed\xa0\x80.com"} {
+		if _, err := NormalizeSeed(raw); err == nil {
+			t.Fatalf("invalid UTF-8 accepted: %q", raw)
+		}
+	}
+}
+
 func TestBrowserCrossOriginCannotStartJob(t *testing.T) {
 	s := testStore(t)
 	j := generated(t, s, "example.com")

@@ -1,0 +1,29 @@
+[Unit]
+Description=PowerWhois durable domain query service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=powerwhois
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/powerwhois
+ExecStart=/opt/powerwhois/current/powerwhois serve --listen 127.0.0.1:8080 --data /var/lib/powerwhois/jobs.db --web /opt/powerwhois/current/web --workers 3 --provider-interval 2s
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryHigh=384M
+MemoryMax=768M
+CPUQuota=100%
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

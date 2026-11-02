@@ -81,7 +81,7 @@ bbolt 事务分别保存 job 元数据、输入、候选、来源、待查队列
 
 ## 构建和检查
 
-需要 Go >= 1.25（本机实际 Go 1.27.3）、Node/npm。前端提交了 npm lockfile。
+需要 Go >= 1.26（Excelize 安全更新的最低要求；本次使用 Go 1.27.3）、Node/npm。前端提交了 npm lockfile。
 
 ```powershell
 cd src/backend
@@ -92,6 +92,7 @@ go build -o ../../bin/powerwhois.exe .
 go test -race ./...
 cd ../frontend
 npm ci --ignore-scripts
+npm test
 npm run lint
 npm run build
 ```

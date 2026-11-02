@@ -1,8 +1,8 @@
-> Current main: [CLI / API / XLSX workflow](LOCAL-WORKFLOW.zh.md) · [Validation and reproduction](VALIDATION.zh.md) · [Review fixes](FINAL-REVIEW.zh.md).
+> Current entry point: [CLI / API / XLSX workflow](LOCAL-WORKFLOW.zh.md) · [VPS deployment and Dot operation](DEPLOYMENT.zh.md) · [Current code review](REVIEW-2026-11-02.zh.md).
 >
 > The source entry point now runs durable local jobs shared by the CLI, HTTP API and Web UI: XLSX import → deterministic typo generation → throttled HTTPS RDAP checks → XLSX export. It binds to loopback, has no purchase operations, and keeps registered/not_found/unknown/error distinct. `not_found` does not establish purchasability. The 10,000-seed test produced 221,949 unique candidates; the full job was not scanned online.
 >
-> The remaining web/deployment documentation describes the historical application. Existing `deploy/` binaries have not been rebuilt and do not contain this workflow. Build the current source and follow the workflow guide; remote deployment has not been validated.
+> The remaining web/Docker documentation describes the historical application. Existing `deploy/` binaries do not contain this workflow. Build current source with Go >= 1.26 and use `deploy/systemd/powerwhois.service`. Loopback/SSH access, CLI/API, Web and restart recovery have been validated on a VPS. A separate Dot session has not been tested; see the deployment guide for the exact boundary.
 
 English | [中文](./README.zh.md)
 
