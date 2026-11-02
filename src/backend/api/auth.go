@@ -36,6 +36,9 @@ type LoginInfo struct {
 //   - 400: Invalid credentials or malformed request
 //   - 500: Internal server error during token generation
 func Login(c *fiber.Ctx) error {
+	if !authConfigured(config.GetConfig()) {
+		return c.SendStatus(fiber.StatusServiceUnavailable)
+	}
 
 	// Parse the request body and get the login information.
 	var login LoginInfo
@@ -49,7 +52,7 @@ func Login(c *fiber.Ctx) error {
 
 	// Compare the username and password in the request body with the config values.
 	if (login.Username != cfg.AuthUsername) || (login.Password != cfg.AuthPassword) {
-		log.Warnf("Login failed. Username: %s, Password: %s", login.Username, login.Password)
+		log.Warn("Login failed")
 		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the username or password is incorrect.
 	}
 
@@ -72,6 +75,9 @@ func Login(c *fiber.Ctx) error {
 // configured auth password as the signing key. Invalid or missing tokens result
 // in a 401 Unauthorized response.
 func LoginRequired() func(*fiber.Ctx) error {
+	if !authConfigured(config.GetConfig()) {
+		return func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusServiceUnavailable) }
+	}
 	return jwtware.New(jwtware.Config{
 		// SigningKey is the key used to sign the JWT token.
 		// It is used to verify the token when it is received.
@@ -91,6 +97,9 @@ func LoginRequired() func(*fiber.Ctx) error {
 //   - bool: True if token is valid, false otherwise
 //   - error: Error details if validation fails, nil on success
 func ValidateToken(tokenString string) (bool, error) {
+	if !authConfigured(config.GetConfig()) {
+		return false, fmt.Errorf("legacy authentication is not configured securely")
+	}
 	token, err := jwt.Parse(tokenString, func(jwtToken *jwt.Token) (interface{}, error) {
 		// Check the signing method of the JWT token.
 		// Only HMAC signing method is supported.
@@ -144,6 +153,9 @@ func jwtError(c *fiber.Ctx, err error) error {
 //   - error: Error if token generation fails
 func generateToken(username string) (string, error) {
 	cfg := config.GetConfig()
+	if !authConfigured(cfg) {
+		return "", fmt.Errorf("legacy authentication is not configured securely")
+	}
 
 	// Get the number of days the token is valid for.
 	// If the AuthExpireDays config value is not set, use the default value of jwtDefaultExpireDays.
@@ -172,4 +184,8 @@ func generateToken(username string) (string, error) {
 	}
 
 	return token, nil
+}
+
+func authConfigured(cfg config.Config) bool {
+	return cfg.AuthUsername != "" && len(cfg.AuthPassword) >= 12 && len(cfg.JwtSecretKey) >= 32
 }

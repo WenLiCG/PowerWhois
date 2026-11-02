@@ -4,9 +4,9 @@ LogLevel: Info
 
 # Setting authentication information
 AuthUsername: admin
-AuthPassword: 123456
+AuthPassword: ""
 AuthExpireDays: 30
-JwtSecretKey: 1234567890abcdef
+JwtSecretKey: ""
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -60,14 +60,14 @@ MixedDnsTlds:
     - pt
 
 ## Setting proxy information
-SocketProxyHost: test.superproxy.io
+SocketProxyHost: ""
 SocketProxyPort: 22222
-SocketProxyAuth: true
-SocketProxyUser: testuser
-SocketProxyPassword: 1234567890
+SocketProxyAuth: false
+SocketProxyUser: ""
+SocketProxyPassword: ""
 
 # ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: 50
+BulkCheckConcurrencyLimit: 10
 
 # ------ Web check settings ------
 WebCheckConcurrencyLimit: 10

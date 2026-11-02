@@ -185,23 +185,8 @@ func (t *WebCheck) webLookupResultHandler(domain string, lookupResult lookupinfo
 			queryResult.QueryError = utils.GetDomainHumanError(lookupErr)
 		}
 	case constant.LookupTypeDNS:
-		if lookupErr == nil {
-			if len(lookupResult.NameServer) > 0 {
-				queryResult.RegisterStatus = constant.DomainRegisterStatusTaken
-				// Convert the name server list to lowercase and save it to the NameServer field
-				queryResult.NameServer = slice.Map(lookupResult.NameServer, utils.LowerString)
-				// Calculate the DNS lite of the name server list and save it to the DnsLite field
-				queryResult.DnsLite = utils.GetDnsLite(lookupResult.NameServer)
-			} else {
-				queryResult.RegisterStatus = constant.DomainRegisterStatusFree
-			}
-		} else if errors.Is(lookupErr, lookuperror.ErrorNsNotFound) {
-			queryResult.RegisterStatus = constant.DomainRegisterStatusFree
-		} else {
-			queryResult.RegisterStatus = constant.DomainRegisterStatusError
-			// Convert the DNS error to human readable error message and save it to the QueryError field
-			queryResult.QueryError = utils.GetDomainHumanError(lookupErr)
-		}
+		queryResult.RegisterStatus = constant.DomainRegisterStatusError
+		queryResult.QueryError = "DNS data cannot establish registration availability"
 	default:
 		// Customize api whois result
 		if lookupErr != nil {

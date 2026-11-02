@@ -90,7 +90,7 @@ func init() {
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Error("Error getting executable file path: ", err)
-		os.Exit(1)
+		return
 	}
 
 	// Get the directory of the executable file.
@@ -110,14 +110,14 @@ func init() {
 	err = viper.ReadInConfig()
 	if err != nil {
 		log.Error("Error reading config file: ", err)
-		os.Exit(1)
+		return
 	}
 
 	// Unmarshal the configuration into the config variable.
 	viper.Unmarshal(&config)
 
 	// Print the configuration to the debug log at startup.
-	log.Debugf("Read config: %+v", config)
+	log.Debug("Configuration loaded")
 }
 
 func GetConfig() Config {
@@ -320,7 +320,7 @@ WhoisApis:
 
 	// Print the new configuration content to the debug log.
 	// The new configuration content is printed to the debug log for debugging purposes.
-	log.Debugf("New config content: %s", newConfigContent.String())
+	log.Debug("Configuration serialized")
 
 	// Write the new configuration content to the file specified by the configFile variable.
 	// The file is created if it does not exist.

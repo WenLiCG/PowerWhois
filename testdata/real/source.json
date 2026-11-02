@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/WebsiteLaunches/top-100-million-domains",
+  "commit": "df5c729c3984e4ed7cf0e3bbd9102927564af9c9",
+  "commitDate": "2025-11-20T18:55:34Z",
+  "file": "data/top-100k-domains.csv",
+  "url": "https://raw.githubusercontent.com/WebsiteLaunches/top-100-million-domains/df5c729c3984e4ed7cf0e3bbd9102927564af9c9/data/top-100k-domains.csv",
+  "bytes": 1431810,
+  "sha256": "c0306291ab5ca312d1651de96c4704e84ede8fac327b9e2ce12eb99673aef2b2",
+  "gitBlobSHA": "46c4e355bddad1e6e9f50bb4678cebd989fc8c73",
+  "license": "MIT; Copyright 2025 Website Launches; see SOURCE-LICENSE",
+  "selection": "Source order; workflow.NormalizeSeed; reject invalid/subdomain identities; keep first occurrence of each canonical seed; stop at 10000 unique seeds.",
+  "observedSourceRows": 10309,
+  "observedRejected": 29,
+  "observedDuplicates": 280,
+  "observedUniqueSeeds": 10000,
+  "rules": ["omission", "repetition", "transposition"],
+  "expectedUniqueCandidates": 221949,
+  "expectedCandidateLinesSHA256": "4e5213feed33a035dbe212e586fa6116631441280e14221c4d34188f5a4dfa07"
+}

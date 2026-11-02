@@ -18,7 +18,7 @@ import (
 	"typonamer/lookup/lookupinfo"
 	"typonamer/utils"
 
-	"github.com/bytedance/sonic"
+	"encoding/json"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/gofiber/contrib/socketio"
@@ -75,7 +75,7 @@ type BulkCheckStatusInfo struct {
 
 // init is the entry point of the batch task package.
 // It is responsible for initializing the package by connecting to Redis and initializing the batch task status.
-func init() {
+func InitLegacy() {
 	// Get a Redis client
 	client, err := database.GetRedis()
 	if err != nil {
@@ -259,7 +259,10 @@ func ClearBulkCheckTask() {
 	ctx := context.Background()
 
 	// Clear the redis database.
-	err := rdb.FlushDB(ctx).Err()
+	err := rdb.Del(ctx, constant.BulkCheckQueryTypeRedisKey, constant.BulkCheckRawDomainsRedisKey,
+		constant.BulkCheckUniqueDomainsRedisKey, constant.BulkCheckUniqueDomainsCountRedisKey,
+		constant.BulkCheckTakenResultRedisKey, constant.BulkCheckFreeResultRedisKey,
+		constant.BulkCheckErrorResultRedisKey, constant.BulkCheckStatusRedisKey).Err()
 	if err != nil {
 		// If there is an error clearing the redis database, log the error.
 		log.Errorf("Failed to clear redis: %s", err)
@@ -869,7 +872,7 @@ func runBulkCheckTask() {
 			return
 		default:
 			domainItem := BulkCheckDomain{}
-			err = sonic.Unmarshal([]byte(domainStr), &domainItem)
+			err = json.Unmarshal([]byte(domainStr), &domainItem)
 			if err != nil {
 				log.Errorf("Failed to unmarshal redis unique domain JSON data '%s' to BulkCheckDomain object", domainStr)
 				continue
@@ -910,7 +913,10 @@ func bulkCheckQueryHandler(i int, ch chan BulkCheckDomain, wg *sync.WaitGroup, q
 			log.Debugf("Bulk check handler %d query domain %s", handerSeq, domainInfo.Domain)
 
 			lookupResult, err := lookuper.Lookup(domainInfo.Domain, queryType)
-			bulkCheckLookupResultHandler(handerSeq, domainInfo, lookupResult, err)
+			if saveErr := bulkCheckLookupResultHandler(handerSeq, domainInfo, lookupResult, err); saveErr != nil {
+				log.Errorf("Result persistence failed; domain remains queued: %s", domainInfo.Domain)
+				return
+			}
 
 			// Delete the domain from the unique domain list
 			deleteDomainFromUniqueDomainList(domainInfo.Domain)
@@ -978,71 +984,8 @@ func bulkCheckLookupResultHandler(handerSeq int, domainInfo BulkCheckDomain, loo
 			return err
 		}
 	case constant.LookupTypeDNS:
-		if lookupErr == nil {
-			if len(lookupResult.NameServer) > 0 {
-				takenResult := lookupinfo.QueryResult{
-					Order:          domainInfo.Order,
-					Domain:         domainInfo.Domain,
-					LookupType:     lookupResult.LookupType,
-					RegisterStatus: constant.DomainRegisterStatusTaken,
-					NameServer:     slice.Map(lookupResult.NameServer, utils.LowerString),
-					DnsLite:        utils.GetDnsLite(lookupResult.NameServer),
-				}
-
-				log.Debugf("DNS query of domain %s taken result: %+v", domainInfo.Domain, takenResult)
-
-				err := rdb.RPush(context.Background(), constant.BulkCheckTakenResultRedisKey, convertor.ToString(takenResult)).Err()
-				if err != nil {
-					log.Warnf("Bulk check handler %d failed to save the DNS taken result of domain %s to redis: %s", handerSeq, domainInfo.Domain, err)
-				}
-				return err
-			} else {
-				freeResult := lookupinfo.QueryResult{
-					Order:          domainInfo.Order,
-					Domain:         domainInfo.Domain,
-					LookupType:     lookupResult.LookupType,
-					RegisterStatus: constant.DomainRegisterStatusFree,
-				}
-
-				log.Debugf("DNS query of domain %s free result: %+v", domainInfo.Domain, freeResult)
-
-				err := rdb.RPush(context.Background(), constant.BulkCheckFreeResultRedisKey, convertor.ToString(freeResult)).Err()
-				if err != nil {
-					log.Warnf("Bulk check handler %d failed to save the DNS free result of domain %s to redis: %s", handerSeq, domainInfo.Domain, err)
-				}
-				return err
-			}
-		} else if errors.Is(lookupErr, lookuperror.ErrorNsNotFound) {
-			freeResult := lookupinfo.QueryResult{
-				Order:          domainInfo.Order,
-				Domain:         domainInfo.Domain,
-				LookupType:     lookupResult.LookupType,
-				RegisterStatus: constant.DomainRegisterStatusFree,
-			}
-
-			log.Debugf("DNS query of domain %s free result: %+v", domainInfo.Domain, freeResult)
-
-			err := rdb.RPush(context.Background(), constant.BulkCheckFreeResultRedisKey, convertor.ToString(freeResult)).Err()
-			if err != nil {
-				log.Warnf("Bulk check handler %d failed to save the DNS free result of domain %s to redis: %s", handerSeq, domainInfo.Domain, err)
-			}
-			return err
-		} else {
-			log.Errorf("Dns query of domain %s error: %s", domainInfo.Domain, lookupErr)
-			errorResult := lookupinfo.QueryResult{
-				Order:          domainInfo.Order,
-				Domain:         domainInfo.Domain,
-				LookupType:     lookupResult.LookupType,
-				RegisterStatus: constant.DomainRegisterStatusError,
-				QueryError:     utils.GetDomainHumanError(lookupErr),
-			}
-
-			err := rdb.RPush(context.Background(), constant.BulkCheckErrorResultRedisKey, convertor.ToString(errorResult)).Err()
-			if err != nil {
-				log.Warnf("Bulk check handler %d failed to save the DNS error result of domain %s to redis: %s", handerSeq, domainInfo.Domain, err)
-			}
-			return err
-		}
+		result := lookupinfo.QueryResult{Order: domainInfo.Order, Domain: domainInfo.Domain, LookupType: lookupResult.LookupType, RegisterStatus: constant.DomainRegisterStatusError, QueryError: "DNS data cannot establish registration availability"}
+		return rdb.RPush(context.Background(), constant.BulkCheckErrorResultRedisKey, convertor.ToString(result)).Err()
 	default:
 		// Customize api whois result
 		if lookupErr != nil {

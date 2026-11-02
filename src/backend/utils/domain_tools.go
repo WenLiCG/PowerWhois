@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"typonamer/workflow"
 
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -59,32 +60,7 @@ func TrimAndGetMainDomain(domain string) (string, error) {
 }
 
 func TrimDomain(domain string) (string, error) {
-	if domain == "" {
-		return "", errors.New("domain is empty")
-	}
-
-	// remove whitespaces from the domain string
-	domainStr1 := strutil.RemoveWhiteSpace(domain, true)
-	if domainStr1 == "" {
-		return "", errors.New("domain is empty")
-	}
-
-	// remove special characters from the domain string
-	domainStr2 := strutil.ReplaceWithMap(domainStr1, replaces)
-	if domainStr2 == "" {
-		return "", errors.New("domain is invalid")
-	}
-
-	// convert the domain string to lowercase
-	domainStr3 := strings.ToLower(domainStr2)
-
-	// Trim the domain string to remove "-"
-	domainStr4 := strings.Trim(domainStr3, "-")
-	if strings.Contains(domainStr4, ".") {
-		return domainStr4, nil
-	}
-
-	return "", errors.New("domain is invalid")
+	return workflow.Normalize(domain)
 }
 
 func GetDomainSuffix(domain string) (string, error) {
@@ -97,7 +73,6 @@ func GetDomainSuffix(domain string) (string, error) {
 
 	for n := maxLen; n > 0; n-- {
 		suffix := strings.Join(parts[len(parts)-n:], ".")
-		fmt.Println("suffix: ", suffix)
 		if slice.Contain(DomainSuffixes, suffix) {
 			return suffix, nil
 		}
