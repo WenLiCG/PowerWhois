@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.25.x', '1.27.x']
+        go: ['1.26.x', '1.27.x']
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -55,5 +55,6 @@ jobs:
       - name: Lint and build
         working-directory: src/frontend
         run: |
+          npm test
           npm run lint
           npm run build

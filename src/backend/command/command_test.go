@@ -48,6 +48,39 @@ func TestCLIRejectsRedirects(t *testing.T) {
 	}
 }
 
+func TestExportNeverReplacesDestination(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("complete export"))
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	for _, kind := range []string{"file", "dangling-symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			destination := filepath.Join(dir, kind+".xlsx")
+			if kind == "file" {
+				if err := os.WriteFile(destination, []byte("keep me"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(filepath.Join(dir, "missing"), destination); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			var out, stderr bytes.Buffer
+			code := command.Run([]string{"export", "--url", server.URL, "--job", "example", "--file", destination}, &out, &stderr)
+			if code != 2 {
+				t.Fatalf("existing destination accepted: exit=%d %s", code, &stderr)
+			}
+			if kind == "file" {
+				data, err := os.ReadFile(destination)
+				if err != nil || string(data) != "keep me" {
+					t.Fatal("destination changed", err)
+				}
+			} else if _, err := os.Readlink(destination); err != nil {
+				t.Fatal("symlink replaced", err)
+			}
+		})
+	}
+}
+
 func (provider) Lookup(context.Context, string) workflow.Result {
 	return workflow.Result{Status: "registered", Provider: "synthetic integration provider", CheckedAt: time.Now().UTC()}
 }

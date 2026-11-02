@@ -10,7 +10,7 @@ if (-not $go -and (Test-Path -LiteralPath $portable)) {
     $env:GOMODCACHE = Join-Path $taskRoot '.tools/gomod'
     $env:GOPATH = Join-Path $taskRoot '.tools/gopath'
 }
-if (-not $go) { throw 'Install Go >= 1.25 or put it in PATH.' }
+if (-not $go) { throw 'Install Go >= 1.26 or put it in PATH.' }
 Push-Location (Join-Path $project 'src/backend')
 try {
     $testArgs = @('test','./...','-count=1')
@@ -25,6 +25,8 @@ try {
 } finally { Pop-Location }
 Push-Location (Join-Path $project 'src/frontend')
 try {
+    & npm.cmd test
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
     & npm.cmd run lint
     if ($LASTEXITCODE -ne 0) { throw 'Frontend lint failed' }
     & npm.cmd run build

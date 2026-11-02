@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import { actionsFor, columnsFor, savedOptions } from "../src/utils/workflowView.js";
+assert.deepEqual(actionsFor({ state: "running" }), ["pause", "cancel"]);
+assert.deepEqual(actionsFor({ state: "ready", candidates: 0 }), ["cancel"]);
+assert.deepEqual(actionsFor({ state: "ready", candidates: 4 }), ["start", "cancel"]);
+for (const state of ["completed", "canceled", "importing", "generating"]) assert.deepEqual(actionsFor({ state }), []);
+assert(columnsFor("seeds").includes("error"), "errors must appear even when the first row is valid");
+const options = { rules: ["www"], tlds: ["com"], maxCandidates: 1, includeSeeds: true };
+assert.deepEqual(savedOptions({ state: "generating", options }), options, "generation must reuse saved options");
+assert(savedOptions({ options: { rules: null } }).rules.length > 0);
+console.log("workflow view checks passed");

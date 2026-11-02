@@ -270,7 +270,9 @@ func (s *Store) claim() (*claim, error) {
 				return e
 			}
 			if j.State == "running" {
-				hasWork = true
+				pending, _ := b.Bucket([]byte("pending")).Cursor().First()
+				active, _ := b.Bucket([]byte("active")).Cursor().First()
+				hasWork = hasWork || pending != nil || active == nil
 			}
 			return nil
 		})

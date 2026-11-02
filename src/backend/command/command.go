@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"typonamer/workflow"
@@ -81,7 +83,7 @@ func Run(args []string, out, stderr io.Writer) int {
 		}
 		defer svc.Close()
 		server := &http.Server{Addr: *listen, Handler: svc.Handler(*web), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		server.BaseContext = func(net.Listener) context.Context { return ctx }
 		_ = json.NewEncoder(stderr).Encode(map[string]string{"listen": *listen, "database": *data})
@@ -233,10 +235,10 @@ func Run(args []string, out, stderr io.Writer) int {
 		if closeErr != nil {
 			return fail(1, closeErr)
 		}
-		if _, e = os.Stat(*file); e == nil {
+		// shortcut: atomic no-replace publication needs hard links; use HTTP export on filesystems without them.
+		if e = os.Link(tmp.Name(), *file); errors.Is(e, os.ErrExist) {
 			return fail(2, fmt.Errorf("export destination exists; choose a new path"))
-		}
-		if e = os.Rename(tmp.Name(), *file); e != nil {
+		} else if e != nil {
 			return fail(1, e)
 		}
 		_ = json.NewEncoder(out).Encode(map[string]string{"file": *file})
