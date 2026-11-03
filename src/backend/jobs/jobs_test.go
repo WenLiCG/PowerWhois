@@ -123,7 +123,7 @@ func TestDurableTasks(t *testing.T) {
 		t.Fatalf("pagination: %+v %v", page, err)
 	}
 	retry, err := s2.RetryFailed(ctx, task.ID)
-	if err != nil || retry.Total != 1 || retry.ID == task.ID {
+	if err != nil || retry.Total != 1 || retry.ID == task.ID || retry.ParentTaskID != task.ID {
 		t.Fatalf("retry: %+v %v", retry, err)
 	}
 	canceled, _, err := s2.Create(ctx, Request{Domains: []string{"example.org"}, Mode: "dns"}, "")

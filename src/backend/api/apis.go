@@ -21,9 +21,8 @@ import (
 var utf8BomData = []byte{0xEF, 0xBB, 0xBF}
 
 func AdminSettingList(c *fiber.Ctx) error {
-	cfg := config.GetConfig()
 	log.Info("Getting admin setting list success")
-	return c.JSON(cfg)
+	return c.JSON(config.PublicSettings())
 }
 
 func WebSettingList(c *fiber.Ctx) error {
@@ -50,14 +49,17 @@ func WebSettingList(c *fiber.Ctx) error {
 }
 
 func SettingUpdate(c *fiber.Ctx) error {
-	newConfig := new(config.Config)
+	newConfig := new(struct {
+		config.Config
+		SecretActions map[string]string `json:"secretActions"`
+	})
 	if err := c.BodyParser(newConfig); err != nil {
 		// Error parsing the config info
 		log.Error("Parse config info error: ", err)
 		return c.Status(400).SendString("invalid settings payload")
 	}
 
-	err := config.UpdateConfig(*newConfig)
+	err := config.UpdateConfig(newConfig.Config, newConfig.SecretActions)
 	if err != nil {
 		// Error updating the config
 		log.Error("Update config error: ", err)
@@ -73,7 +75,7 @@ func SettingUpdate(c *fiber.Ctx) error {
 	// Update the config success
 	log.Info("Update config success")
 
-	return c.JSON(newConfig)
+	return c.JSON(config.PublicSettings())
 }
 
 func DownloadLog(c *fiber.Ctx) error {

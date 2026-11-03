@@ -35,6 +35,7 @@
             <q-select
                 outlined
                 v-model="selectedID"
+                :disable="acting"
                 :options="taskOptions"
                 emit-value
                 map-options
@@ -62,7 +63,7 @@
                 "
             />
         </div>
-        <div v-if="task" class="q-mt-lg">
+        <div v-if="task && task.id === selectedID" class="q-mt-lg">
             <div class="task-title">
                 <h3>{{ stateLabels[task.state] || task.state }}</h3>
                 <code>{{ task.id }}</code
@@ -114,10 +115,10 @@
                 />
                 <q-btn outline icon="download" label="导出已有结果 CSV" :disable="!task.completed" :loading="exporting" @click="exportResults" />
             </div>
-            <p class="text-caption text-grey-8">结果按输入位置分页；运行中的页面可能暂时没有结果。点击域名可查看来源、时间和原始响应。</p>
+            <p class="text-caption text-grey-8">导出运行中或未完成任务时，文件名标记 partial，结果不是同一时刻的快照。结果按输入位置分页；运行中的页面可能暂时没有结果。点击域名可查看来源、时间和原始响应。</p>
             <q-table flat bordered :rows="results" :columns="columns" row-key="domain" :pagination="{ rowsPerPage: 0 }" hide-pagination hide-bottom>
                 <template #body-cell-domain="props"
-                    ><q-td :props="props"><q-btn flat dense no-caps color="primary" :label="props.row.domain" @click="details = props.row" /></q-td
+                    ><q-td :props="props"><q-btn flat dense no-caps color="primary" :label="props.row.domain" @click="openDetails(props.row)" /></q-td
                 ></template>
                 <template #body-cell-status="props"
                     ><q-td :props="props">{{ resultLabels[props.row.status] || props.row.status }}</q-td></template
@@ -129,16 +130,18 @@
                     label="上一页结果"
                     :disable="resultOffset === 0"
                     @click="
-                        resultOffset -= 100;
+                        resultOffsets.pop();
+                        resultOffset = resultOffsets[resultOffsets.length - 1];
                         loadResults();
                     "
                 /><span>{{ resultOffset + 1 }}–{{ Math.min(resultOffset + 100, task.total) }} / {{ task.total }}</span
                 ><q-btn
                     flat
                     label="下一页结果"
-                    :disable="resultOffset + 100 >= task.total"
+                    :disable="nextResultOffset < 0"
                     @click="
-                        resultOffset += 100;
+                        resultOffsets.push(nextResultOffset);
+                        resultOffset = nextResultOffset;
                         loadResults();
                     "
                 />
@@ -180,6 +183,8 @@ const error = ref(""),
     refreshing = ref(false),
     acting = ref(false),
     exporting = ref(false);
+const resultOffsets = ref([0]), nextResultOffset = ref(-1);
+let resultRequest = 0;
 const historyOffset = ref(0),
     resultOffset = ref(0);
 let timer,
@@ -201,18 +206,25 @@ function showError(e) {
 }
 async function loadResults() {
     if (!selectedID.value) return;
+    const id = selectedID.value, offset = resultOffset.value, request = ++resultRequest;
     try {
-        const id = selectedID.value;
-        const { data } = await api.get(`/v1/tasks/${id}/results`, { params: { offset: resultOffset.value, limit: 100 } });
-        if (selectedID.value === id) results.value = data.items;
+        const { data } = await api.get(`/v1/tasks/${id}/results`, { params: { offset, limit: 100, includeRaw: false } });
+        if (!stopped && selectedID.value === id && resultOffset.value === offset && request === resultRequest) {
+            results.value = data.items;
+            nextResultOffset.value = data.nextOffset;
+        }
         return true;
     } catch (e) {
-        showError(e);
+        if (!stopped && selectedID.value === id && resultOffset.value === offset && request === resultRequest) showError(e);
         return false;
     }
 }
 async function loadSelected() {
     resultOffset.value = 0;
+    resultOffsets.value = [0];
+    nextResultOffset.value = -1;
+    results.value = [];
+    task.value = null;
     if (selectedID.value) localStorage.setItem("powerwhois-task", selectedID.value);
     await refresh();
 }
@@ -275,8 +287,10 @@ async function createTask() {
 }
 async function control(action) {
     acting.value = true;
+    const id = selectedID.value;
     try {
-        const { data } = await api.post(`/v1/tasks/${selectedID.value}/${action}`);
+        const { data } = await api.post(`/v1/tasks/${id}/${action}`);
+        if (selectedID.value !== id || stopped) return;
         task.value = data;
         if (action === "retry") {
             selectedID.value = data.id;
@@ -301,23 +315,34 @@ async function copyID() {
         error.value = "复制失败，请手动复制任务 ID。";
     }
 }
+async function openDetails(row) {
+    const id = selectedID.value;
+    details.value = row;
+    try {
+        const { data } = await api.get(`/v1/tasks/${id}/results/${row.order}`);
+        if (selectedID.value === id && details.value?.order === row.order) details.value = data;
+    } catch (e) { showError(e); }
+}
 async function exportResults() {
     exporting.value = true;
-    const { id, total } = task.value;
+    const { id, state } = task.value;
     const chunks = ["\ufeff"];
     try {
-        for (let offset = 0; offset < total; offset += 1000) {
-            const { data } = await api.get(`/v1/tasks/${id}/export`, {
+        for (let offset = 0; offset >= 0;) {
+            const { data, headers } = await api.get(`/v1/tasks/${id}/export`, {
                 params: { format: "csv", offset, limit: 1000 },
                 responseType: "text",
                 timeout: 60000
             });
             chunks.push(offset === 0 ? data : data.slice(data.indexOf("\n") + 1));
+            const next = Number(headers["x-next-offset"]);
+            if (!Number.isInteger(next) || (next >= 0 && next <= offset)) throw new Error("invalid export cursor");
+            offset = next;
         }
         const url = URL.createObjectURL(new Blob(chunks, { type: "text/csv;charset=utf-8" }));
         const link = document.createElement("a");
         link.href = url;
-        link.download = `powerwhois-${id}.csv`;
+        link.download = `powerwhois-${id}${state === "completed" ? "" : "-partial"}.csv`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {

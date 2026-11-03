@@ -27,3 +27,7 @@
 - `register`：`{registerType,domains,confirmed:true}`；需要管理员及明确确认，只用于人工 Web 操作。没有注册 MCP/CLI 工具。
 
 即时查询断线会停止本连接工作；持久化批量任务通过 `/api/v1/tasks` 操作，不受断线影响。原 `registerStatus` 的 Free 已不再作为可注册承诺，使用新增规范 `status` 字段。旧客户端需要适配认证首帧、确认字段和新增状态；不保证仍依赖旧不安全行为的客户端原样可用。
+
+## 2026-11-03 第二轮变更
+
+管理设置 GET/PUT 不再回传秘密，修改凭据使用 secretActions；任务结果默认摘要并提供单条原文端点，分页与导出必须跟随 nextOffset/X-Next-Offset。完整说明见 [ROUND2](docs/ROUND2.md)。

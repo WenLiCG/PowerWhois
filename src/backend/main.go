@@ -71,6 +71,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer r.Close()
+	register.SetAuditStore(r)
 	scheduler.Init(ctx, r)
 
 	// ---------- Init Fiber App ----------

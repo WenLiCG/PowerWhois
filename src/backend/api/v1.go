@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"typonamer/jobs"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/scheduler"
@@ -49,6 +50,9 @@ func decode(c *fiber.Ctx, v interface{}) error {
 	return nil
 }
 func taskError(c *fiber.Ctx, err error) error {
+	if errors.Is(err, jobs.ErrResultTooLarge) {
+		return apiError(c, 413, "result_too_large", err.Error())
+	}
 	if errors.Is(err, jobs.ErrNoRetryResults) {
 		return apiError(c, 400, "invalid_request", err.Error())
 	}
@@ -90,6 +94,8 @@ func V1Routes(router fiber.Router) {
 		ctx, cancel := context.WithTimeout(c.UserContext(), 120*1000000000)
 		defer cancel()
 		result := make([]lookupinfo.QueryResult, len(r.Domains))
+		var responseBytes atomic.Int64
+		var responseTooLarge atomic.Bool
 		var wg sync.WaitGroup
 		work := make(chan int)
 		for i := 0; i < min(r.Concurrency, len(r.Domains)); i++ {
@@ -97,8 +103,20 @@ func V1Routes(router fiber.Router) {
 			go func() {
 				defer wg.Done()
 				for index := range work {
-					result[index] = scheduler.Tasks.Query(ctx, r.Domains[index], r.Mode, r.Timeout, r.Retries)
-					result[index].Order = index
+					item := scheduler.Tasks.Query(ctx, r.Domains[index], r.Mode, r.Timeout, r.Retries)
+					item.Order = index
+					// Full evidence is retrieved from durable tasks; synchronous responses stay bounded.
+					if len(item.RawResponse) > 65536 {
+						item.RawResponse = item.RawResponse[:65536]
+						item.RawResponseTruncated = true
+					}
+					encoded, _ := json.Marshal(item)
+					if responseBytes.Add(int64(len(encoded))) > 8*1024*1024 {
+						responseTooLarge.Store(true)
+						cancel()
+						continue
+					}
+					result[index] = item
 				}
 			}()
 		}
@@ -107,6 +125,9 @@ func V1Routes(router fiber.Router) {
 		}
 		close(work)
 		wg.Wait()
+		if responseTooLarge.Load() {
+			return apiError(c, 413, "response_too_large", "use durable tasks and paged results for large responses")
+		}
 		return c.JSON(fiber.Map{"items": result})
 	})
 	v.Post("/typo", func(c *fiber.Ctx) error {
@@ -170,11 +191,25 @@ func V1Routes(router fiber.Router) {
 		if err != nil {
 			return apiError(c, 400, "invalid_request", err.Error())
 		}
-		p, err := scheduler.Tasks.Results(c.UserContext(), c.Params("id"), offset, limit)
+		p, err := scheduler.Tasks.Results(c.UserContext(), c.Params("id"), offset, limit, c.QueryBool("includeRaw", false))
 		if err != nil {
 			return taskError(c, err)
 		}
 		return c.JSON(p)
+	})
+	v.Get("/tasks/:id/results/:index", func(c *fiber.Ctx) error {
+		index, e := strconv.Atoi(c.Params("index"))
+		if e != nil || index < 0 {
+			return apiError(c, 400, "invalid_request", "invalid result index")
+		}
+		p, e := scheduler.Tasks.Results(c.UserContext(), c.Params("id"), index, 1)
+		if e != nil {
+			return taskError(c, e)
+		}
+		if len(p.Items) == 0 {
+			return apiError(c, 404, "not_found", "result not completed")
+		}
+		return c.JSON(p.Items[0])
 	})
 	v.Post("/tasks/:id/:action", func(c *fiber.Ctx) error {
 		action := c.Params("action")
@@ -206,9 +241,14 @@ func V1Routes(router fiber.Router) {
 		if err != nil {
 			return apiError(c, 400, "invalid_request", err.Error())
 		}
-		p, err := scheduler.Tasks.Results(c.UserContext(), t.ID, offset, limit)
+		p, err := scheduler.Tasks.Results(c.UserContext(), t.ID, offset, limit, format != "csv")
 		if err != nil {
 			return taskError(c, err)
+		}
+		c.Set("X-Task-State", t.State)
+		c.Set("X-Export-Consistency", "partial")
+		if t.State == "completed" {
+			c.Set("X-Export-Consistency", "complete")
 		}
 		c.Set("X-Next-Offset", strconv.Itoa(p.NextOffset))
 		c.Set("Content-Disposition", `attachment; filename="powerwhois-`+t.ID+`.`+format+`"`)

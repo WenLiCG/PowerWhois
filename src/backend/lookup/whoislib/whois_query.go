@@ -3,6 +3,7 @@ package whoislib
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -181,6 +182,9 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 		domainInfo.ViaProxy = useProxy
 		domainInfo.Source = whoisServer
 		if err != nil {
+			if errors.Is(err, lookuperror.ErrorReservedDomain) {
+				return domainInfo, err
+			}
 			if err.Error() == "domain not found" {
 				log.Infof("Domain %s is not registered", domain)
 				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisNotFound, domain)

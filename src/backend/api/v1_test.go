@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 	"typonamer/internal/testutil"
@@ -128,5 +129,22 @@ func TestQueryAPIAndTasks(t *testing.T) {
 	code, spec := request("GET", "/api/openapi.json", nil, false, "")
 	if code != 200 || !json.Valid(spec) {
 		t.Fatal("invalid OpenAPI")
+	}
+	if code, data := request("GET", "/api/v1/tasks/"+task.ID+"/results/0", nil, true, ""); code != 200 || !bytes.Contains(data, []byte("example.com")) {
+		t.Fatal("individual evidence unavailable", code)
+	}
+	scheduler.Tasks.Query = func(context.Context, string, string, int, int) lookupinfo.QueryResult {
+		return lookupinfo.QueryResult{Domain: "example.com", Status: "registered", RawResponse: strings.Repeat("x", 200000)}
+	}
+	code, raw = request("POST", "/api/v1/query", req, true, "")
+	json.Unmarshal(raw, &direct)
+	if code != 200 || !direct.Items[0].RawResponseTruncated || len(direct.Items[0].RawResponse) != 65536 {
+		t.Fatal("unbounded synchronous evidence")
+	}
+	scheduler.Tasks.Query = func(context.Context, string, string, int, int) lookupinfo.QueryResult {
+		return lookupinfo.QueryResult{Domain: "example.com", Status: "registered", NameServer: []string{strings.Repeat("x", 9*1024*1024)}}
+	}
+	if code, _ := request("POST", "/api/v1/query", req, true, ""); code != 413 {
+		t.Fatal("oversized synchronous response accepted", code)
 	}
 }

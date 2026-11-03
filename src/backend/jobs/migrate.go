@@ -111,7 +111,7 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 		}
 		r.Order = i
 		raw, _ := json.Marshal(r)
-		_, err = s.Redis.Eval(ctx, `if redis.call('HSETNX',KEYS[1],ARGV[1],ARGV[2])==1 then redis.call('HINCRBY',KEYS[2],ARGV[3],1) end return 1`, []string{s.key(t.ID, "results"), s.key(t.ID, "counts")}, strconv.Itoa(i), raw, r.Status).Result()
+		_, err = s.Redis.Eval(ctx, resultScript, []string{s.Prefix + "worker", s.key(t.ID, "results"), s.key(t.ID, "counts")}, s.owner, strconv.Itoa(i), raw, r.Status).Result()
 		if err != nil {
 			return err
 		}
@@ -126,5 +126,5 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 	if err = s.save(ctx, t); err != nil {
 		return err
 	}
-	return s.Redis.Set(ctx, marker, t.ID, 0).Err()
+	return s.Redis.Eval(ctx, writeGuard+`return redis.call('SET',KEYS[2],ARGV[2])`, []string{s.Prefix + "worker", marker}, s.owner, t.ID).Err()
 }

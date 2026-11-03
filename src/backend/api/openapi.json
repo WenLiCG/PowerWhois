@@ -90,6 +90,16 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Encoded response budget exceeded; create a durable task and page results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -101,7 +111,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Raw response previews are limited to 64 KiB per domain and flagged rawResponseTruncated. Durable tasks retain full evidence."
       }
     },
     "/typo": {
@@ -561,6 +572,16 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "A historical result exceeds the safe limit; retrieve summary results instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -591,6 +612,15 @@
               "maximum": 1000,
               "default": 100
             }
+          },
+          {
+            "name": "includeRaw",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Include original responses. Pages stop at approximately 8 MiB; follow nextOffset even before limit items."
           }
         ]
       }
@@ -1037,6 +1067,16 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "A historical result exceeds the safe limit; retrieve summary results instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -1078,6 +1118,115 @@
                 "csv"
               ],
               "default": "json"
+            }
+          }
+        ],
+        "description": "Pages are bounded by input count and approximately 8 MiB encoded result bytes. Always follow X-Next-Offset/nextOffset. X-Task-State and X-Export-Consistency describe partial/complete results; active exports are not atomic snapshots."
+      }
+    },
+    "/tasks/{id}/results/{index}": {
+      "get": {
+        "operationId": "getTaskResult",
+        "summary": "Read one completed result including its original response",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State transition or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request rate exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Task storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A historical result exceeds the safe limit; retrieve summary results instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         ]
@@ -1197,6 +1346,14 @@
               "timeout",
               "error"
             ]
+          },
+          "rawResponseAvailable": {
+            "type": "boolean",
+            "description": "A task summary omitted the raw response; fetch the individual result to read it."
+          },
+          "rawResponseTruncated": {
+            "type": "boolean",
+            "description": "Synchronous preview exceeded 64 KiB; use a durable task when complete evidence is required."
           }
         },
         "required": [
@@ -1256,6 +1413,10 @@
             "additionalProperties": {
               "type": "integer"
             }
+          },
+          "parentTaskId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,5 +46,30 @@ func TestSafeConfigRoundTrip(t *testing.T) {
 	c.WhoisApis[0].FreeText = []string{""}
 	if Validate(c) == nil {
 		t.Fatal("empty matching rule accepted")
+	}
+	c = GetConfig()
+	public := PublicSettings()
+	encoded, _ := json.Marshal(public)
+	for _, secret := range []string{c.AuthPassword, c.JwtSecretKey, c.SocketProxyPassword, c.WhoisApis[0].ApiUrl} {
+		if secret != "" && strings.Contains(string(encoded), secret) {
+			t.Fatal("public settings expose a secret")
+		}
+	}
+	var incoming Config
+	json.Unmarshal(encoded, &incoming)
+	if e := UpdateConfig(incoming, map[string]string{}); e != nil {
+		t.Fatal("redacted settings could not round trip", e)
+	}
+	kept := GetConfig()
+	if kept.AuthPassword != c.AuthPassword || kept.JwtSecretKey != c.JwtSecretKey || kept.SocketProxyPassword != c.SocketProxyPassword || kept.WhoisApis[0].ApiUrl != c.WhoisApis[0].ApiUrl {
+		t.Fatal("keep lost a secret")
+	}
+	if e := UpdateConfig(incoming, map[string]string{"socketProxyPassword": "clear"}); e != nil || GetConfig().SocketProxyPassword != "" {
+		t.Fatal("explicit clear failed", e)
+	}
+	copy := GetConfig()
+	copy.WhoisApis[0].FreeText[0] = "mutated"
+	if GetConfig().WhoisApis[0].FreeText[0] == "mutated" {
+		t.Fatal("configuration snapshot aliases live data")
 	}
 }

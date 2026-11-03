@@ -130,6 +130,7 @@
                         <q-chip dense color="green" text-color="white" v-if="props.row.registerStatus == 'success'"> OK </q-chip>
                         <q-chip dense color="secondary" text-color="white" v-if="props.row.registerStatus == 'failed'"> Failed </q-chip>
                         <q-chip dense color="negative" text-color="white" v-if="props.row.registerStatus == 'error'"> Error </q-chip>
+                        <q-chip dense color="deep-orange-9" text-color="white" v-if="props.row.registerStatus == 'outcome_unknown'"> 结果待核实，请先查注册商 </q-chip>
                     </span>
                     <span v-else-if="props.row.selectedRegister"><q-spinner-ios color="primary" size="1.8em" /></span>
                     <span v-else></span>

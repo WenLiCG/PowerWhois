@@ -27,3 +27,5 @@
 ![批量任务界面](docs/screenshots/batch-desktop.jpg)
 
 沿用原项目 MIT 许可，见 [LICENSE](LICENSE)。
+
+第二轮安全与正确性修复、接口兼容变化和新增测试见 [ROUND2.md](docs/ROUND2.md)。

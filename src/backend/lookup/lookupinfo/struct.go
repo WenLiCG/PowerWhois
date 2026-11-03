@@ -16,22 +16,24 @@ type DomainInfo struct {
 }
 
 type QueryResult struct {
-	Status          string   `json:"status"`
-	Source          string   `json:"source"`
-	QueriedAt       string   `json:"queriedAt"`
-	Order           int      `json:"order"`
-	Domain          string   `json:"domain"`
-	LookupType      string   `json:"lookupType"`
-	ViaProxy        bool     `json:"viaProxy"`
-	QueryError      string   `json:"queryError"`
-	RegisterStatus  string   `json:"registerStatus"`
-	CreatedDate     string   `json:"createdDate"`
-	ExpiryDate      string   `json:"expiryDate"`
-	NameServer      []string `json:"nameServer"`
-	DnsLite         string   `json:"dnsLite"`
-	RawDomainStatus []string `json:"rawDomainStatus"`
-	DomainStatus    string   `json:"domainStatus"`
-	RawResponse     string   `json:"rawResponse"`
+	RawResponseTruncated bool     `json:"rawResponseTruncated,omitempty"`
+	RawResponseAvailable bool     `json:"rawResponseAvailable,omitempty"`
+	Status               string   `json:"status"`
+	Source               string   `json:"source"`
+	QueriedAt            string   `json:"queriedAt"`
+	Order                int      `json:"order"`
+	Domain               string   `json:"domain"`
+	LookupType           string   `json:"lookupType"`
+	ViaProxy             bool     `json:"viaProxy"`
+	QueryError           string   `json:"queryError"`
+	RegisterStatus       string   `json:"registerStatus"`
+	CreatedDate          string   `json:"createdDate"`
+	ExpiryDate           string   `json:"expiryDate"`
+	NameServer           []string `json:"nameServer"`
+	DnsLite              string   `json:"dnsLite"`
+	RawDomainStatus      []string `json:"rawDomainStatus"`
+	DomainStatus         string   `json:"domainStatus"`
+	RawResponse          string   `json:"rawResponse"`
 }
 
 type QueryCsvResult struct {

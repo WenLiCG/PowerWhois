@@ -175,7 +175,7 @@ func Result(domain string, info lookupinfo.DomainInfo, err error) lookupinfo.Que
 			r.Status = "timeout"
 			r.RegisterStatus = "Timeout"
 		}
-		if errors.Is(err, lookuperror.ErrorNotSupportedTld) || errors.Is(err, lookuperror.ErrorNoParseRuleForTld) || errors.Is(err, lookuperror.ErrorParseWhoisResponse) {
+		if errors.Is(err, lookuperror.ErrorReservedDomain) || errors.Is(err, lookuperror.ErrorNotSupportedTld) || errors.Is(err, lookuperror.ErrorNoParseRuleForTld) || errors.Is(err, lookuperror.ErrorParseWhoisResponse) {
 			r.Status = "unknown"
 			r.RegisterStatus = "Unknown"
 		}

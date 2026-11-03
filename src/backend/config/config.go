@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"typonamer/log"
@@ -106,12 +107,55 @@ func Load(path string) error {
 	}
 	mu.Lock()
 	configFile = path
-	config = next
+	config = clone(next)
 	mu.Unlock()
 	log.SetLevel(next.LogLevel)
 	return nil
 }
-func GetConfig() Config { mu.RLock(); defer mu.RUnlock(); return config }
+func GetConfig() Config { mu.RLock(); defer mu.RUnlock(); return clone(config) }
+func clone(c Config) Config {
+	c.GlobalProxyTlds = slices.Clone(c.GlobalProxyTlds)
+	c.MixedDnsTlds = slices.Clone(c.MixedDnsTlds)
+	c.MixedProxyTlds = slices.Clone(c.MixedProxyTlds)
+	c.TypoDefaultCcTlds = slices.Clone(c.TypoDefaultCcTlds)
+	c.TypoCustomizedReplaces = slices.Clone(c.TypoCustomizedReplaces)
+	c.WhoisApis = slices.Clone(c.WhoisApis)
+	c.RegisterApis = slices.Clone(c.RegisterApis)
+	for i := range c.WhoisApis {
+		c.WhoisApis[i].FreeText = slices.Clone(c.WhoisApis[i].FreeText)
+		c.WhoisApis[i].TakenText = slices.Clone(c.WhoisApis[i].TakenText)
+	}
+	for i := range c.RegisterApis {
+		c.RegisterApis[i].SuccessText = slices.Clone(c.RegisterApis[i].SuccessText)
+		c.RegisterApis[i].FailText = slices.Clone(c.RegisterApis[i].FailText)
+	}
+	return c
+}
+
+// PublicSettings never returns reusable credentials, including secrets embedded in API URLs.
+func PublicSettings() map[string]interface{} {
+	c := GetConfig()
+	data, _ := json.Marshal(c)
+	out := map[string]interface{}{}
+	json.Unmarshal(data, &out)
+	status := map[string]interface{}{}
+	for key, value := range map[string]string{"authPassword": c.AuthPassword, "jwtSecretKey": c.JwtSecretKey, "socketProxyPassword": c.SocketProxyPassword} {
+		env := map[string]string{"authPassword": "POWERWHOIS_ADMIN_PASSWORD", "jwtSecretKey": "POWERWHOIS_JWT_SECRET"}[key]
+		status[key] = map[string]bool{"configured": value != "", "managed": env != "" && os.Getenv(env) != ""}
+		out[key] = ""
+	}
+	for _, key := range []string{"whoisApis", "registerApis"} {
+		if list, ok := out[key].([]interface{}); ok {
+			for _, item := range list {
+				a := item.(map[string]interface{})
+				a["urlConfigured"] = a["apiUrl"] != ""
+				a["apiUrl"] = ""
+			}
+		}
+	}
+	out["secrets"] = status
+	return out
+}
 func Validate(c Config) error {
 	if c.WhoisTimeout < 1 || c.WhoisTimeout > 120 || c.DnsTimeout < 1 || c.DnsTimeout > 120 || c.RdapTimeout < 1 || c.RdapTimeout > 120 {
 		return fmt.Errorf("timeouts must be 1..120 seconds")
@@ -176,9 +220,43 @@ func validAPI(address string, positive, negative []string) bool {
 	}
 	return true
 }
-func UpdateConfig(next Config) error {
+func UpdateConfig(next Config, secretActions ...map[string]string) error {
 	mu.Lock()
 	defer mu.Unlock()
+	if len(secretActions) > 0 {
+		for key, pair := range map[string][2]*string{"authPassword": {&next.AuthPassword, &config.AuthPassword}, "jwtSecretKey": {&next.JwtSecretKey, &config.JwtSecretKey}, "socketProxyPassword": {&next.SocketProxyPassword, &config.SocketProxyPassword}} {
+			switch secretActions[0][key] {
+			case "", "keep":
+				*pair[0] = *pair[1]
+			case "set":
+				if *pair[0] == "" {
+					return fmt.Errorf("%s replacement is empty", key)
+				}
+			case "clear":
+				*pair[0] = ""
+			default:
+				return fmt.Errorf("invalid secret action for %s", key)
+			}
+		}
+		for i := range next.WhoisApis {
+			if next.WhoisApis[i].ApiUrl == "" {
+				for _, old := range config.WhoisApis {
+					if old.ApiName == next.WhoisApis[i].ApiName {
+						next.WhoisApis[i].ApiUrl = old.ApiUrl
+					}
+				}
+			}
+		}
+		for i := range next.RegisterApis {
+			if next.RegisterApis[i].ApiUrl == "" {
+				for _, old := range config.RegisterApis {
+					if old.ApiName == next.RegisterApis[i].ApiName {
+						next.RegisterApis[i].ApiUrl = old.ApiUrl
+					}
+				}
+			}
+		}
+	}
 	for env, value := range map[string]string{"POWERWHOIS_ADMIN_USER": next.AuthUsername, "POWERWHOIS_ADMIN_PASSWORD": next.AuthPassword, "POWERWHOIS_JWT_SECRET": next.JwtSecretKey} {
 		if managed := os.Getenv(env); managed != "" && value != managed {
 			return fmt.Errorf("%s is managed by the service environment; change it there and restart", env)
@@ -215,7 +293,7 @@ func UpdateConfig(next Config) error {
 	if err := WriteConfig(next); err != nil {
 		return err
 	}
-	config = next
+	config = clone(next)
 	log.SetLevel(next.LogLevel)
 	return nil
 }

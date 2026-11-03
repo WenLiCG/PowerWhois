@@ -27,12 +27,7 @@ func GetDnsLite(nameServers []string) string {
 	return dnsLite
 }
 
-// GetDomainHumanStatus takes a list of domain status strings and returns the human-readable status string.
-// It first converts the domain status strings to lowercase and removes any whitespace.
-// If the domain status contains "registarahold", it returns "Expired".
-// If the domain status contains "redemptionperiod", it returns "RedemptionPeriod".
-// If the domain status contains "pendingdelete" or "delegated", it returns "PendingDelete".
-// Otherwise, it returns "Active".
+// GetDomainHumanStatus preserves holds and unknown states without guessing expiry.
 func GetDomainHumanStatus(domainStatus []string) string {
 	if len(domainStatus) > 0 {
 		// convert the domain status strings to lowercase and remove any whitespace
@@ -40,14 +35,18 @@ func GetDomainHumanStatus(domainStatus []string) string {
 		noSpaceDomainStatus := slice.Map(lowerDomainStatus, RemoveWhiteSpace)
 
 		// check if the domain status contains any of the following strings
-		if slice.Contain(noSpaceDomainStatus, "registarahold") {
-			return constant.DomainStatusExpired
+		if slice.Contain(noSpaceDomainStatus, "clienthold") || slice.Contain(noSpaceDomainStatus, "serverhold") || slice.Contain(noSpaceDomainStatus, "registrarhold") || slice.Contain(noSpaceDomainStatus, "registarahold") {
+			return "Hold"
+		} else if slice.Contain(noSpaceDomainStatus, "inactive") {
+			return "Inactive"
 		} else if slice.Contain(noSpaceDomainStatus, "pendingdelete") {
 			return constant.DomainStatusPendingDelete
 		} else if slice.Contain(noSpaceDomainStatus, "redemptionperiod") {
 			return constant.DomainStatusRedemptionPeriod
-		} else {
+		} else if slice.Contain(noSpaceDomainStatus, "ok") || slice.Contain(noSpaceDomainStatus, "active") || slice.Contain(noSpaceDomainStatus, "delegated") {
 			return constant.DomainStatusActive
+		} else {
+			return constant.DomainStatusUnknown
 		}
 	} else {
 		return constant.DomainStatusUnknown

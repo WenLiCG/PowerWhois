@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"typonamer/constant"
+	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 
 	"github.com/dromara/carbon/v2"
@@ -27,6 +28,9 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 
 	// Clean up the response by replacing unwanted characters with a newline.
 	responseContent := strutil.ReplaceWithMap(response, whoisResponseReplaceList)
+	if strings.HasPrefix(responseContent, "Reserved by QDR") || strings.Contains(responseContent, "has been reserved by aeDA Regulator") {
+		return domainInfo, lookuperror.ErrorReservedDomain
+	}
 
 	if matcher.ReFree != nil {
 		if matcher.ReFree.MatchString(responseContent) {

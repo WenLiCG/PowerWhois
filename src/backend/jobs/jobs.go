@@ -23,8 +23,10 @@ import (
 var ErrNotFound = errors.New("task not found")
 var ErrConflict = errors.New("task state or idempotency key conflict")
 var ErrNoRetryResults = errors.New("no failed or unknown results to retry")
+var ErrResultTooLarge = errors.New("stored result exceeds safe response size; use summary results")
 
 type Request struct {
+	parentID    string
 	Domains     []string `json:"domains"`
 	Mode        string   `json:"mode"`
 	Concurrency int      `json:"concurrency"`
@@ -32,18 +34,19 @@ type Request struct {
 	Retries     int      `json:"retries"`
 }
 type Task struct {
-	ID          string         `json:"id"`
-	State       string         `json:"state"`
-	Mode        string         `json:"mode"`
-	Total       int            `json:"total"`
-	Completed   int            `json:"completed"`
-	Counts      map[string]int `json:"counts"`
-	Concurrency int            `json:"concurrency"`
-	Timeout     int            `json:"timeout"`
-	Retries     int            `json:"retries"`
-	CreatedAt   string         `json:"createdAt"`
-	UpdatedAt   string         `json:"updatedAt"`
-	Error       string         `json:"error,omitempty"`
+	ParentTaskID string         `json:"parentTaskId,omitempty"`
+	ID           string         `json:"id"`
+	State        string         `json:"state"`
+	Mode         string         `json:"mode"`
+	Total        int            `json:"total"`
+	Completed    int            `json:"completed"`
+	Counts       map[string]int `json:"counts"`
+	Concurrency  int            `json:"concurrency"`
+	Timeout      int            `json:"timeout"`
+	Retries      int            `json:"retries"`
+	CreatedAt    string         `json:"createdAt"`
+	UpdatedAt    string         `json:"updatedAt"`
+	Error        string         `json:"error,omitempty"`
 }
 type Page struct {
 	Items      []lookupinfo.QueryResult `json:"items"`
@@ -144,25 +147,34 @@ func (s *Store) Create(ctx context.Context, r Request, idempotency string) (Task
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	t := Task{ID: uuid.NewString(), State: "queued", Mode: r.Mode, Total: len(r.Domains), Concurrency: r.Concurrency, Timeout: r.Timeout, Retries: r.Retries, CreatedAt: now, UpdatedAt: now, Counts: map[string]int{}}
+	t := Task{ID: uuid.NewString(), ParentTaskID: r.parentID, State: "queued", Mode: r.Mode, Total: len(r.Domains), Concurrency: r.Concurrency, Timeout: r.Timeout, Retries: r.Retries, CreatedAt: now, UpdatedAt: now, Counts: map[string]int{}}
 	data, _ := json.Marshal(t)
-	_, err = s.Redis.TxPipelined(ctx, func(p redis.Pipeliner) error {
-		p.Set(ctx, s.key(t.ID, "meta"), data, 0)
-		for i := 0; i < len(r.Domains); i += 1000 {
-			end := min(i+1000, len(r.Domains))
-			a := make([]interface{}, end-i)
-			for j, d := range r.Domains[i:end] {
-				a[j] = d
-			}
-			p.RPush(ctx, s.key(t.ID, "input"), a...)
+	inputKey := s.key(t.ID, "input")
+	published := false
+	defer func() {
+		if !published {
+			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			// A lost publication response may hide success; never remove a published input.
+			s.Redis.Eval(cleanup, `if redis.call('EXISTS',KEYS[1])==0 then return redis.call('DEL',KEYS[2]) end return 0`, []string{s.key(t.ID, "meta"), inputKey})
 		}
-		p.LPush(ctx, s.Prefix+"tasks", t.ID)
-		p.ZAdd(ctx, s.Prefix+"queued", redis.Z{Score: float64(time.Now().UnixMilli()), Member: t.ID})
-		if idempotency != "" {
-			p.Set(ctx, idemKey, fingerprint+":"+t.ID, 0)
+	}()
+	for i := 0; i < len(r.Domains); i += 1000 {
+		end := min(i+1000, len(r.Domains))
+		args := make([]interface{}, end-i)
+		for j, d := range r.Domains[i:end] {
+			args[j] = d
 		}
-		return nil
-	})
+		if e := s.Redis.Eval(ctx, `redis.call('RPUSH',KEYS[1],unpack(ARGV)); return redis.call('EXPIRE',KEYS[1],3600)`, []string{inputKey}, args...).Err(); e != nil {
+			return Task{}, false, e
+		}
+	}
+	useKey := "0"
+	if idempotency != "" {
+		useKey = "1"
+	}
+	err = s.Redis.Eval(ctx, createScript, []string{s.Prefix + "worker", s.key(t.ID, "meta"), inputKey, s.Prefix + "tasks", s.Prefix + "queued", idemKey}, s.owner, t.ID, data, fingerprint+":"+t.ID, len(r.Domains), useKey, time.Now().UnixMilli()).Err()
+	published = err == nil
 	return t, false, err
 }
 
@@ -208,33 +220,42 @@ func (s *Store) List(ctx context.Context, offset, limit int) ([]Task, error) {
 	}
 	return out, nil
 }
-func (s *Store) Results(ctx context.Context, id string, offset, limit int) (Page, error) {
+
+// Results advances by input index and also bounds each page by encoded bytes.
+func (s *Store) Results(ctx context.Context, id string, offset, limit int, includeRaw ...bool) (Page, error) {
 	t, err := s.Get(ctx, id)
 	p := Page{Items: []lookupinfo.QueryResult{}, Offset: offset, NextOffset: -1, Total: t.Total}
 	if err != nil {
 		return p, err
 	}
 	end := min(offset+limit, t.Total)
-	if offset >= end {
-		return p, nil
-	}
-	fields := make([]string, end-offset)
-	for i := range fields {
-		fields[i] = strconv.Itoa(offset + i)
-	}
-	values, err := s.Redis.HMGet(ctx, s.key(id, "results"), fields...).Result()
-	if err != nil {
-		return p, err
-	}
-	for _, v := range values {
-		if v == nil {
+	used := 1024
+	for index := offset; index < end; index++ {
+		data, e := s.Redis.HGet(ctx, s.key(id, "results"), strconv.Itoa(index)).Bytes()
+		if e == redis.Nil {
 			continue
 		}
+		if e != nil {
+			return p, e
+		}
 		var r lookupinfo.QueryResult
-		if err = json.Unmarshal([]byte(v.(string)), &r); err != nil {
-			return p, err
+		if e = json.Unmarshal(data, &r); e != nil {
+			return p, e
+		}
+		if len(includeRaw) > 0 && !includeRaw[0] {
+			r.RawResponseAvailable = r.RawResponse != ""
+			r.RawResponse = ""
+			data, _ = json.Marshal(r)
+		}
+		if used+len(data) > 8*1024*1024 && len(p.Items) > 0 {
+			end = index
+			break
+		}
+		if len(data) > 16*1024*1024 {
+			return p, ErrResultTooLarge
 		}
 		p.Items = append(p.Items, r)
+		used += len(data)
 	}
 	if end < t.Total {
 		p.NextOffset = end
@@ -295,16 +316,8 @@ func (s *Store) save(ctx context.Context, t Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.Redis.TxPipelined(ctx, func(p redis.Pipeliner) error {
-		p.Set(ctx, s.key(t.ID, "meta"), data, 0)
-		if t.State == "queued" {
-			created, _ := time.Parse(time.RFC3339Nano, t.CreatedAt)
-			p.ZAdd(ctx, s.Prefix+"queued", redis.Z{Score: float64(created.UnixMilli()), Member: t.ID})
-		} else {
-			p.ZRem(ctx, s.Prefix+"queued", t.ID)
-		}
-		return nil
-	})
+	created, _ := time.Parse(time.RFC3339Nano, t.CreatedAt)
+	err = s.Redis.Eval(ctx, saveScript, []string{s.Prefix + "worker", s.key(t.ID, "meta"), s.Prefix + "queued"}, s.owner, data, t.State, t.ID, created.UnixMilli()).Err()
 	return err
 }
 
@@ -317,8 +330,8 @@ func (s *Store) RetryFailed(ctx context.Context, id string) (Task, error) {
 		return t, ErrConflict
 	}
 	domains := []string{}
-	for offset := 0; offset < t.Total; offset += 1000 {
-		page, e := s.Results(ctx, id, offset, 1000)
+	for offset := 0; offset >= 0; {
+		page, e := s.Results(ctx, id, offset, 1000, false)
 		if e != nil {
 			return t, e
 		}
@@ -327,11 +340,12 @@ func (s *Store) RetryFailed(ctx context.Context, id string) (Task, error) {
 				domains = append(domains, r.Domain)
 			}
 		}
+		offset = page.NextOffset
 	}
 	if len(domains) == 0 {
 		return t, ErrNoRetryResults
 	}
-	task, _, err := s.Create(ctx, Request{Domains: domains, Mode: t.Mode, Concurrency: t.Concurrency, Timeout: t.Timeout, Retries: t.Retries}, "")
+	task, _, err := s.Create(ctx, Request{parentID: id, Domains: domains, Mode: t.Mode, Concurrency: t.Concurrency, Timeout: t.Timeout, Retries: t.Retries}, "")
 	return task, err
 }
 
@@ -383,9 +397,10 @@ func (s *Store) Run(ctx context.Context) error {
 		}
 		if t.State == "running" {
 			t.State = "queued"
-			if e = s.save(ctx, t); e != nil {
-				return e
-			}
+		}
+		// Reconcile the queue from durable metadata after an interrupted state write.
+		if e = s.save(ctx, t); e != nil {
+			return e
 		}
 	}
 	close(s.Ready)
@@ -477,7 +492,7 @@ func (s *Store) runTask(parent context.Context, id string) error {
 				s.mu.Lock()
 				if ctx.Err() == nil {
 					// Result + count are one atomic commit, fenced by the worker lease. Inputs are never removed.
-					_, e = s.Redis.Eval(ctx, `if redis.call('GET',KEYS[1])~=ARGV[1] then return redis.error_reply('lease lost') end if redis.call('HSETNX',KEYS[2],ARGV[2],ARGV[3])==1 then redis.call('HINCRBY',KEYS[3],ARGV[4],1) end return 1`, []string{s.Prefix + "worker", s.key(id, "results"), s.key(id, "counts")}, s.owner, v.index, data, r.Status).Result()
+					_, e = s.Redis.Eval(ctx, resultScript, []string{s.Prefix + "worker", s.key(id, "results"), s.key(id, "counts")}, s.owner, v.index, data, r.Status).Result()
 				}
 				s.mu.Unlock()
 				if e != nil {
@@ -498,13 +513,18 @@ feed:
 		for i := range names {
 			fields[i] = strconv.Itoa(offset + i)
 		}
-		done, e := s.Redis.HMGet(ctx, s.key(id, "results"), fields...).Result()
+		pipe := s.Redis.Pipeline()
+		done := make([]*redis.BoolCmd, len(fields))
+		for i, field := range fields {
+			done[i] = pipe.HExists(ctx, s.key(id, "results"), field)
+		}
+		_, e = pipe.Exec(ctx)
 		if e != nil {
 			fail(e)
 			break
 		}
 		for i, d := range names {
-			if done[i] != nil {
+			if done[i].Val() {
 				continue
 			}
 			select {

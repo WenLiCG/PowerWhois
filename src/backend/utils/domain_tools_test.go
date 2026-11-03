@@ -8,6 +8,12 @@ import (
 )
 
 func TestDomainBoundary(t *testing.T) {
+	for in, want := range map[string]string{"foo.bar.ck": "foo.bar.ck", "www.city.kawasaki.jp": "city.kawasaki.jp", "例子.中国": "xn--fsqu00a.xn--fiqs8s", "foo.blogspot.com": "blogspot.com"} {
+		got, e := TrimAndGetMainDomain(in)
+		if e != nil || got != want {
+			t.Fatalf("PSL %s: %s %v", in, got, e)
+		}
+	}
 	for in, want := range map[string]string{" EXAMPLE.COM. ": "example.com", "sub.example.co.uk": "example.co.uk", "bücher.de": "xn--bcher-kva.de", "foo.com.com": "com.com", "foo.com.cn.com.cn": "cn.com.cn"} {
 		got, e := TrimAndGetMainDomain(in)
 		if e != nil || got != want {
@@ -17,6 +23,14 @@ func TestDomainBoundary(t *testing.T) {
 	for _, in := range []string{"hello world.com", "https://example.com/path", "example..com", "-example.com", "example-.com", "127.0.0.1", "a.com\nQUIT", "x_foo.com"} {
 		if _, e := TrimAndGetMainDomain(in); e == nil {
 			t.Fatalf("accepted %q", in)
+		}
+	}
+}
+
+func TestLifecycleNeverCallsHeldOrUnknownDomainsActive(t *testing.T) {
+	for state, want := range map[string]string{"clientHold": "Hold", "serverHold": "Hold", "registrarHold": "Hold", "inactive": "Inactive", "delegated": "Active", "ok": "Active", "future-status": "Unknown"} {
+		if got := GetDomainHumanStatus([]string{state}); got != want {
+			t.Fatalf("%s became %s", state, got)
 		}
 	}
 }

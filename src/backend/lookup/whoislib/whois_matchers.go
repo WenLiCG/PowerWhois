@@ -263,7 +263,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReRegistrar:    regexp.MustCompile(`Registrar Name:\s+(.*)`),
 		ReDomainStatus: regexp.MustCompile(`Status:\s+(.*)`),
 		ReNameServer:   regexp.MustCompile(`Name Server:\s+(.*)`),
-		ReFree:         regexp.MustCompile(`^No Data Found|^Reserved by QDR`),
+		ReFree:         regexp.MustCompile(`^No Data Found`),
 	},
 	"ie": {
 		ReRegistrar:    regexp.MustCompile(`Registrar:\s+(.*)`),
@@ -442,7 +442,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReRegistrar:    regexp.MustCompile(`Registrar Name:\s+(.*)`),
 		ReDomainStatus: regexp.MustCompile(`Status:\s+(.*)`),
 		ReNameServer:   regexp.MustCompile(`Name Server:\s+(.*)`),
-		ReFree:         regexp.MustCompile(`^No Data Found|^Domain .* has been reserved by aeDA Regulator`),
+		ReFree:         regexp.MustCompile(`^No Data Found`),
 	},
 	"th": {
 		ReRegistrar:    regexp.MustCompile(`Registrar:\s+(.*)`),

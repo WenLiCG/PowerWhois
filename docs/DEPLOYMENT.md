@@ -2,7 +2,7 @@
 
 本版默认仅本机访问。仓库旧 `deploy/backend/typonamer` 和 `deploy/frontend` 是历史预构建文件；**不要直接运行它们来验收新版本**。新 Compose 从源码构建，CLI/API/MCP 示例见 [USAGE.md](USAGE.md)。本次没有操作线上服务器。
 
-本地交付包 `dist/PowerWhois-20261103.zip` 包含源码、Linux amd64 后端/CLI/MCP、Windows amd64 CLI/MCP、网页静态文件、文档、依赖许可及 SHA-256 清单。解压后先读 `DELIVERY.txt`；二进制仍需要 Redis、配置和安全环境变量，不是免配置在线服务。Linux 解压后按清单为 `bin/linux-amd64/` 中的程序补充执行权限；Windows 两个客户端连接后端使用，不包含 Windows 服务端。
+本地交付包 `dist/PowerWhois-20261103-r2.zip` 包含源码、Linux amd64 后端/CLI/MCP、Windows amd64 CLI/MCP、网页静态文件、文档、依赖许可及 SHA-256 清单。解压后先读 `DELIVERY.txt`；二进制仍需要 Redis、配置和安全环境变量，不是免配置在线服务。Linux 解压后按清单为 `bin/linux-amd64/` 中的程序补充执行权限；Windows 两个客户端连接后端使用，不包含 Windows 服务端。
 
 ## 从源码构建
 
@@ -55,6 +55,10 @@ docker compose up -d --build
 必须远程访问时，先准备 TLS 反向代理与身份网关：完整 Web 包括原匿名即时查询入口，若不打算公开查询，应保护**整个站点**；只对 API 配 Bearer 不会保护原匿名网页查询。对 HTTP MCP 仅反代 `/mcp` 到回环 8081，保留 Authorization，增加符合客户端环境的 OAuth/网关认证；不关闭 TLS 验证、不取消后端鉴权。不要把静态 token 放在 URL。云端 Agent 通常无法访问用户电脑的 localhost，需要远程可达地址或平台支持的安全隧道。
 
 当前不是多用户 SaaS，没有任务级 ACL、配额/计费隔离或自动清理。数据规模大时监测 Redis 内存、AOF 磁盘、响应时间和上游限流。任务保存完整原始响应，历史数据会持续增长；不应给任务数据库设置会逐出数据的缓存策略。进程重启可恢复，断电持久性仍取决于 Redis/文件系统/备份。
+
+## 第二轮升级补充
+
+从 89a29b6 升级时，同步替换后端和网页；任务键保持兼容。若旧管理页面已在实际环境使用，请在服务端轮换 JWT 签名密钥和可能暴露的管理员/代理/API 凭据，再重新登录；关闭回传不会撤回此前浏览器已取得的秘密。新管理接口不再回传任何秘密，旧管理脚本修改凭据要使用 secretActions；分页客户端必须跟随服务器游标。启用注册时，应用 Redis 用户还需允许读写 `powerwhois:registration:*` 和 `powerwhois:registration-guard:*`，备份包含这些键。先用模拟注册商验收，再根据注册商的幂等能力决定是否启用真实交易。见 [ROUND2.md](ROUND2.md)。
 
 ## 从旧版升级
 

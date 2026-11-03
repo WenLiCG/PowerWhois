@@ -35,6 +35,7 @@
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section>
+                            <q-select outlined dense v-model="settings.secretActions.authPassword" :options="[{label:'保持原密码',value:'keep'},{label:'更换密码',value:'set'}]" emit-value map-options label="密码操作" :disable="settings.secrets?.authPassword?.managed" />
                             <q-input
                                 type="password"
                                 outlined
@@ -42,7 +43,8 @@
                                 round
                                 item-aligned
                                 v-model="settings.authPassword"
-                                :rules="[$rules.required('请输入管理员密码')]"
+                                :disable="settings.secrets?.authPassword?.managed || settings.secretActions.authPassword !== 'set'"
+                                hint="密码不会回显；更换时输入新密码。环境凭据需在服务端更换。"
                             />
                         </q-item-section>
                     </q-item>
@@ -381,14 +383,17 @@
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section>
+                            <q-select outlined dense v-model="settings.secretActions.socketProxyPassword" :options="[{label:'保持',value:'keep'},{label:'更换',value:'set'},{label:'清空',value:'clear'}]" emit-value map-options label="代理密码操作" />
                             <q-input
-                                type="text"
+                                type="password"
                                 outlined
                                 dense
                                 round
                                 item-aligned
                                 v-model="settings.socketProxyPassword"
-                                :rules="[$rules.required('请设置Socks代理密码')]"
+                                :disable="settings.secretActions.socketProxyPassword !== 'set'"
+                                hint="只有更换时需要填写；清空请选择“清空”"
+                                :rules="[v => settings.secretActions.socketProxyPassword !== 'set' || !!v || '请输入新代理密码']"
                             />
                         </q-item-section>
                     </q-item>
@@ -571,7 +576,7 @@
                         <tbody>
                             <tr v-for="apiItem in settings.registerApis" :key="apiItem.apiName">
                                 <td class="text-center">{{ apiItem.apiName }}</td>
-                                <td class="text-left">{{ apiItem.apiUrl }}</td>
+                                <td class="text-left">{{ apiItem.apiUrl || "已配置（地址不回显）" }}</td>
                                 <td class="text-center">{{ apiItem.concurrencyLimit }}</td>
                                 <td class="text-center q-gutter-sm">
                                     <q-btn color="primary" size="sm" icon="edit" label="修改" @click="openUpdateRegisterApiDialog(apiItem)" />
@@ -619,7 +624,7 @@
                         <tbody>
                             <tr v-for="apiItem in settings.whoisApis" :key="apiItem.apiName">
                                 <td class="text-center">{{ apiItem.apiName }}</td>
-                                <td class="text-left">{{ apiItem.apiUrl }}</td>
+                                <td class="text-left">{{ apiItem.apiUrl || "已配置（地址不回显）" }}</td>
                                 <td class="text-center">{{ apiItem.concurrencyLimit }}</td>
                                 <td class="text-center q-gutter-sm">
                                     <q-btn color="primary" size="sm" icon="edit" label="修改" @click="openUpdateWhoisApiDialog(apiItem)" />
@@ -687,9 +692,9 @@
                                         hide-bottom-space
                                         v-model="inputRegisterApiData.apiUrl"
                                         type="textarea"
-                                        placeholder="在URL中使用{domain}作为占位符将会被替换为目标域名"
+                                        placeholder="填写新地址，{domain} 为域名占位符；已有接口留空保持原地址，重命名需重填"
                                         lazy-rules
-                                        :rules="[$rules.required('请设置API URL')]"
+                                        :rules="[]"
                                     />
                                 </td>
                             </tr>
@@ -816,9 +821,9 @@
                                         hide-bottom-space
                                         v-model="inputWhoisApiData.apiUrl"
                                         type="textarea"
-                                        placeholder="在URL中使用{domain}作为占位符将会被替换为目标域名"
+                                        placeholder="填写新地址，{domain} 为域名占位符；已有接口留空保持原地址，重命名需重填"
                                         lazy-rules
-                                        :rules="[$rules.required('请设置API URL')]"
+                                        :rules="[]"
                                     />
                                 </td>
                             </tr>
@@ -981,6 +986,7 @@ function getSettings() {
         .then((response) => {
             if (response.data) {
                 settings.value = response.data;
+                settings.value.secretActions = {authPassword:'keep',jwtSecretKey:'keep',socketProxyPassword:'keep'};
                 if (settings.value.globalProxyTlds) {
                     settings.value.globalProxyTldsInput = settings.value.globalProxyTlds.join("\n");
                 } else {
@@ -1442,6 +1448,12 @@ function onSubmit() {
                         message: "配置参数保存成功"
                     });
                     submitting.value = false;
+                    settings.value.authPassword = '';
+                    settings.value.socketProxyPassword = '';
+                    settings.value.jwtSecretKey = '';
+                    settings.value.secretActions = {authPassword:'keep',jwtSecretKey:'keep',socketProxyPassword:'keep'};
+                    settings.value.secrets = response.data.secrets;
+                    for (const key of ['whoisApis','registerApis']) settings.value[key] = response.data[key];
                     settingStore.updateSetting(response.data);
                 })
                 .catch((error) => {

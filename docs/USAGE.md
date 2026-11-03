@@ -82,13 +82,15 @@ with urllib.request.urlopen(request, timeout=60) as response:
 
 错误结构为 `{"error":{"code":"invalid_request","message":"..."}}`：400 输入不合法，401 未认证，404 不存在，409 状态/幂等冲突，429 请求过快（读取 `Retry-After`），503 存储暂不可用。服务限制每来源 IP 每分钟 30 次同步查询、60 次创建任务、1200 次 v1 请求；登录 5 次。反向代理默认不信任任意来源转发的 IP，多个远程客户端可能共用代理侧计数。
 
+结果列表默认不返回原文（`includeRaw=false`），需要原文时使用 `GET /api/v1/tasks/{id}/results/{index}`，其中 index 是结果的 order；也可显式 `includeRaw=true`。同步 `/query` 原文预览上限为每域名 64 KiB，截断时 `rawResponseTruncated=true`；需要完整证据请先创建持久任务。同步总结果超过 8 MiB 返回 413，请改为任务分页。
+
 ### 任务与分页规则
 
 任务状态：`queued → running → completed`，也可 `paused/canceled/failed`。暂停后可继续，取消后只保留已有结果，不能继续；存储类失败可修复后 resume。错误域名本身不使任务失败，仍会计入 completed。任务按 FIFO 排队，一次执行一批，批内并发受服务端上限限制。
 
-创建时请设置稳定的 `Idempotency-Key`（最多 128 字符）：相同键和规范化参数返回原 ID；不同参数返回 409。键与任务一起长期保留，**没有自动过期**。未提供键时，每次创建是独立任务。pause/resume/cancel 对已处于目标状态的任务是幂等操作；`retry` 每调用一次都新建任务，丢失响应时先查任务列表，不要盲重试。
+创建时请设置稳定的 `Idempotency-Key`（最多 128 字符）：相同键和规范化参数返回原 ID；不同参数返回 409。键与任务一起长期保留，**没有自动过期**。未提供键时，每次创建是独立任务。pause/resume/cancel 对已处于目标状态的任务是幂等操作；`retry` 每调用一次都新建带 parentTaskId 的任务，丢失响应时先查任务列表，不要盲重试。
 
-`offset` 是规范化后**输入数组的位置**，不是已完成结果数量；`limit` 为 1–1000。运行中的页面可能为空，但仍必须按 `nextOffset` 前进；`-1` 表示末页。任务完成后从 0 重新读取可获得完整结果。CSV 用 `X-Next-Offset` 响应头，后续页合并时只保留首份表头。Web 导出自动分页；CLI/MCP 一次导出一页，避免大结果塞入模型上下文。活动任务的跨页导出不提供同一时刻快照，要完整稳定导出应等待完成或暂停。
+`offset` 是规范化后**输入数组的位置**，不是已完成结果数量；`limit` 为 1–1000，但结果和导出还有约 8 MiB 的编码预算，单条最多 16 MiB，因此一页可能少于 limit 条，必须使用服务端返回的游标，不能自行加 limit。运行中的页面可能为空，但仍必须按 `nextOffset` 前进；`-1` 表示末页。任务完成后从 0 重新读取可获得完整结果。导出附带 `X-Task-State` 和 `X-Export-Consistency`（complete/partial）；只有 completed 为 complete。CSV 用 `X-Next-Offset` 响应头，后续页合并时只保留首份表头。Web 导出自动分页；CLI/MCP 一次导出一页，避免大结果塞入模型上下文。活动任务的跨页导出不提供同一时刻快照，要完整稳定导出应等待完成或暂停。
 
 重启自动恢复之前 running 的任务，跳过已提交结果。单个结果和计数原子提交，输入不会被消费删除；中断时正在查询但未提交的域名可能重新向上游查询。不能承诺网络请求 exactly-once。Redis AOF everysec 遇到主机断电仍可能丢失最后约一秒数据，需要备份。历史不自动清理，请监控 Redis 内存和磁盘。
 
@@ -147,3 +149,5 @@ tool = {
 ```
 
 官方依据：[Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)、[ChatGPT MCP App 与本地网络接入限制](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)、[认证要求](https://developers.openai.com/plugins/build/auth)、[xAI Remote MCP](https://docs.x.ai/developers/tools/remote-mcp)。产品能力会变化，以实际账号配置界面与握手结果为准。
+
+本轮设置秘密修改、注册审计和兼容变更见 [ROUND2.md](ROUND2.md)。

@@ -174,7 +174,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 		var apiErr *client.Error
 		if errors.As(e, &apiErr) {
 			switch apiErr.Status {
-			case 400, 422:
+			case 400, 413, 422:
 				return 2
 			case 401, 403:
 				return 3

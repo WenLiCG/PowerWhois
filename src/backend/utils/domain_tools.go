@@ -3,6 +3,7 @@ package utils
 import (
 	"errors"
 	"golang.org/x/net/idna"
+	"golang.org/x/net/publicsuffix"
 	"net"
 	"strings"
 
@@ -53,12 +54,21 @@ func TrimDomain(domain string) (string, error) {
 }
 
 func GetDomainSuffix(domain string) (string, error) {
+	// Use ICANN boundaries for registration; private hosting suffixes are not registries.
+	for candidate := domain; ; {
+		suffix, icann := publicsuffix.PublicSuffix(candidate)
+		if icann {
+			return suffix, nil
+		}
+		dot := strings.IndexByte(candidate, '.')
+		if dot < 0 {
+			break
+		}
+		candidate = candidate[dot+1:]
+	}
 	parts := strutil.SplitAndTrim(domain, ".")
 
-	maxLen := 3
-	if len(parts) < 3 {
-		maxLen = len(parts)
-	}
+	maxLen := len(parts)
 
 	for n := maxLen; n > 0; n-- {
 		suffix := strings.Join(parts[len(parts)-n:], ".")
