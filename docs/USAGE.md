@@ -14,6 +14,8 @@
 
 每个结果包含 `domain/status/source/queriedAt/queryError/rawResponse` 及原有注册日期、NS 等字段。`queriedAt` 是 UTC；旧数据导入时没有可靠查询时间，留空并标记 `source=legacy-import`。原 Web 的 `registerStatus` 字段仍保留为兼容别名。
 
+未支持后缀等本地校验结果标记 `source=local-validation`，不伪装成注册局响应。`.ac.uk` 由 [Jisc](https://www.jisc.ac.uk/domain-registry) 独立管理，当前没有专门适配，因此 WHOIS/Mixed 返回 unknown 和原因；不能把 Nominet 的 `.uk` RDAP 404 当作 `.ac.uk` 未注册证据。DNS 仍可独立查询委派。
+
 `whois` 模式沿用原项目的 RDAP 优先路由；`dns`、`mixed`、`proxy` 也保留。自定义 WHOIS API 使用配置中的名称。原长名称 `whoisQuery/dnsQuery/mixedQuery/whoisQueryWithProxy` 继续有效。输入须为纯域名，支持 IDN，转换为小写 ASCII；子域名按原项目规则归并到注册域名，自动去重。后缀使用仓库维护的列表，不保证所有未来新后缀立即可用。
 
 ## 权限与凭据

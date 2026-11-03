@@ -34,3 +34,24 @@ func TestStatusEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestUnsupportedTLDKeepsLocalEvidence(t *testing.T) {
+	for _, mode := range []string{constant.WhoisQuery, constant.WhoisQueryWithProxy} {
+		r := Query(context.Background(), "google.cf", mode, 1, 0)
+		if r.Status != "unknown" || r.Source != "local-validation" || r.QueriedAt == "" || r.QueryError == "" {
+			t.Fatalf("unsupported route lacks evidence: %+v", r)
+		}
+	}
+}
+
+func TestDelegatedAcademicUKDoesNotUseNominetAbsence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // A local coverage decision must not require any network request.
+	for _, domain := range []string{"ox.ac.uk", "google.ac.uk", "missing-test.ac.uk"} {
+		info, err := Whois(ctx, domain, "uk", false)
+		r := Result(domain, info, err)
+		if !errors.Is(err, lookuperror.ErrorNotSupportedTld) || r.Status != "unknown" || r.Source != "local-validation" {
+			t.Fatalf("delegated namespace incorrectly classified: %+v %v", r, err)
+		}
+	}
+}

@@ -26,6 +26,7 @@ import (
 func lookup(ctx context.Context, domain string, queryType string) (lookupinfo.DomainInfo, error) {
 	var errDomainInfo = lookupinfo.DomainInfo{
 		DomainName: domain,
+		Source:     "local-validation",
 	}
 
 	cfg := config.GetConfig()
@@ -104,6 +105,10 @@ func lookup(ctx context.Context, domain string, queryType string) (lookupinfo.Do
 }
 
 func Whois(ctx context.Context, domain, tld string, viaProxy bool) (lookupinfo.DomainInfo, error) {
+	// Jisc manages ac.uk separately; Nominet's RDAP 404 is not registration evidence there.
+	if strings.HasSuffix(domain, ".ac.uk") {
+		return lookupinfo.DomainInfo{DomainName: domain, Source: "local-validation"}, fmt.Errorf("%w: ac.uk requires a Jisc registry adapter", lookuperror.ErrorNotSupportedTld)
+	}
 	if slice.Contain(rdaplib.RdapSupportedTlds, tld) {
 		return rdaplib.RDAPQueryContext(ctx, domain, tld, viaProxy)
 	}

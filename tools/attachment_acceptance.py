@@ -67,12 +67,23 @@ class WS:
   header=bytes([0x81,0x80|n]) if n<126 else bytes([0x81,0xfe])+struct.pack('!H',n) if n<65536 else bytes([0x81,0xff])+struct.pack('!Q',n)
   self.sock.sendall(header+mask+bytes(b^mask[i%4] for i,b in enumerate(payload)))
  def receive(self):
-  first,second=self.read(2);assert first==0x81,(first,second)
-  n=second&127
-  if n==126:n=struct.unpack('!H',self.read(2))[0]
-  if n==127:n=struct.unpack('!Q',self.read(8))[0]
-  assert n<=4*1024*1024
-  return json.loads(self.read(n))
+  fragments=b''
+  while True:
+   first,second=self.read(2);opcode=first&15
+   n=second&127
+   if n==126:n=struct.unpack('!H',self.read(2))[0]
+   if n==127:n=struct.unpack('!Q',self.read(8))[0]
+   assert n<=4*1024*1024 and not second&128
+   payload=self.read(n)
+   if opcode==10:continue
+   if opcode==9:
+    assert n<=125
+    mask=os.urandom(4)
+    self.sock.sendall(bytes([0x8a,0x80|n])+mask+bytes(b^mask[i%4] for i,b in enumerate(payload)))
+    continue
+   assert opcode in (0,1),(first,second,payload[:100])
+   fragments+=payload;assert len(fragments)<=4*1024*1024
+   if first&128:return json.loads(fragments)
  def close(self):self.sock.close()
 
 try:
@@ -83,6 +94,8 @@ try:
  config=request('/api/admin/setting',token=admin)
  check('live DNS/WHOIS/Web defaults are 15',all(config[k]==15 for k in ['dnsConcurrency','whoisConcurrency','webCheckConcurrencyLimit']))
  report['protocolLimits']={k:config[k] for k in ['dnsConcurrency','whoisConcurrency','webCheckConcurrencyLimit','rdapConcurrency','dnsRate','whoisRate','rdapRate']}
+ coverage=request('/api/v1/query',{'domains':['google.cf','ox.ac.uk'],'mode':'whois'})['items']
+ check('unsupported and delegated suffixes retain truthful local evidence',all(r['status']=='unknown' and r['source']=='local-validation' and r['queryError'] for r in coverage))
  # Invalid originals are rejected atomically through both machine and authenticated Web APIs.
  original=[s.strip() for s in (ROOT/'original.txt').read_text(encoding='utf-8-sig').splitlines() if s.strip()]
  for label,credential in [('AI API',TOKEN),('Web API',admin)]:
@@ -93,7 +106,7 @@ try:
  check('CLI rejects invalid TXT on stderr with exit 2',bad.returncode==2 and not bad.stdout and b'1284' in bad.stderr)
  check('invalid imports leave no task',len(request('/api/v1/tasks?limit=100')['items'])==len(prior))
  # Submit all normalized entries once, pause immediately, replay via other entrances, then cancel.
- valid=(ROOT/'txt-valid-unique.txt').read_text().splitlines();key='attachments-full-'+hashlib.sha256('\n'.join(valid).encode()).hexdigest()[:20]
+ valid=(ROOT/'txt-valid-unique.txt').read_text().splitlines();key='attachments-full-'+hashlib.sha256('\n'.join(valid).encode()).hexdigest()[:20]+'-'+str(int(time.time()))
  body={'domains':valid,'mode':'dns','concurrency':15,'timeout':30,'retries':0}
  started=time.monotonic();large=request('/api/v1/tasks',body,token=admin,key=key);large_id=large['id']
  request('/api/v1/tasks/'+large_id+'/pause',{})
