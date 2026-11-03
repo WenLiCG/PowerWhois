@@ -1,9 +1,3 @@
-> 当前 main：[CLI / API / XLSX 工作流](LOCAL-WORKFLOW.zh.md) · [验收与复现](VALIDATION.zh.md) · [独立审查修复](FINAL-REVIEW.zh.md)。
->
-> 源码默认入口已改为 CLI、HTTP API 和 Web 共用的持久化本地作业：XLSX 导入 → 确定性 typo → 限速 HTTPS RDAP 查询 → XLSX 导出。仅监听 loopback，没有购买操作，明确区分 registered / not_found / unknown / error；not_found 不保证可购买。真实 10,000 seed 生成 221,949 个唯一候选，未启动全量联网扫描。
->
-> 下方网页和部署说明属于历史版本。`deploy/` 预编译文件未更新，不包含新工作流。请构建当前源码并按工作流说明使用；远端安全部署尚未验收。
-
 [English](./README.md) | 中文
 
 # PowerWhois

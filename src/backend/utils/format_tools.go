@@ -8,7 +8,7 @@ import (
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 
-	"encoding/json"
+	"github.com/bytedance/sonic"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/jszwec/csvutil"
@@ -103,7 +103,7 @@ func GetOrderedQueryResult(domainResult []string) []lookupinfo.QueryResult {
 	var queryResults []lookupinfo.QueryResult
 	for _, domainJson := range domainResult {
 		var queryItem lookupinfo.QueryResult
-		err := json.Unmarshal([]byte(domainJson), &queryItem)
+		err := sonic.Unmarshal([]byte(domainJson), &queryItem)
 		if err != nil {
 			log.Errorf("Error unmarshal query result: %s", err)
 			continue

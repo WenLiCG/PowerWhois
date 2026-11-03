@@ -1,6 +1,7 @@
 package rdaplib
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 
+	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/openrdap/rdap"
 	"github.com/openrdap/rdap/bootstrap"
@@ -43,6 +45,7 @@ func RDAPQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo,
 		Timeout: time.Duration(cfg.WhoisTimeout) * time.Second,
 		Transport: &http.Transport{
 			DisableKeepAlives:   true,
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 			TLSHandshakeTimeout: time.Duration(cfg.WhoisTimeout) * time.Second,
 		},
 	}
@@ -117,7 +120,13 @@ func RDAPQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo,
 		domainInfo.RawResponse = getWhoisStyleRawResponse(rdapResp)
 		domainInfo.ViaProxy = useProxy
 
-		// A valid RDAP domain object remains registered when optional metadata is absent.
+		if slice.Contain(domainInfo.DomainStatus, domainFreeStatus) && len(domainInfo.NameServer) == 0 {
+			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisNotFound, domain)
+		}
+
+		if domainInfo.Registrar == "" && domainInfo.CreationDate == "" && domainInfo.ExpiryDate == "" && len(domainInfo.NameServer) == 0 {
+			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisNotFound, domain)
+		}
 
 		return domainInfo, nil
 	} else {

@@ -19,14 +19,3 @@
 
 # Go workspace file
 go.work
-
-# Local job data, validation workbooks and build products
-/data/
-/validation/
-/bin/
-**/logs/
-
-# Downloaded capacity-test inputs stay local; pinned metadata is committed.
-/testdata/real/*.csv
-/testdata/real/*.download
-**/node_modules/

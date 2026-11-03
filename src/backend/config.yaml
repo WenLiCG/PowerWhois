@@ -3,9 +3,9 @@ LogLevel: Info
 
 # Setting authentication information
 AuthUsername: admin
-AuthPassword: ""
+AuthPassword: 123456
 AuthExpireDays: 30
-JwtSecretKey: ""
+JwtSecretKey: 1234567890abcdef
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -29,14 +29,14 @@ MixedProxyTlds:
 MixedDnsTlds:
 
 ## Setting proxy information
-SocketProxyHost: ""
+SocketProxyHost: 192.168.1.1
 SocketProxyPort: 7890
 SocketProxyAuth: false
-SocketProxyUser: ""
-SocketProxyPassword: ""
+SocketProxyUser: test
+SocketProxyPassword: 123456
 
 # ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: 10
+BulkCheckConcurrencyLimit: 100
 
 # ------ Web check settings ------
 WebCheckConcurrencyLimit: 10

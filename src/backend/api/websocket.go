@@ -8,6 +8,7 @@ import (
 	"typonamer/typo"
 	"typonamer/utils"
 
+	"github.com/bytedance/sonic"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -130,7 +131,7 @@ func onMessage(ep *socketio.EventPayload) {
 	log.Debugf("New message from user %s is: %s", ep.Kws.UUID, string(ep.Data))
 
 	message := MessageObject{}
-	err := json.Unmarshal(ep.Data, &message)
+	err := sonic.Unmarshal(ep.Data, &message)
 	if err != nil {
 		// If the unmarshalling fails, log an error.
 		log.Warnf("Error unmarshalling websocket message from user %s: %s", ep.Kws.UUID, err)
@@ -188,7 +189,7 @@ func onBulkCheckStart(ep *socketio.EventPayload) {
 
 		// Unmarshal the message into a BulkCheckStart structure.
 		startMessage := BulkCheckStart{}
-		err := json.Unmarshal(ep.Data, &startMessage)
+		err := sonic.Unmarshal(ep.Data, &startMessage)
 		if err != nil {
 			// If the unmarshalling fails, log an error, and emit an error message back to the user.
 			log.Warnf("Error unmarshalling websocket bulk check start message from user %s: %s", ep.Kws.UUID, err)
@@ -335,7 +336,7 @@ func onWebCheck(ep *socketio.EventPayload) {
 	log.Debugf("Web check message from user %s is: %s", ep.Kws.UUID, string(ep.Data))
 
 	checkMessage := WebCheck{}
-	err := json.Unmarshal(ep.Data, &checkMessage)
+	err := sonic.Unmarshal(ep.Data, &checkMessage)
 	if err != nil {
 		log.Warnf("Error unmarshalling websocket web check message from user %s: %s", ep.Kws.UUID, err)
 		return
@@ -399,7 +400,7 @@ func onTypoCheck(ep *socketio.EventPayload) {
 	if isAdmin.(bool) {
 		log.Infof("Admin user UUID %s request typo check", ep.Kws.UUID)
 		typoMessage := TypoCheck{}
-		err := json.Unmarshal(ep.Data, &typoMessage)
+		err := sonic.Unmarshal(ep.Data, &typoMessage)
 		if err != nil {
 			log.Warnf("Error unmarshalling websocket typo check message from user %s: %s", ep.Kws.UUID, err)
 			responseError := fiber.Map{
@@ -525,7 +526,7 @@ func onRegister(ep *socketio.EventPayload) {
 	if isAdmin.(bool) {
 		log.Infof("Admin user UUID %s request register domains", ep.Kws.UUID)
 		registerMessage := Register{}
-		err := json.Unmarshal(ep.Data, &registerMessage)
+		err := sonic.Unmarshal(ep.Data, &registerMessage)
 		if err != nil {
 			log.Warnf("Error unmarshalling websocket register message from user %s: %s", ep.Kws.UUID, err)
 			responseError := fiber.Map{
