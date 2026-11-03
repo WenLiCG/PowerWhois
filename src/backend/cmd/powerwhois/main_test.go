@@ -22,11 +22,15 @@ func TestCLIContract(t *testing.T) {
 		}
 		if r.Method == "POST" {
 			var body struct {
-				Domains []string `json:"domains"`
+				Domains     []string `json:"domains"`
+				Concurrency int      `json:"concurrency"`
 			}
 			json.NewDecoder(r.Body).Decode(&body)
 			if len(body.Domains) != 2 {
 				t.Errorf("stdin parse: %v", body.Domains)
+			}
+			if body.Concurrency != 15 {
+				t.Errorf("default concurrency: %d", body.Concurrency)
 			}
 			if r.Header.Get("Idempotency-Key") != "reconnect" {
 				t.Error("lost idempotency key")

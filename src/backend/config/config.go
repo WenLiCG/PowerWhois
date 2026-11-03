@@ -17,8 +17,8 @@ import (
 var mu sync.RWMutex
 var configFile string
 var config = Config{LogLevel: "Info", WhoisTimeout: 5, DnsTimeout: 3, RdapTimeout: 10,
-	DnsConcurrency: 16, WhoisConcurrency: 4, RdapConcurrency: 4, DnsRate: 20, WhoisRate: 2, RdapRate: 4,
-	WebCheckConcurrencyLimit: 10, WebCheckDomainLimit: 500, BulkCheckConcurrencyLimit: 32, RetryMax: 2, RetryInterval: 1, AuthExpireDays: 1}
+	DnsConcurrency: 15, WhoisConcurrency: 15, RdapConcurrency: 4, DnsRate: 20, WhoisRate: 2, RdapRate: 4,
+	WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500, BulkCheckConcurrencyLimit: 32, RetryMax: 2, RetryInterval: 1, AuthExpireDays: 1}
 
 type Config struct {
 	LogLevel string `json:"logLevel"` //日志等级

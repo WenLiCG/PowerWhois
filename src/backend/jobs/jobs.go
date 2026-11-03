@@ -94,7 +94,7 @@ func Normalize(r Request) (Request, error) {
 		return r, fmt.Errorf("unknown query mode")
 	}
 	if r.Concurrency == 0 {
-		r.Concurrency = min(16, config.GetConfig().BulkCheckConcurrencyLimit)
+		r.Concurrency = min(15, config.GetConfig().BulkCheckConcurrencyLimit)
 	}
 	if r.Timeout == 0 {
 		r.Timeout = 30

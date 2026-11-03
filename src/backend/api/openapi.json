@@ -1262,7 +1262,8 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 256,
-            "description": "Also bounded by server BulkCheckConcurrencyLimit"
+            "description": "Also bounded by server BulkCheckConcurrencyLimit",
+            "default": 15
           },
           "timeout": {
             "type": "integer",

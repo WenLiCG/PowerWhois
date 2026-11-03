@@ -19,7 +19,7 @@ import (
 type QueryArgs struct {
 	Domains     []string `json:"domains" jsonschema:"Domain names, one per item"`
 	Mode        string   `json:"mode,omitempty" jsonschema:"whois, dns, mixed, proxy, or a configured query API name"`
-	Concurrency int      `json:"concurrency,omitempty"`
+	Concurrency int      `json:"concurrency,omitempty" jsonschema:"Workers; defaults to 15, bounded by server configuration"`
 	Timeout     int      `json:"timeout,omitempty" jsonschema:"Overall seconds per domain, 1 to 120"`
 	Retries     int      `json:"retries,omitempty"`
 	Key         string   `json:"idempotencyKey,omitempty" jsonschema:"Reuse for task submission after connection loss"`

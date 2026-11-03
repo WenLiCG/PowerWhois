@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gofiber/contrib/socketio"
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -198,10 +199,10 @@ func validDomains(input []string) ([]string, error) {
 	}
 	seen := map[string]bool{}
 	out := []string{}
-	for _, d := range input {
+	for i, d := range input {
 		n, e := utils.TrimAndGetMainDomain(d)
 		if e != nil {
-			return nil, fiber.NewError(400, "域名格式错误，请输入纯域名，每行一个")
+			return nil, fiber.NewError(400, fmt.Sprintf("第 %d 项域名格式错误，请输入纯域名，每行一个", i+1))
 		}
 		if !seen[n] {
 			out = append(out, n)

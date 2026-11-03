@@ -170,7 +170,7 @@ import WhoisSelection from "./modules/WhoisSelection.vue";
 const $q = useQuasar();
 const file = ref(null),
     mode = ref("whoisQuery"),
-    concurrency = ref(16),
+    concurrency = ref(15),
     timeout = ref(30),
     retries = ref(0);
 const tasks = ref([]),

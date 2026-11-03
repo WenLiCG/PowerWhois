@@ -77,6 +77,8 @@ func TestWebSocketAuthorizationAndLimits(t *testing.T) {
 	expect("registerError", "明确确认")
 	send("webCheck", WebCheck{QueryType: "dnsQuery", Domains: []string{"https://example.com"}})
 	expect("webCheckError", "格式错误")
+	send("webCheck", WebCheck{QueryType: "dnsQuery", Domains: []string{"example.com", "bad name.com"}})
+	expect("webCheckError", "第 2 项")
 	send("webCheck", WebCheck{QueryType: "dnsQuery", Domains: make([]string, 501)})
 	expect("webCheckError", "数量超过")
 	send("ping", nil)

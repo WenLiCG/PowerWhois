@@ -24,7 +24,7 @@ Usage:
   powerwhois tasks results|export --id TASK_ID [--offset 0 --limit 1000] [--format json|csv]
 Options (flags precede domain arguments):
   --file PATH       One domain per line; - reads stdin (also accepts positional domains).
-  --concurrency N   Workers (default 16, bounded by server configuration).
+  --concurrency N   Workers (default 15, bounded by server configuration).
   --timeout N       Overall seconds per domain including retries (default 30, maximum 120).
   --retries N       Transient-query retries (default 0, maximum 5).
   --key STRING     Idempotency key for task creation; reuse after a lost response.
@@ -67,7 +67,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 	domain := fs.String("domain", "", "typo domain")
 	types := fs.String("types", "skipLetter", "comma-separated typo types")
 	tlds := fs.String("tlds", "", "comma-separated suffixes")
-	concurrency := fs.Int("concurrency", 16, "workers")
+	concurrency := fs.Int("concurrency", 15, "workers")
 	timeout := fs.Int("timeout", 30, "seconds per domain")
 	retries := fs.Int("retries", 0, "retry count")
 	offset := fs.Int("offset", 0, "input-index cursor")
