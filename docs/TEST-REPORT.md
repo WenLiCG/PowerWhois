@@ -70,6 +70,8 @@ npm audit --omit=dev
 
 `tools/acceptance.py --serve` 保留临时模拟后端在 8080，配合前端 dev 8090 做浏览器验收，Ctrl+C 清理自身进程/临时数据。该脚本有固定的**仅测试**账号，禁止把它作为正式部署方式；查询/MCP/JWT token 每次随机生成。运行时拷贝二进制到临时目录，避免重新构建覆盖正在执行的文件。
 
+并发验收曾出现 299 registered + 1 timeout，定位为模拟上游共用的 1 秒协议超时。模拟协议超时调整为 5 秒，吞吐任务保留每域名 3 秒总时限；慢请求、暂停/取消和恢复测试仍显式使用 1 秒总时限，不放宽超时跳过的断言。
+
 ## 尚未验收
 
 Docker 构建/启动、Redis 7 容器组合、旧 bbolt 数据向本版迁移、实际回滚演练、百万域名或长时间压力、整机断电/磁盘满故障、真实 SOCKS 代理、所有 TLD/WHOIS 格式、真实付费注册、ChatGPT dot/Grok 云端账号级接入。Windows CLI 和 stdio MCP 调用 VPS 已验证，不能据此声称特定产品账号连接完成。没有推送 GitHub 或开放公网服务。CI 工作流已提供，但未在 GitHub Actions 云端触发。

@@ -68,7 +68,7 @@ def main():
         # These credentials exist only in this isolated, temporary mock service.
         username, password = "acceptance-admin", "acceptance-test-only-password"
         config = {"logLevel": "Error", "retryOnTimeout": False, "rdapRate": 256,
-                  "whoisTimeout": 1, "webCheckDomainLimit": 500,
+                  "whoisTimeout": 5, "webCheckDomainLimit": 500,
                   "whoisApis": [{"apiName": "Fixture", "apiUrl": f"http://127.0.0.1:{fixture.server_port}/?domain={{domain}}",
                                  "freeText": ["MISSING"], "takenText": ["EXISTS"], "concurrencyLimit": 32}]}
         (scratch / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
@@ -176,7 +176,7 @@ def main():
 
                 fast = request("/api/v1/tasks", {**body, "domains": [f"load-{i}.com" for i in range(300)], "concurrency": 32, "timeout": 3})
                 final = wait_task(fast["id"], lambda t: t["state"] == "completed")
-                assert final["completed"] == 300 and final["counts"].get("registered") == 300
+                assert final["completed"] == 300 and final["counts"].get("registered") == 300, final["counts"]
                 slow = request("/api/v1/tasks", {**body, "domains": [f"slow-control-{i}.com" for i in range(20)], "concurrency": 4})
                 wait_task(slow["id"], lambda t: t["completed"] > 0)
                 paused = request(f"/api/v1/tasks/{slow['id']}/pause", {})
