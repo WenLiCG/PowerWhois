@@ -2,6 +2,7 @@ package whoislib
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"typonamer/constant"
 	"typonamer/lookup/lookupinfo"
@@ -10,12 +11,7 @@ import (
 	"github.com/duke-git/lancet/v2/strutil"
 )
 
-var dateSeqRemoveList = map[string]string{
-	"st": "",
-	"nd": "",
-	"rd": "",
-	"th": "",
-}
+var ordinalDate = regexp.MustCompile(`\b([0-9]{1,2})(?:st|nd|rd|th)\b`)
 
 var whoisResponseReplaceList = map[string]string{
 	"\r\n": "\n",
@@ -72,7 +68,7 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	if matcher.ReCreationDate != nil {
 		matchCreationDate := matcher.ReCreationDate.FindStringSubmatch(responseContent)
 		if len(matchCreationDate) > 1 {
-			matchCreationDateStr := strutil.ReplaceWithMap(strutil.Trim(matchCreationDate[1]), dateSeqRemoveList)
+			matchCreationDateStr := ordinalDate.ReplaceAllString(strutil.Trim(matchCreationDate[1]), "${1}")
 			if matcher.DateTimeLayoutForCreationDate != "" {
 				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayoutForCreationDate).ToDateTimeString()
 			} else if matcher.DateTimeLayout != "" {
@@ -95,7 +91,7 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	if matcher.ReExpiryDate != nil {
 		matchExpiryDate := matcher.ReExpiryDate.FindStringSubmatch(responseContent)
 		if len(matchExpiryDate) > 1 {
-			matchExpiryDateStr := strutil.ReplaceWithMap(strutil.Trim(matchExpiryDate[1]), dateSeqRemoveList)
+			matchExpiryDateStr := ordinalDate.ReplaceAllString(strutil.Trim(matchExpiryDate[1]), "${1}")
 			if matcher.DateTimeLayoutForExpiryDate != "" {
 				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayoutForExpiryDate).ToDateTimeString()
 			} else if matcher.DateTimeLayout != "" {

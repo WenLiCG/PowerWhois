@@ -34,5 +34,8 @@ yarn-error.log*
 
 # lock
 yarn.lock
-package-lock.json
 pnpm-lock.yaml
+
+.baseline-node-modules/
+package-lock.baseline.json
+npm-audit-baseline.json

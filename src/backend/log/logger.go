@@ -80,7 +80,7 @@ func init() {
 	var syncer zapcore.WriteSyncer
 	if appDev != "" && strings.ToLower(appDev) == "true" {
 		// 创建控制台输出
-		consoleSyncer := zapcore.AddSync(os.Stdout)
+		consoleSyncer := zapcore.AddSync(os.Stderr)
 
 		// 创建多输出
 		syncer = zapcore.NewMultiWriteSyncer(consoleSyncer, fileWriteSyncer)

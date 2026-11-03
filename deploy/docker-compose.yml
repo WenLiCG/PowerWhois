@@ -1,57 +1,54 @@
 services:
   caddy:
-    container_name: caddy
-    image: caddy:2
+    build:
+      context: ..
+      target: gateway
     ports:
-      - 8080:8080
-    links:
-      - typonamer
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-      - ./frontend:/typonamer
-    environment:
-      - TZ=Asia/Shanghai
+      - "127.0.0.1:8080:8080"
     depends_on:
       - typonamer
-    restart: always
+    restart: unless-stopped
     logging:
-      options:
-        max-size: "10m"
-        max-file: "10"
+      options: { max-size: "10m", max-file: "3" }
 
   typonamer:
-    container_name: typonamer
-    image: golang:1
-    command: /typonamer/typonamer
+    build:
+      context: ..
+      target: backend
     volumes:
-      - ./backend:/typonamer
-    links:
-      - redis
+      # Mount the directory so atomic config replacement works.
+      - ./backend:/etc/powerwhois
+      - powerwhois-data:/var/lib/powerwhois
     environment:
-      - TZ=Asia/Shanghai
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - APP_TUNING=true
+      TZ: Asia/Shanghai
+      REDIS_HOST: redis
+      POWERWHOIS_LISTEN: "0.0.0.0:8080"
+      POWERWHOIS_ADMIN_USER: "${POWERWHOIS_ADMIN_USER:?set administrator user}"
+      POWERWHOIS_ADMIN_PASSWORD: "${POWERWHOIS_ADMIN_PASSWORD:?set administrator password}"
+      POWERWHOIS_JWT_SECRET: "${POWERWHOIS_JWT_SECRET:?set random JWT secret}"
+      POWERWHOIS_QUERY_TOKEN: "${POWERWHOIS_QUERY_TOKEN:?set random query token}"
     depends_on:
-      - redis
-    restart: always
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+    restart: unless-stopped
     logging:
-      options:
-        max-size: "10m"
-        max-file: "10"
+      options: { max-size: "10m", max-file: "3" }
 
   redis:
-    image: redis:7
-    container_name: redis
+    image: redis:7-alpine
     command: redis-server /usr/local/etc/redis/redis.conf
     volumes:
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - ./redis/redisdata:/data
-    environment:
-      - TZ=Asia/Shanghai
-    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
     logging:
-      options:
-        max-size: "10m"
-        max-file: "10"
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  powerwhois-data:

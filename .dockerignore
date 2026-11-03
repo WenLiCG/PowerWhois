@@ -1,0 +1,13 @@
+.git
+.work
+.env
+**/.env*
+**/node_modules
+**/.baseline-node-modules
+**/dist
+**/.quasar
+**/logs
+**/*baseline*
+deploy/backend
+deploy/frontend
+deploy/redis/redisdata

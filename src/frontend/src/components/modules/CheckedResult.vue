@@ -1,24 +1,26 @@
 <template>
     <q-table
-        :rows="domainResults"
+        :rows="filteredResults"
         row-key="domainID"
         :columns="tableColumns"
         :visibleColumns="visibleColumns"
-        :pagination="tablePagination"
+        v-model:pagination="tablePagination"
         :selection="tokenStore.token ? 'multiple' : 'none'"
         v-model:selected="selectedDomains"
-        hide-bottom
+        :rows-per-page-options="[25, 50, 100]"
         class="no-shadow bg-grey-1"
         v-if="domainResults.length > 0"
     >
         <template v-slot:top>
+            <q-input dense outlined v-model="filter" label="筛选域名" clearable class="q-mr-sm q-mb-sm" />
+            <q-select dense outlined v-model="statusFilter" :options="statusOptions" emit-value map-options label="结果状态" class="q-mr-sm q-mb-sm status-filter" />
             <q-btn
                 size="sm"
                 color="primary"
                 class="q-mb-sm q-mr-sm"
                 label="重查错误域名"
                 @click="requerycheckedErrorDomains()"
-                v-if="webStore.unCheckDomains < 1 && webStore.checkedErrorDomains > 0"
+                v-if="webStore.unCheckDomains < 1 && (webStore.checkedErrorDomains + webStore.checkedTimeoutDomains + webStore.checkedUnknownDomains) > 0"
             ></q-btn>
 
             <q-btn
@@ -41,10 +43,10 @@
                     已注册: <q-badge color="warning">{{ webStore.checkedTakenDomains }}</q-badge>
                 </span>
                 <span>
-                    未注册: <q-badge color="secondary">{{ webStore.checkedFreeDomains }}</q-badge>
+                    未找到: <q-badge color="secondary">{{ webStore.checkedFreeDomains }}</q-badge>
                 </span>
                 <span>
-                    错误: <q-badge color="negative">{{ webStore.checkedErrorDomains }}</q-badge>
+                    未知: <q-badge color="grey-8">{{ webStore.checkedUnknownDomains }}</q-badge> · 超时: <q-badge color="deep-orange-9">{{ webStore.checkedTimeoutDomains }}</q-badge> · 错误: <q-badge color="negative">{{ webStore.checkedErrorDomains }}</q-badge>
                 </span>
                 <span>
                     未处理: <q-badge color="accent">{{ webStore.unCheckDomains }}</q-badge>
@@ -53,11 +55,11 @@
         </template>
 
         <template v-slot:header-selection="scope">
-            <q-checkbox v-model="scope.selected" />
+            <q-checkbox v-model="scope.selected" aria-label="选择域名" />
         </template>
 
         <template v-slot:body-selection="scope">
-            <q-checkbox v-model="scope.selected" />
+            <q-checkbox v-model="scope.selected" aria-label="选择域名" />
         </template>
 
         <template v-slot:body-cell-typoType="props">
@@ -75,16 +77,9 @@
         <template v-slot:body-cell-status="props">
             <q-td :props="props">
                 <div>
-                    <span class="cursor-pointer" v-if="props.row.isChecked" @click="showCheckedRawResponse(props.row)">
-                        <q-chip dense color="warning" text-color="white" v-if="props.row.status == 'Taken'">{{ props.row.status }}</q-chip>
-                        <q-chip dense color="secondary" text-color="white" v-if="props.row.status == 'Free'">{{ props.row.status }}</q-chip>
-                        <q-chip dense color="negative" text-color="white" v-if="props.row.status == 'Error'">
-                            {{ props.row.status }}
-                            <q-tooltip class="bg-red" transition-show="scale" transition-hide="scale">
-                                {{ props.row.errorInfo }}
-                            </q-tooltip>
-                        </q-chip>
-                    </span>
+                    <q-btn v-if="props.row.isChecked" flat dense no-caps :label="statusLabels[props.row.status] || props.row.status" :color="statusColors[props.row.status] || 'grey-8'" :aria-label="`${props.row.domain}：${statusLabels[props.row.status]}，查看原始响应`" @click="showCheckedRawResponse(props.row)">
+                        <q-tooltip v-if="props.row.errorInfo">{{ props.row.errorInfo }}</q-tooltip>
+                    </q-btn>
                     <span v-else><q-spinner-ios color="primary" size="1.8em" /></span>
                 </div>
             </q-td>
@@ -148,7 +143,7 @@
             <q-card-section class="row items-center">
                 <div class="text-h6">域名 {{ checkedRawResponseDomain }} 的原始查询响应</div>
                 <q-space />
-                <q-btn icon="close" flat round dense v-close-popup />
+                <q-btn icon="close" aria-label="关闭详情" flat round dense v-close-popup />
             </q-card-section>
 
             <q-separator />
@@ -164,7 +159,7 @@
             <q-card-section class="row items-center">
                 <div class="text-h6">域名 {{ registerRawResponseDomain }} 的注册响应</div>
                 <q-space />
-                <q-btn icon="close" flat round dense v-close-popup />
+                <q-btn icon="close" aria-label="关闭详情" flat round dense v-close-popup />
             </q-card-section>
 
             <q-separator />
@@ -240,7 +235,13 @@ const tableColumns = ref([
 
 const visibleColumns = ref(["domain", "status", "createdDate", "expiryDate", "nameServer", "domainStatus"]);
 
-const tablePagination = ref({ rowsPerPage: 10000 });
+const filter = ref('');
+const statusFilter = ref('all');
+const statusLabels = { Taken: '已注册', NotFound: '未找到', Free: '未找到', Unknown: '未知', Timeout: '超时', Error: '错误' };
+const statusColors = { Taken: 'primary', NotFound: 'teal-9', Unknown: 'grey-8', Timeout: 'deep-orange-9', Error: 'negative' };
+const statusOptions = [{ label: '全部状态', value: 'all' }, ...Object.entries(statusLabels).filter(([key]) => key !== 'Free').map(([value,label]) => ({ value,label }))];
+const filteredResults = computed(() => props.domainResults.filter(d => (!filter.value || d.domain.includes(filter.value.toLowerCase())) && (statusFilter.value === 'all' || d.status === statusFilter.value)));
+const tablePagination = ref({ rowsPerPage: 25 });
 
 function updateVisibleColumns() {
     if (props.queryType == "whoisQuery" || props.queryType == "whoisQueryWithProxy") {
@@ -308,7 +309,7 @@ function requerycheckedErrorDomains() {
 
         let errorDomainList = [];
         props.domainResults.forEach((domain) => {
-            if (domain.status == "Error") {
+            if (["Error", "Timeout", "Unknown"].includes(domain.status)) {
                 errorDomainList.push(domain.domain);
             }
         });
@@ -361,6 +362,7 @@ function registerSelectedDomains() {
                 event: "register",
                 data: {
                     registerType: props.registerType,
+                    confirmed: true,
                     domains: registerDomainList
                 }
             };
@@ -375,26 +377,8 @@ onMounted(() => {
     updateVisibleColumns();
 });
 
-// watch(
-//     () => webStore.checkedFreeDomains,
-//     (newVal) => {
-//         if (newVal > 0) {
-//             webStore.domains.forEach((domain) => {
-//                 if (domain.status == "Free") {
-//                     selectedDomains.value.forEach((selectedDomain) => {
-//                         if (selectedDomain.domain == domain.domain) {
-//                             // 如果已经选中，则不添加
-//                             return;
-//                         }
-//                     });
-//                     selectedDomains.value.push(domain);
-//                 }
-//             });
-//         } else {
-//             selectedDomains.value = [];
-//         }
-//     }
-// );
+watch(() => [props.queryType, props.resultType, tokenStore.token], updateVisibleColumns);
+watch(() => props.domainResults, () => { selectedDomains.value = []; });
 </script>
 
 <style scoped>

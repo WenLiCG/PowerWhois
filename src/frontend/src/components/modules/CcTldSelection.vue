@@ -6,9 +6,9 @@
                 <q-checkbox :disable="disable" v-model="selectedTlds" :val="tld" :label="tld" color="cyan" v-for="tld in tldOptions" :key="tld" />
             </div>
             <div class="flex justify-left q-pt-xs q-pb-md q-px-sm">
-                <q-input dense outlined :disable="disable" v-model="inputTld" placeholder="添加更多TLD">
+                <q-input dense outlined :disable="disable" v-model="inputTld" label="添加后缀" placeholder="例如 net">
                     <template v-slot:after>
-                        <q-btn icon="add" color="primary" :disable="disable" @click="addTld" />
+                        <q-btn aria-label="添加后缀" icon="add" color="primary" :disable="disable" @click="addTld" />
                     </template>
                 </q-input>
             </div>
@@ -17,7 +17,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, watch } from "vue";
 import { useQuasar } from "quasar";
 import { useSettingStore } from "src/stores/settingStore";
 
@@ -65,12 +65,14 @@ function addTld() {
     }
 }
 
-onMounted(() => {
+watch(() => settingStore.typoDefaultCcTlds, () => {
+    selectedTlds.value = [];
+    tldOptions.value = [];
     settingStore.typoDefaultCcTlds.forEach((tld) => {
         if (tld.isSelected) {
             selectedTlds.value.push(tld.tld);
         }
         tldOptions.value.push(tld.tld);
     });
-});
+}, { immediate: true });
 </script>

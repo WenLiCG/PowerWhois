@@ -14,6 +14,7 @@ import (
 	"typonamer/log"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
+	"typonamer/lookup/network"
 
 	"github.com/duke-git/lancet/v2/maputil"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -22,7 +23,7 @@ import (
 
 // WhoisQuery function is used to query the WHOIS information for a given domain.
 // If the useProxy parameter is set to true, it will use the proxy server to query the WHOIS information.
-func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo, error) {
+func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy bool) (lookupinfo.DomainInfo, error) {
 	log.Debugf("Querying whois for domain: %s", domain)
 
 	var domainInfo = lookupinfo.DomainInfo{
@@ -39,6 +40,17 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 
 	// Read the configuration
 	cfg := config.GetConfig()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
+	defer cancel()
+	release, err := network.Acquire(ctx, "whois")
+	if err != nil {
+		return domainInfo, err
+	}
+	defer release()
+	if err := network.Wait(ctx, "whois", whoisServer); err != nil {
+		return domainInfo, err
+	}
+	domainInfo.Source = whoisServer
 
 	// Create the address for the WHOIS server
 	whoisAddr := net.JoinHostPort(whoisServer, "43")
@@ -74,9 +86,6 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(cfg.WhoisTimeout))
-		defer cancel()
-
 		proxyConn, err := proxyDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
 		if err != nil {
 			log.Warnf("Failed to connect to the whois server %s via proxy: %s", whoisAddr, err)
@@ -87,12 +96,13 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		err = proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
 		if err != nil {
 			log.Warnf("Failed to set deadline for proxy connection: %s", err)
+			proxyConn.Close()
 			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
 		}
 
 		conn = proxyConn
 	} else {
-		rawConn, err := net.DialTimeout("tcp", whoisAddr, time.Second*time.Duration(cfg.WhoisTimeout))
+		rawConn, err := (&net.Dialer{Timeout: time.Second * time.Duration(cfg.WhoisTimeout)}).DialContext(ctx, "tcp", whoisAddr)
 		if err != nil {
 			log.Warnf("Failed to connect to the whois server %s: %s", whoisAddr, err)
 			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
@@ -102,6 +112,7 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		err = rawConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
 		if err != nil {
 			log.Warnf("Failed to set deadline for connection: %s", err)
+			rawConn.Close()
 			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
 		}
 
@@ -109,11 +120,16 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 	}
 
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
 
 	log.Infof("Querying WHOIS for domain: %s with TLD: %s on server: %s", domain, tld, whoisServer)
 
 	// Set write deadline
-	err := conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+	err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
 	if err != nil {
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
 	}
@@ -138,7 +154,7 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 
 	// Read the response from the server
 	var buf bytes.Buffer
-	_, err = io.Copy(&buf, conn)
+	_, err = io.Copy(&buf, io.LimitReader(conn, 2*1024*1024+1))
 	if err != nil {
 		log.Warnf("Failed to read WHOIS response: %s", err)
 		if _, ok := err.(net.Error); ok {
@@ -147,11 +163,12 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisServerFailed, err.Error())
 	}
 
+	if buf.Len() > 2*1024*1024 {
+		return domainInfo, fmt.Errorf("WHOIS response too large")
+	}
 	// Get the query result from the buffer
 	queryResult := buf.String()
 	domainInfo.RawResponse = queryResult
-
-	log.Debugf("Whois query raw result: \n%s", queryResult)
 
 	// Check if the query result is empty
 	if strutil.Trim(queryResult) == "" {
@@ -162,6 +179,7 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 	if matcher, ok := WhoisMatchers[tld]; ok {
 		domainInfo, err = ParseWhoisResponse(queryResult, domain, matcher)
 		domainInfo.ViaProxy = useProxy
+		domainInfo.Source = whoisServer
 		if err != nil {
 			if err.Error() == "domain not found" {
 				log.Infof("Domain %s is not registered", domain)
@@ -177,4 +195,8 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		log.Error("No parsing rule for TLD: ", tld)
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNoParseRuleForTld, tld)
 	}
+}
+
+func WhoisQuery(domain, tld string, viaProxy bool) (lookupinfo.DomainInfo, error) {
+	return WhoisQueryContext(context.Background(), domain, tld, viaProxy)
 }

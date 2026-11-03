@@ -5,6 +5,7 @@ import (
 )
 
 func ApiRoute(router fiber.Router) {
+	V1Routes(router)
 	// Login API
 	router.Post("/login", Login)
 

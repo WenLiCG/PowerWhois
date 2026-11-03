@@ -19,3 +19,8 @@
 
 # Go workspace file
 go.work
+
+.work/
+dist/
+.env
+logs/

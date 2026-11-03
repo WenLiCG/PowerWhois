@@ -1,5 +1,6 @@
 <template>
     <div v-if="settings">
+        <p class="text-caption text-grey-8">密码至少 12 位，登录有效期为 1–30 天。通过环境变量设置的凭据需在服务端修改并重启。</p>
         <q-form @validation-error="showValidationError" @submit="onSubmit" ref="settingForm">
             <!-- 管理员配置 -->
             <q-card class="no-shadow q-pb-lg" bordered>
@@ -108,6 +109,15 @@
                 </q-card-section>
             </q-card>
 
+            <q-card flat bordered class="q-my-md">
+                <q-card-section><h2 class="text-subtitle1 q-ma-none">各协议查询限制</h2><p class="text-caption text-grey-8">并发在整个服务内共享；请求频率按上游服务器限制，收到 Retry-After 后等待。</p>
+                    <div class="row q-col-gutter-md">
+                        <div v-for="field in protocolFields" :key="field.key" class="col-12 col-sm-6 col-md-4">
+                            <q-input outlined dense type="number" v-model.number="settings[field.key]" :label="field.label" :min="1" :max="field.max" :rules="[$rules.minValue(1, '至少为 1'), $rules.maxValue(field.max, '超过上限')]" />
+                        </div>
+                    </div>
+                </q-card-section>
+            </q-card>
             <!-- 公共查询参数 -->
             <q-card class="no-shadow q-mt-md q-pb-lg" bordered>
                 <q-card-section class="row items-center q-px-lg">
@@ -194,7 +204,7 @@
                                     $rules.required('请设置重试次数'),
                                     $rules.numeric('重试次数必须为数字'),
                                     $rules.minValue(1, '重试次数至少为1次'),
-                                    $rules.maxValue(10, '重试次数最多为10次')
+                                    $rules.maxValue(5, '重试次数最多为5次')
                                 ]"
                             />
                         </q-item-section>
@@ -908,6 +918,14 @@ import { api } from "boot/axios";
 import { useSettingStore } from "src/stores/settingStore";
 
 const $q = useQuasar();
+const protocolFields = [
+    { key: 'rdapTimeout', label: 'RDAP 超时 / 秒', max: 120 },
+    ...[['dns', 'DNS'], ['whois', 'WHOIS'], ['rdap', 'RDAP']].flatMap(([key, label]) => [
+        { key: `${key}Concurrency`, label: `${label} 最大并发`, max: 256 },
+        { key: `${key}Rate`, label: `${label} 每上游每秒请求数`, max: 256 }
+    ])
+];
+
 const settingStore = useSettingStore();
 
 const settingForm = ref(null);
@@ -1009,7 +1027,6 @@ function getSettings() {
             }
         })
         .catch((error) => {
-            console.error("Get settings error: ", error);
             this.$q.notify({
                 position: "top",
                 type: "negative",
@@ -1043,7 +1060,6 @@ function resetLog() {
                 });
             })
             .catch((error) => {
-                console.error("Clear log error: ", error);
                 $q.notify({
                     position: "top",
                     type: "negative",
@@ -1086,7 +1102,6 @@ function downloadLog() {
             downloadingLog.value = false;
         })
         .catch((error) => {
-            console.error("下载日志文件时发生错误:", error);
             $q.notify({
                 position: "top",
                 type: "negative",
@@ -1430,7 +1445,6 @@ function onSubmit() {
                     settingStore.updateSetting(response.data);
                 })
                 .catch((error) => {
-                    console.error("Update settings error: ", error);
                     $q.notify({
                         position: "top",
                         type: "negative",

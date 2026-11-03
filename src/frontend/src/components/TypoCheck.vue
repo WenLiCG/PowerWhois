@@ -1,8 +1,8 @@
 <template>
     <div class="flex justify-center">
-        <q-input outlined autofocus class="full-width" v-model="domainInput" placeholder="请输入域名" :disable="webStore.unCheckDomains > 0">
+        <q-input outlined autofocus class="full-width" v-model="domainInput" label="原始域名" placeholder="example.com" @keyup.enter="typoCheckDomain()" :disable="webStore.unCheckDomains > 0">
             <template v-slot:append>
-                <q-btn icon="send" color="primary" label="GO" :disable="webStore.unCheckDomains > 0" @click="typoCheckDomain()" />
+                <q-btn icon="send" color="primary" label="生成并查询" :disable="webStore.unCheckDomains > 0" @click="typoCheckDomain()" />
             </template>
         </q-input>
     </div>

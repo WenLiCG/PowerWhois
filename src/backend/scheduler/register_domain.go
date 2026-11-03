@@ -23,6 +23,8 @@ type RegisterTask struct {
 	Kws        *socketio.Websocket
 	Ctx        context.Context
 	CancelFunc context.CancelFunc
+	mu         sync.Mutex
+	stopped    bool
 	Domains    []string
 }
 
@@ -41,6 +43,16 @@ func (r *RegisterTask) SetDomains(domains []string) {
 
 // Run the register task for the given user and register type.
 func (r *RegisterTask) Run(registerType string) {
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	r.Ctx = ctx
+	r.CancelFunc = cancelFunc
+	r.mu.Unlock()
+	defer cancelFunc()
 	if len(r.Domains) == 0 {
 		log.Error("Empty domains, do nothing")
 		responseError := map[string]interface{}{
@@ -86,9 +98,6 @@ func (r *RegisterTask) Run(registerType string) {
 	}
 
 	// Create a new context and a cancel function
-	ctx, cancelFunc := context.WithCancel(context.Background())
-	r.Ctx = ctx
-	r.CancelFunc = cancelFunc
 
 	// Create a channel and a wait group
 	ch := make(chan string, concurrencyLimit)
@@ -109,8 +118,7 @@ func (r *RegisterTask) Run(registerType string) {
 			log.Infof("Force stop register task for user %s", r.UserID)
 			close(ch)
 			return
-		default:
-			ch <- domain
+		case ch <- domain:
 		}
 	}
 
@@ -123,15 +131,16 @@ func (r *RegisterTask) Run(registerType string) {
 	log.Infof("Register task for user %s finished", r.UserID)
 
 	// Reset the register task
-	r.Domains = []string{}
 }
 
 func (r *RegisterTask) Stop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopped = true
 	if r.CancelFunc != nil {
 		log.Infof("Going to stop register task for user %s", r.UserID)
 		r.CancelFunc()
 	}
-	r.Domains = []string{}
 }
 
 func (r *RegisterTask) registerHandler(i int, ch chan string, wg *sync.WaitGroup, registerType string) {
@@ -147,9 +156,8 @@ func (r *RegisterTask) registerHandler(i int, ch chan string, wg *sync.WaitGroup
 			// If the context is canceled, stop the goroutine
 			log.Infof("Force stop register task handler %d for user %s", handerSeq, r.UserID)
 			return
-		default:
-			domain, ok := <-ch
-			if !ok {
+		case domain, ok := <-ch:
+			if !ok || r.Ctx.Err() != nil {
 				// If the channel is closed, stop the goroutine
 				log.Debugf("Register task handler %d for user %s finished", handerSeq, r.UserID)
 				return
@@ -157,12 +165,10 @@ func (r *RegisterTask) registerHandler(i int, ch chan string, wg *sync.WaitGroup
 
 			log.Debugf("Register task handler %d for user %s, register domain %s", handerSeq, r.UserID, domain)
 
-			registerResult, err := register.Register(domain, registerType)
+			registerResult, err := register.RegisterContext(r.Ctx, domain, registerType)
 			if err != nil {
 				log.Errorf("Register domain %s error: %v", domain, err)
 			}
-
-			log.Debugf("Register domain %s result: %+v", domain, registerResult)
 
 			response := map[string]interface{}{
 				"event": constant.WebsocketResponseEventRegisterResult,

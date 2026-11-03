@@ -3,6 +3,7 @@ package lookuperror
 import "errors"
 
 var (
+	ErrorRateLimited              = errors.New("registry rate limited")
 	ErrorInvalidDomainName        = errors.New("invalid domain name")
 	ErrorWhoisTimeout             = errors.New("whois query timeout")
 	ErrorNotSupportedTld          = errors.New("not supported tld")

@@ -7,9 +7,9 @@ import (
 	"typonamer/config"
 	"typonamer/log"
 
-	jwtware "github.com/gofiber/contrib/jwt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"strings"
 )
 
 const (
@@ -49,7 +49,7 @@ func Login(c *fiber.Ctx) error {
 
 	// Compare the username and password in the request body with the config values.
 	if (login.Username != cfg.AuthUsername) || (login.Password != cfg.AuthPassword) {
-		log.Warnf("Login failed. Username: %s, Password: %s", login.Username, login.Password)
+		log.Warn("Login failed")
 		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the username or password is incorrect.
 	}
 
@@ -69,17 +69,20 @@ func Login(c *fiber.Ctx) error {
 // LoginRequired returns a middleware that enforces JWT authentication.
 //
 // The middleware validates the JWT token in the Authorization header using the
-// configured auth password as the signing key. Invalid or missing tokens result
+// configured JWT secret as the signing key. Invalid or missing tokens result
 // in a 401 Unauthorized response.
 func LoginRequired() func(*fiber.Ctx) error {
-	return jwtware.New(jwtware.Config{
-		// SigningKey is the key used to sign the JWT token.
-		// It is used to verify the token when it is received.
-		SigningKey: jwtware.SigningKey{Key: []byte(config.GetConfig().JwtSecretKey)},
-		// ErrorHandler is the handler that is called when the token is invalid, expired, or missing.
-		// It returns a 401 status and a JSON object with status=error and a message of the error.
-		ErrorHandler: jwtError,
-	})
+	return func(c *fiber.Ctx) error {
+		header := c.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			return jwtError(c, fmt.Errorf("authentication required"))
+		}
+		valid, err := ValidateToken(strings.TrimPrefix(header, "Bearer "))
+		if err != nil || !valid {
+			return jwtError(c, fmt.Errorf("invalid or expired credential"))
+		}
+		return c.Next()
+	}
 }
 
 // ValidateToken validates a JWT token string.
@@ -100,7 +103,7 @@ func ValidateToken(tokenString string) (bool, error) {
 
 		// Return the signing key which is the JwtSecretKey config value.
 		return []byte(config.GetConfig().JwtSecretKey), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 
 	if err != nil {
 		// Log the error if the token parsing fails.
@@ -116,7 +119,8 @@ func ValidateToken(tokenString string) (bool, error) {
 	}
 
 	// Return the validation result.
-	return token.Valid, nil
+	claims, _ := token.Claims.(jwt.MapClaims)
+	return token.Valid && claims["name"] == config.GetConfig().AuthUsername, nil
 }
 
 // jwtError handles JWT authentication errors by returning a 401 response.

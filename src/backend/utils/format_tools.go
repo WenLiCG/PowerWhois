@@ -8,7 +8,7 @@ import (
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 
-	"github.com/bytedance/sonic"
+	"encoding/json"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/jszwec/csvutil"
@@ -42,7 +42,7 @@ func GetDomainHumanStatus(domainStatus []string) string {
 		// check if the domain status contains any of the following strings
 		if slice.Contain(noSpaceDomainStatus, "registarahold") {
 			return constant.DomainStatusExpired
-		} else if slice.Contain(noSpaceDomainStatus, "pendingdelete") || slice.Contain(noSpaceDomainStatus, "delegated") {
+		} else if slice.Contain(noSpaceDomainStatus, "pendingdelete") {
 			return constant.DomainStatusPendingDelete
 		} else if slice.Contain(noSpaceDomainStatus, "redemptionperiod") {
 			return constant.DomainStatusRedemptionPeriod
@@ -103,7 +103,7 @@ func GetOrderedQueryResult(domainResult []string) []lookupinfo.QueryResult {
 	var queryResults []lookupinfo.QueryResult
 	for _, domainJson := range domainResult {
 		var queryItem lookupinfo.QueryResult
-		err := sonic.Unmarshal([]byte(domainJson), &queryItem)
+		err := json.Unmarshal([]byte(domainJson), &queryItem)
 		if err != nil {
 			log.Errorf("Error unmarshal query result: %s", err)
 			continue
@@ -134,7 +134,9 @@ func ConvertQueryResultToCSV(queryResults []lookupinfo.QueryResult) ([]byte, err
 			Domain:          queryResult.Domain,
 			LookupType:      queryResult.LookupType,
 			ViaProxy:        viaProxy,
-			Status:          queryResult.RegisterStatus,
+			Status:          queryResult.Status,
+			Source:          queryResult.Source,
+			QueriedAt:       queryResult.QueriedAt,
 			ErrorInfo:       queryResult.QueryError,
 			CreatedDate:     queryResult.CreatedDate,
 			ExpiryDate:      queryResult.ExpiryDate,
@@ -145,6 +147,15 @@ func ConvertQueryResultToCSV(queryResults []lookupinfo.QueryResult) ([]byte, err
 		})
 	}
 
+	for i := range csvResults {
+		r := &csvResults[i]
+		for _, cell := range []*string{&r.Domain, &r.LookupType, &r.Status, &r.ErrorInfo, &r.CreatedDate, &r.ExpiryDate, &r.NameServer, &r.DnsLite, &r.RawDomainStatus, &r.DomainStatus, &r.Source, &r.QueriedAt} {
+			first := strings.TrimLeft(*cell, " ")
+			if len(first) > 0 && strings.ContainsRune("=+-@\t\r\n", rune(first[0])) {
+				*cell = "'" + *cell
+			}
+		}
+	}
 	return csvutil.Marshal(csvResults)
 }
 

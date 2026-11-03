@@ -1,4 +1,4 @@
-import { boot, store } from "quasar/wrappers";
+
 import axios from "axios";
 import { getToken, removeToken } from "src/utils/tokenHandler";
 
@@ -10,9 +10,7 @@ import { getToken, removeToken } from "src/utils/tokenHandler";
 // for each client)
 
 var apiUrl = "/api";
-if (process.env.DEV) {
-    apiUrl = process.env.QENV_API_URL + "/api";
-}
+
 
 const api = axios.create({
     baseURL: apiUrl,
@@ -22,7 +20,7 @@ const api = axios.create({
     }
 });
 
-export default boot(({ app }) => {
+export default ({ app }) => {
     // for use inside Vue files (Options API) through this.$axios and this.$api
 
     app.config.globalProperties.$axios = axios;
@@ -55,6 +53,6 @@ export default boot(({ app }) => {
             return Promise.reject(error);
         }
     );
-});
+};
 
 export { api, apiUrl, axios };

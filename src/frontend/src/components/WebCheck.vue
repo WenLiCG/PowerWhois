@@ -2,7 +2,8 @@
     <div class="flex justify-center">
         <q-input
             outlined
-            autofocus
+            label="查询域名"
+            hint="每行一个纯域名，例如 example.com；不填写网址或路径"
             clearable
             class="full-width"
             v-model="domainInput"
@@ -28,9 +29,9 @@
 
     <div class="flex justify-center">
         <q-btn
-            push
+            unelevated
             color="primary"
-            label="查询"
+            label="开始查询"
             class="full-width"
             :loading="webCheckDomains.length > 0 && webStore.unCheckDomains > 0"
             :percentage="handleProgress"

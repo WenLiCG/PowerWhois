@@ -2,10 +2,10 @@
 LogLevel: Info
 
 # Setting authentication information
-AuthUsername: admin
-AuthPassword: 123456
+AuthUsername: ""
+AuthPassword: ""
 AuthExpireDays: 30
-JwtSecretKey: 1234567890abcdef
+JwtSecretKey: ""
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -29,14 +29,14 @@ MixedProxyTlds:
 MixedDnsTlds:
 
 ## Setting proxy information
-SocketProxyHost: 192.168.1.1
+SocketProxyHost: 127.0.0.1
 SocketProxyPort: 7890
 SocketProxyAuth: false
-SocketProxyUser: test
-SocketProxyPassword: 123456
+SocketProxyUser: ""
+SocketProxyPassword: ""
 
 # ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: 100
+BulkCheckConcurrencyLimit: 32
 
 # ------ Web check settings ------
 WebCheckConcurrencyLimit: 10
@@ -66,3 +66,12 @@ RegisterApis:
 
 # ------ Whois APIs ------
 WhoisApis:
+
+# Supply credentials through POWERWHOIS_ADMIN_* and POWERWHOIS_JWT_SECRET.
+RdapTimeout: 10
+DnsConcurrency: 16
+WhoisConcurrency: 4
+RdapConcurrency: 4
+DnsRate: 20
+WhoisRate: 2
+RdapRate: 4

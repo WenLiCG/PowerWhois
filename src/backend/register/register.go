@@ -1,7 +1,10 @@
 package register
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -9,12 +12,11 @@ import (
 	"typonamer/constant"
 	"typonamer/log"
 
-	"github.com/duke-git/lancet/v2/maputil"
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/go-resty/resty/v2"
 	"github.com/zh-five/golimit"
 )
 
+var limiterMu sync.RWMutex
 var limiterList = map[string]*golimit.GoLimit{}
 
 const (
@@ -26,6 +28,9 @@ func init() {
 }
 
 func SetupLimiter() {
+	limiterMu.Lock()
+	defer limiterMu.Unlock()
+	limiterList = map[string]*golimit.GoLimit{}
 	cfg := config.GetConfig()
 
 	for _, api := range cfg.RegisterApis {
@@ -34,6 +39,9 @@ func SetupLimiter() {
 }
 
 func Register(domain string, registerType string) (RegisterInfo, error) {
+	return RegisterContext(context.Background(), domain, registerType)
+}
+func RegisterContext(ctx context.Context, domain string, registerType string) (RegisterInfo, error) {
 	registerInfo := RegisterInfo{
 		RegisterType: registerType,
 		DomainName:   domain,
@@ -62,20 +70,22 @@ func Register(domain string, registerType string) (RegisterInfo, error) {
 	var response string
 	var err error
 
-	if maputil.HasKey(limiterList, apiInfo.ApiName) {
-		limiter := limiterList[apiInfo.ApiName]
+	limiterMu.RLock()
+	limiter, hasLimiter := limiterList[apiInfo.ApiName]
+	limiterMu.RUnlock()
+	if hasLimiter {
 
 		var wg sync.WaitGroup
 		wg.Add(1)
 
 		limiter.Do(func() {
 			defer wg.Done()
-			response, err = sendRegisterRequest(apiUrl)
+			response, err = sendRegisterRequest(ctx, apiUrl)
 		})
 
 		wg.Wait()
 	} else {
-		response, err = sendRegisterRequest(apiUrl)
+		response, err = sendRegisterRequest(ctx, apiUrl)
 	}
 
 	if err != nil {
@@ -90,8 +100,6 @@ func Register(domain string, registerType string) (RegisterInfo, error) {
 	}
 
 	registerInfo.RawResponse = response
-
-	log.Debugf("Request register api %s with domain %s, response: %s", apiInfo.ApiName, domain, response)
 
 	if strutil.ContainsAny(response, apiInfo.SuccessText) && strutil.ContainsAny(response, apiInfo.FailText) {
 		log.Errorf("Request register api %s with domain %s, response both contains success and fail text", apiInfo.ApiName, domain)
@@ -113,14 +121,23 @@ func Register(domain string, registerType string) (RegisterInfo, error) {
 	return registerInfo, nil
 }
 
-func sendRegisterRequest(apiUrl string) (string, error) {
-	client := resty.New()
-	client.SetTimeout(defaultRegisterTimeout)
-
-	response, err := client.R().Get(apiUrl)
+func sendRegisterRequest(ctx context.Context, apiURL string) (string, error) {
+	client := &http.Client{Timeout: defaultRegisterTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("invalid registration endpoint")
 	}
-
-	return response.String(), nil
+	response, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("registration request failed; outcome unknown, verify with registrar before retrying")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("registration service returned HTTP %d; verify outcome before retrying", response.StatusCode)
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(nil, response.Body, 2*1024*1024))
+	if err != nil {
+		return "", fmt.Errorf("cannot read registration result; verify outcome before retrying")
+	}
+	return string(data), nil
 }

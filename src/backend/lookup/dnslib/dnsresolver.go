@@ -1,11 +1,13 @@
 package dnslib
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
 	"time"
+	"typonamer/lookup/network"
 
 	"typonamer/config"
 	"typonamer/constant"
@@ -68,7 +70,7 @@ func GetTldNsCache(tld string) []string {
 	return []string{}
 }
 
-func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
+func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, error) {
 	log.Debugf("Resolving NS record for domain %s", domain)
 
 	domainInfo := lookupinfo.DomainInfo{
@@ -77,6 +79,15 @@ func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
 	}
 
 	cfg := config.GetConfig()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.DnsTimeout)*time.Second)
+	defer cancel()
+	release, err := network.Acquire(ctx, "dns")
+	if err != nil {
+		return domainInfo, err
+	}
+	defer release()
+	var lastErr error
+	answered := false
 
 	nsRecords := make([]string, 0)
 
@@ -131,13 +142,32 @@ func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
 		rawTrace += fmt.Sprintf("%s├─ Level %d: Query for %s\n", indent, level+1, domain)
 
 		for _, nameserver := range nextNameservers {
-			response, _, err := dnsClient.Exchange(msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+			domainInfo.Source = nameserver
+			if err := network.Wait(ctx, "dns", nameserver); err != nil {
+				return domainInfo, err
+			}
+			response, _, err := dnsClient.ExchangeContext(ctx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+			if err == nil && response != nil && response.Truncated {
+				tcp := *dnsClient
+				tcp.Net = "tcp"
+				response, _, err = tcp.ExchangeContext(ctx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+			}
 			if err != nil {
+				lastErr = err
 				log.Debugf("Failed to query DNS for domain %s using nameserver %s: %s", domain, nameserver, err)
 				continue
 			}
 
 			if response != nil {
+				if response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError {
+					answered = true
+				} else {
+					lastErr = lookuperror.ErrorDnsServerFailed
+				}
+				if response.Rcode == dns.RcodeNameError {
+					domainInfo.RawResponse = response.String()
+					return domainInfo, lookuperror.ErrorNsNotFound
+				}
 				log.Debugf("DNS query for %s using nameserver %s Rcode is %d", domain, nameserver, response.Rcode)
 				if response.Rcode == dns.RcodeSuccess {
 					records := response.Answer
@@ -198,6 +228,7 @@ func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
 		}
 
 		// Use the nameservers found in the current level to resolve the next level
+		answered = false
 		nextNameservers = responseNS
 		level++
 
@@ -214,8 +245,21 @@ func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
 	domainInfo.RawResponse = rawTrace
 
 	if len(nsRecords) == 0 {
+		if ctx.Err() != nil {
+			return domainInfo, ctx.Err()
+		}
+		if !answered {
+			if lastErr != nil {
+				return domainInfo, lastErr
+			}
+			return domainInfo, lookuperror.ErrorDnsServerFailed
+		}
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNsNotFound, domain)
 	}
 
 	return domainInfo, nil
+}
+
+func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
+	return NsCheckContext(context.Background(), domain)
 }

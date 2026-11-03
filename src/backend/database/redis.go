@@ -62,7 +62,7 @@ func GetRedis() (*redis.Client, error) {
 	// Create a Redis client with the specified host and port.
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     net.JoinHostPort(redisHost, redisPort),
-		Password: "",
+		Password: os.Getenv("REDIS_PASSWORD"),
 		DB:       db,
 	})
 

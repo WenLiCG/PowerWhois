@@ -13,7 +13,6 @@ import (
 	"typonamer/utils"
 
 	"github.com/dromara/carbon/v2"
-	"github.com/duke-git/lancet/v2/slice"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -55,14 +54,14 @@ func SettingUpdate(c *fiber.Ctx) error {
 	if err := c.BodyParser(newConfig); err != nil {
 		// Error parsing the config info
 		log.Error("Parse config info error: ", err)
-		return c.Status(500).SendString(err.Error())
+		return c.Status(400).SendString("invalid settings payload")
 	}
 
 	err := config.UpdateConfig(*newConfig)
 	if err != nil {
 		// Error updating the config
 		log.Error("Update config error: ", err)
-		return c.Status(500).SendString(err.Error())
+		return c.Status(400).SendString(err.Error())
 	}
 
 	// Update the custom whois API limiter
@@ -120,7 +119,9 @@ func BulkCheckDomainUpload(c *fiber.Ctx) error {
 
 	// Read the file content into a buffer
 	buffer := bytes.NewBuffer(nil)
-	io.Copy(buffer, f)
+	if _, err := io.Copy(buffer, f); err != nil {
+		return c.SendStatus(400)
+	}
 
 	// Add the raw domains to redis
 	err = scheduler.BulkCheckAddRawDomains(buffer)
@@ -135,15 +136,10 @@ func BulkCheckDomainUpload(c *fiber.Ctx) error {
 }
 
 func BulkCheckResultDownload(c *fiber.Ctx) error {
-	// Get the taken, free and error domains
-	takenDomains := scheduler.GetBulkCheckTakenDomains()
-	freeDomains := scheduler.GetBulkCheckFreeDomains()
-	errorDomains := scheduler.GetBulkCheckErrorDomains()
-
-	// Combine the taken, free and error domains
-	domainJsonResults := slice.Concat(takenDomains, freeDomains, errorDomains)
-
-	domainResults := utils.GetOrderedQueryResult(domainJsonResults)
+	domainResults, err := scheduler.BulkResults(c.UserContext())
+	if err != nil {
+		return c.Status(503).SendString("cannot read task results")
+	}
 	csvData, err := utils.ConvertQueryResultToCSV(domainResults)
 	if err != nil {
 		log.Error("Convert query result to csv error: ", err)

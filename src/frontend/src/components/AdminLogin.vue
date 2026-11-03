@@ -72,8 +72,8 @@ function isWebsocketConnected() {
     }
 }
 
-function onSubmit() {
-    if (loginForm.value.validate()) {
+async function onSubmit() {
+    if (await loginForm.value.validate()) {
         submitting.value = true;
         api.post("/login", {
             username: username.value,
@@ -102,7 +102,6 @@ function onSubmit() {
             })
             .catch((error) => {
                 submitting.value = false;
-                console.error("Login erroe: ", error);
                 if (error.response && error.response.status === 400) {
                     $q.notify({
                         position: "top",

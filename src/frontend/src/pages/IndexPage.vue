@@ -1,7 +1,17 @@
 <template>
     <q-layout class="bg-grey-1">
         <q-page-container>
-            <q-page class="">
+            <q-page class="workspace">
+                <header class="workspace-header">
+                    <div>
+                        <h1>PowerWhois</h1>
+                        <p>域名查询与批量任务</p>
+                    </div>
+                    <div class="connection-state" role="status">
+                        <q-icon :name="status === 'OPEN' ? 'cloud_done' : 'cloud_off'" />
+                        {{ status === "OPEN" ? "服务已连接" : "连接中断，正在重连" }}
+                    </div>
+                </header>
                 <div class="full-width">
                     <q-tabs
                         v-model="tab"
@@ -32,7 +42,7 @@
                         </q-btn-dropdown>
                     </q-tabs>
                 </div>
-                <div style="max-width: 1200px; margin: 0 auto">
+                <div class="workspace-content">
                     <q-tab-panels v-model="tab" animated class="full-width bg-grey-1">
                         <q-tab-panel name="webCheck">
                             <WebCheck></WebCheck>
@@ -55,6 +65,10 @@
                         </q-tab-panel>
                     </q-tab-panels>
                 </div>
+                <footer class="workspace-footer">
+                    DNS 无记录不等于未注册；“未找到”仍需注册商确认。
+                    <a href="/api/openapi.json" target="_blank" rel="noopener">API 文档（OpenAPI）</a>
+                </footer>
             </q-page>
         </q-page-container>
     </q-layout>
@@ -65,7 +79,7 @@ import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useQuasar } from "quasar";
 import { api } from "boot/axios";
 import { removeToken } from "src/utils/tokenHandler";
-import { close } from "src/utils/websocketHandler";
+import { close, open, status } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useSettingStore } from "src/stores/settingStore";
 
@@ -89,7 +103,9 @@ function loginedUpdate() {
 }
 
 function logout() {
+    close();
     removeToken();
+    open();
     tab.value = "webCheck";
 }
 
@@ -107,7 +123,6 @@ function getWebSettings() {
             }
         })
         .catch((error) => {
-            console.error("Get settings error: ", error);
             $q.notify({
                 position: "top",
                 type: "negative",

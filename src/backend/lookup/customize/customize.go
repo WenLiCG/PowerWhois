@@ -1,9 +1,13 @@
 package customize
 
 import (
+	"context"
 	"fmt"
-	"sync"
+	"io"
+	"net/http"
+	"strings"
 	"time"
+	"typonamer/lookup/network"
 
 	"typonamer/config"
 	"typonamer/constant"
@@ -11,27 +15,12 @@ import (
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 
-	"github.com/duke-git/lancet/v2/maputil"
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/go-resty/resty/v2"
-	"github.com/zh-five/golimit"
 )
 
-var limiterList = map[string]*golimit.GoLimit{}
+func SetupLimiter() {}
 
-func init() {
-	SetupLimiter()
-}
-
-func SetupLimiter() {
-	cfg := config.GetConfig()
-
-	for _, api := range cfg.WhoisApis {
-		limiterList[api.ApiName] = golimit.NewGoLimit(uint(api.ConcurrencyLimit))
-	}
-}
-
-func CustomizeLookup(domain string, queryType string) (lookupinfo.DomainInfo, error) {
+func CustomizeLookupContext(ctx context.Context, domain string, queryType string) (lookupinfo.DomainInfo, error) {
 	var domainInfo = lookupinfo.DomainInfo{
 		DomainName: domain,
 		LookupType: queryType,
@@ -56,24 +45,13 @@ func CustomizeLookup(domain string, queryType string) (lookupinfo.DomainInfo, er
 		"domain": domain,
 	})
 
-	var response string
-	var err error
-
-	if maputil.HasKey(limiterList, apiInfo.ApiName) {
-		limiter := limiterList[apiInfo.ApiName]
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		limiter.Do(func() {
-			defer wg.Done()
-			response, err = getResponse(apiUrl)
-		})
-
-		wg.Wait()
-	} else {
-		response, err = getResponse(apiUrl)
+	release, err := network.Acquire(ctx, "custom:"+queryType)
+	if err != nil {
+		return domainInfo, err
 	}
+	defer release()
+	response, err := getResponse(ctx, apiUrl)
+	domainInfo.Source = "custom:" + queryType
 
 	if err != nil {
 		log.Errorf("Request whois api %s response error: %v", apiInfo.ApiName, err)
@@ -86,8 +64,6 @@ func CustomizeLookup(domain string, queryType string) (lookupinfo.DomainInfo, er
 	}
 
 	domainInfo.RawResponse = response
-
-	log.Debugf("Request whois api %s with domain %s, response: %s", apiInfo.ApiName, domain, response)
 
 	if strutil.ContainsAny(response, apiInfo.FreeText) && strutil.ContainsAny(response, apiInfo.TakenText) {
 		log.Errorf("Request whois api %s with domain %s, response both contains free and taken text", apiInfo.ApiName, domain)
@@ -106,22 +82,35 @@ func CustomizeLookup(domain string, queryType string) (lookupinfo.DomainInfo, er
 	return domainInfo, nil
 }
 
-func getResponse(apiUrl string) (string, error) {
+func getResponse(ctx context.Context, apiURL string) (string, error) {
 	cfg := config.GetConfig()
-
-	client := resty.New()
-	client.SetTimeout(time.Duration(cfg.WhoisTimeout) * time.Second)
-
-	if cfg.RetryOnTimeout {
-		client.SetRetryCount(cfg.RetryMax).
-			SetRetryWaitTime(time.Duration(cfg.RetryInterval) * time.Second).
-			SetRetryMaxWaitTime(time.Duration(cfg.RetryInterval) * time.Duration(cfg.RetryMax))
-	}
-
-	response, err := client.R().Get(apiUrl)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", err
+		return "", lookuperror.ErrorCustomizeApiServerResponse
 	}
-
-	return response.String(), nil
+	client := &http.Client{Transport: network.Transport{Base: http.DefaultTransport, Protocol: "custom"}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 429 {
+		return "", lookuperror.ErrorRateLimited
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
+	if err != nil || len(data) > 2*1024*1024 {
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+func CustomizeLookup(domain, mode string) (lookupinfo.DomainInfo, error) {
+	return CustomizeLookupContext(context.Background(), domain, mode)
 }

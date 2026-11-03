@@ -3,10 +3,10 @@
 LogLevel: Info
 
 # Setting authentication information
-AuthUsername: admin
-AuthPassword: 123456
+AuthUsername: ""
+AuthPassword: ""
 AuthExpireDays: 30
-JwtSecretKey: 1234567890abcdef
+JwtSecretKey: ""
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -63,8 +63,8 @@ MixedDnsTlds:
 SocketProxyHost: test.superproxy.io
 SocketProxyPort: 22222
 SocketProxyAuth: true
-SocketProxyUser: testuser
-SocketProxyPassword: 1234567890
+SocketProxyUser: ""user
+SocketProxyPassword: ""7890
 
 # ------ Bulk check settings ------
 BulkCheckConcurrencyLimit: 50
@@ -122,3 +122,12 @@ WhoisApis:
       TakenText:
           - not
       ConcurrencyLimit: 1
+
+# Supply credentials through POWERWHOIS_ADMIN_* and POWERWHOIS_JWT_SECRET.
+RdapTimeout: 10
+DnsConcurrency: 16
+WhoisConcurrency: 4
+RdapConcurrency: 4
+DnsRate: 20
+WhoisRate: 2
+RdapRate: 4

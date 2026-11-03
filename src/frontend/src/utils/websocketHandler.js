@@ -4,20 +4,13 @@ import { useBulkStore } from "src/stores/bulkStore";
 import { useWebStore } from "src/stores/webStore";
 import { Notify } from "quasar";
 
-var wsUrl = "/app/ws";
-if (process.env.DEV) {
-    wsUrl = process.env.QENV_API_URL + "/app/ws";
-}
-
-const token = getToken();
-if (token) {
-    wsUrl = wsUrl + "?token=" + token;
-}
+const wsUrl = new URL('/app/ws', window.location.href);
+wsUrl.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
 const bulkStore = useBulkStore();
 const webStore = useWebStore();
 
-export const { status, send, open, close } = useWebSocket(wsUrl, {
+export const { status, send, open, close } = useWebSocket(wsUrl.href, {
     autoReconnect: true,
     heartbeat: {
         message: JSON.stringify({ event: "ping" }),
@@ -26,16 +19,18 @@ export const { status, send, open, close } = useWebSocket(wsUrl, {
         pongTimeout: 5000 //5秒
     },
     onConnected: (ws) => {
-        console.log("Connected to websocket server: ", ws.url);
+        const token = getToken();
+        if (token) ws.send(JSON.stringify({ event: "adminAuth", data: token }));
     },
     onDisconnected: (ws, event) => {
-        console.log("Disconnected from websocket server with code ", event.code, " reason: ", event.reason);
+        webStore.interruptQueries();
     },
     onError: (ws, event) => {
         console.error("Got error on websocket eventPhase: ", event.eventPhase);
     },
     onMessage: (ws, msg) => {
-        const msgObj = JSON.parse(msg.data);
+        let msgObj;
+        try { msgObj = JSON.parse(msg.data); } catch { return; }
         switch (msgObj.event) {
             case "bulkCheckInfo":
                 bulkStore.setBulkCheckStatus(msgObj.data.Status);

@@ -2,6 +2,7 @@ package lookupinfo
 
 // DomainInfo represents the information about a domain.
 type DomainInfo struct {
+	Source           string   `json:"Source"`
 	LookupType       string   `json:"LookupType"`       // LookupType is the type of lookup.
 	ViaProxy         bool     `json:"ViaProxy"`         // ViaProxy is the flag to indicate if the lookup is via proxy.
 	DomainName       string   `json:"DomainName"`       // DomainName is the name of the domain.
@@ -15,6 +16,9 @@ type DomainInfo struct {
 }
 
 type QueryResult struct {
+	Status          string   `json:"status"`
+	Source          string   `json:"source"`
+	QueriedAt       string   `json:"queriedAt"`
 	Order           int      `json:"order"`
 	Domain          string   `json:"domain"`
 	LookupType      string   `json:"lookupType"`
@@ -31,6 +35,8 @@ type QueryResult struct {
 }
 
 type QueryCsvResult struct {
+	Source          string `csv:"Source"`
+	QueriedAt       string `csv:"Queried At"`
 	Domain          string `csv:"Domain"`
 	LookupType      string `csv:"Lookup Type"`
 	ViaProxy        string `csv:"Via Proxy,omitempty"`

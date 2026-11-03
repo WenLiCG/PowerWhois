@@ -1,0 +1,30 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: src/backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y redis-server
+      - run: go test -race ./...
+        working-directory: src/backend
+      - run: |
+          mkdir -p ../../.work
+          go build -o ../../.work/typonamer .
+          go build -o ../../.work/powerwhois ./cmd/powerwhois
+          go build -o ../../.work/powerwhois-mcp ./cmd/powerwhois-mcp
+        working-directory: src/backend
+      - run: python3 tools/acceptance.py
+      - run: npm ci && npm test && npm run lint && npm run build && npm audit --omit=dev
+        working-directory: src/frontend
