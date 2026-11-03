@@ -67,6 +67,14 @@ func init() {
 
 	execDir = filepath.Dir(execPath)
 	logDir = filepath.Join(execDir, logDirName)
+	if configured := os.Getenv("POWERWHOIS_LOG_DIR"); configured != "" {
+		logDir = filepath.Clean(configured)
+		execDir = filepath.Dir(logDir)
+		if err := os.MkdirAll(logDir, 0700); err != nil {
+			fmt.Fprintln(os.Stderr, "cannot create log directory")
+			os.Exit(1)
+		}
+	}
 	logFile = filepath.Join(logDir, logFileName)
 
 	fileWriteSyncer := zapcore.AddSync(&lumberjack.Logger{

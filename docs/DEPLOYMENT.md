@@ -1,6 +1,6 @@
 # 部署、升级与回滚
 
-本版默认仅本机访问。仓库旧 `deploy/backend/typonamer` 和 `deploy/frontend` 是历史预构建文件；**不要直接运行它们来验收新版本**。新 Compose 从源码构建，CLI/API/MCP 示例见 [USAGE.md](USAGE.md)。本次没有操作线上服务器。
+本版默认仅本机访问。仓库旧 `deploy/backend/typonamer` 和 `deploy/frontend` 是历史预构建文件；**不要直接运行它们来验收新版本**。新 Compose 从源码构建，CLI/API/MCP 示例见 [USAGE.md](USAGE.md)。已在用户指定 VPS 完成原生 systemd 部署、真实查询与重启验收，见 [VPS 验收与回滚记录](VPS-ACCEPTANCE-20261103.md)。
 
 本地交付包 `dist/PowerWhois-20261103-r2.zip` 包含源码、Linux amd64 后端/CLI/MCP、Windows amd64 CLI/MCP、网页静态文件、文档、依赖许可及 SHA-256 清单。解压后先读 `DELIVERY.txt`；二进制仍需要 Redis、配置和安全环境变量，不是免配置在线服务。Linux 解压后按清单为 `bin/linux-amd64/` 中的程序补充执行权限；Windows 两个客户端连接后端使用，不包含 Windows 服务端。
 
@@ -17,7 +17,7 @@ make all
 
 后端输出到 `dist/backend/`；网页在 `src/frontend/dist/spa/`。Makefile 不覆盖现有部署目录。非 make 环境可以在 `src/backend` 分别运行 `go build`、`go build ./cmd/powerwhois`、`go build ./cmd/powerwhois-mcp`。
 
-启动时配置 `POWERWHOIS_CONFIG` 为 YAML 路径（未设置则读取可执行文件同目录 config.yaml），提供 `POWERWHOIS_ADMIN_USER`、`POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN`。密码至少 12 字符，密钥/token 至少 32 字符并使用密码学随机值。不要放入 shell 命令参数、Git、截图或共享日志。默认监听 `127.0.0.1:8080`；`REDIS_HOST/REDIS_PORT/REDIS_DB/REDIS_PASSWORD` 可配置数据库。
+启动时配置 `POWERWHOIS_CONFIG` 为 YAML 路径（未设置则读取可执行文件同目录 config.yaml），提供 `POWERWHOIS_ADMIN_USER`、`POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN`。密码至少 12 字符，密钥/token 至少 32 字符并使用密码学随机值。不要放入 shell 命令参数、Git、截图或共享日志。默认监听 `127.0.0.1:8080`；`REDIS_HOST/REDIS_PORT/REDIS_DB/REDIS_PASSWORD` 可配置数据库。只读二进制目录部署时，将 `POWERWHOIS_LOG_DIR` 指向服务可写的日志目录；日志下载 ZIP 写在该目录的父目录，两处都应位于受保护的运行数据目录。
 
 环境管理的管理员凭据不能在 Web 修改；配置保存不会把这些秘密落到 YAML。其他设置仍从 Web 修改并原子写入 YAML。配置目录必须可写（需要创建临时文件并替换原文件），仅挂载只读单文件会导致保存失败。自定义注册/API URL 可能包含秘密，配置文件应为 0600，目录限制访问；备份也要同等保护。
 
@@ -46,7 +46,9 @@ docker compose up -d --build
 
 提供 [powerwhois.service](../deploy/powerwhois.service)。创建专用 `powerwhois` 用户，将二进制放 `/opt/powerwhois/`，工作目录 `/var/lib/powerwhois/`，配置 `/etc/powerwhois/config.yaml`。环境文件 `/etc/powerwhois/powerwhois.env` 由 root 维护（0600），包含上述环境变量；配置和工作目录允许该服务用户写入。安装 unit 后 `systemctl daemon-reload`、`systemctl enable --now powerwhois`。
 
-用 Caddy/Nginx 服务网页静态文件，并将 `/api/*`、`/app/*` 转发到 127.0.0.1:8080；必须保留原 Host 并支持 WebSocket Upgrade。可参考仓库 Caddyfile。一次只能运行一个拥有同一 Redis 命名空间的后端；不要同时运行旧服务与新服务。worker 使用 15 秒租约、每 3 秒续期，丢失租约会停止服务；supervisor 等待 20 秒再重启。
+原生部署可设置 `POWERWHOIS_WEB_ROOT=/opt/powerwhois/current/web`，由后端在同一端口服务构建后的网页、SPA 路由和 WebSocket；目录必须包含 index.html。未设置时保持原来的纯后端行为。也可用 Caddy/Nginx 服务静态网页，将 `/api/*`、`/app/*` 转发到 127.0.0.1:8080；必须保留原 Host 并支持 WebSocket Upgrade。可参考仓库 Caddyfile。
+
+本次 VPS 的三个实际 unit 模板在 [deploy/vps](../deploy/vps/)，采用 DynamicUser、独立 Redis 和只读程序目录；它们依赖验收记录中列出的目录、配置和环境文件，不能单独复制后直接启动。一次只能运行一个拥有同一 Redis 命名空间的后端；不要同时运行旧服务与新服务。worker 使用 15 秒租约、每 3 秒续期，丢失租约会停止服务；supervisor 等待 20 秒再重启。
 
 ## 远程访问
 

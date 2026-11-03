@@ -10,6 +10,7 @@ WorkingDirectory=/var/lib/powerwhois
 EnvironmentFile=/etc/powerwhois/powerwhois.env
 Environment=POWERWHOIS_CONFIG=/etc/powerwhois/config.yaml
 Environment=HOME=/var/lib/powerwhois
+Environment=POWERWHOIS_LOG_DIR=/var/lib/powerwhois/logs
 ExecStart=/opt/powerwhois/typonamer
 Restart=always
 RestartSec=20

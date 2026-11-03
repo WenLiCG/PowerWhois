@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=backend-build /out/ /usr/local/bin/
 WORKDIR /var/lib/powerwhois
 USER 10001:10001
-ENV HOME=/var/lib/powerwhois POWERWHOIS_CONFIG=/etc/powerwhois/config.yaml
+ENV HOME=/var/lib/powerwhois POWERWHOIS_CONFIG=/etc/powerwhois/config.yaml POWERWHOIS_LOG_DIR=/var/lib/powerwhois/logs
 ENTRYPOINT ["/usr/local/bin/typonamer"]
 
 FROM caddy:2 AS gateway

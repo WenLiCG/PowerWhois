@@ -51,6 +51,7 @@ def free_port():
 def main():
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("--serve", action="store_true")
+    args.add_argument("--stress", action="store_true", help="Also test 300 domains, controls, concurrent replay and SIGKILL recovery")
     args = args.parse_args()
     children = []
     with tempfile.TemporaryDirectory(prefix="powerwhois-acceptance-") as directory:
@@ -58,6 +59,7 @@ def main():
         for name in ("typonamer", "powerwhois", "powerwhois-mcp"):
             shutil.copy2(ROOT / ".work" / name, scratch / name)
         log = (scratch / "processes.log").open("w")
+        http.server.ThreadingHTTPServer.request_queue_size = 128
         fixture = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
         threading.Thread(target=fixture.serve_forever, daemon=True).start()
         redis_port, mcp_port = free_port(), free_port()
@@ -161,6 +163,50 @@ def main():
                     break
                 except urllib.error.URLError: time.sleep(.1)
             else: raise AssertionError("restart timeout")
+            if args.stress:
+                from concurrent.futures import ThreadPoolExecutor
+
+                def wait_task(task_id, predicate, seconds=30):
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        current = request(f"/api/v1/tasks/{task_id}")
+                        if predicate(current): return current
+                        time.sleep(.1)
+                    raise AssertionError("stress task did not reach expected state")
+
+                fast = request("/api/v1/tasks", {**body, "domains": [f"load-{i}.com" for i in range(300)], "concurrency": 32, "timeout": 3})
+                final = wait_task(fast["id"], lambda t: t["state"] == "completed")
+                assert final["completed"] == 300 and final["counts"].get("registered") == 300
+                slow = request("/api/v1/tasks", {**body, "domains": [f"slow-control-{i}.com" for i in range(20)], "concurrency": 4})
+                wait_task(slow["id"], lambda t: t["completed"] > 0)
+                paused = request(f"/api/v1/tasks/{slow['id']}/pause", {})
+                time.sleep(.3)
+                assert request(f"/api/v1/tasks/{slow['id']}")["completed"] == paused["completed"]
+                request(f"/api/v1/tasks/{slow['id']}/resume", {})
+                wait_task(slow["id"], lambda t: t["completed"] > paused["completed"])
+                canceled = request(f"/api/v1/tasks/{slow['id']}/cancel", {})
+                time.sleep(.3)
+                assert 0 < canceled["completed"] < 20 and request(f"/api/v1/tasks/{slow['id']}")["completed"] == canceled["completed"]
+                replay_body = {**body, "domains": ["duplicate.com"]}
+                with ThreadPoolExecutor(max_workers=10) as pool:
+                    replays = list(pool.map(lambda _: request("/api/v1/tasks", replay_body, headers={"Idempotency-Key": "stress-replay"}), range(20)))
+                assert len({t["id"] for t in replays}) == 1
+                wait_task(replays[0]["id"], lambda t: t["state"] == "completed")
+                recovery = request("/api/v1/tasks", {**body, "domains": [f"slow-recovery-{i}.com" for i in range(12)], "concurrency": 4})
+                wait_task(recovery["id"], lambda t: t["completed"] > 0)
+                backend.kill(); backend.wait(timeout=10)
+                # An abrupt crash cannot release the 15-second worker lease.
+                time.sleep(15.5)
+                backend = start([str(scratch / "typonamer")], stdout=log)
+                for _ in range(100):
+                    try:
+                        request("/api/web/setting"); break
+                    except urllib.error.URLError: time.sleep(.1)
+                else: raise AssertionError("crash recovery startup timeout")
+                recovered = wait_task(recovery["id"], lambda t: t["state"] == "completed")
+                exported = request(f"/api/v1/tasks/{recovery['id']}/export")
+                assert recovered["completed"] == 12 and len({r["order"] for r in exported["items"]}) == 12
+                print("PASS stress: 300 domains/concurrency 32; pause/resume/cancel partial results; 20 concurrent idempotent submissions; SIGKILL recovery.", flush=True)
             start([str(scratch / "powerwhois-mcp"), "--http", f"127.0.0.1:{mcp_port}"], stdout=log)
             for _ in range(100):
                 try:

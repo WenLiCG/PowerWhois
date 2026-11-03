@@ -1,8 +1,8 @@
 # 验收记录
 
-日期：2026-11-03。Windows 主机 + WSL Ubuntu；Go 1.27.3、Node 24.14.0、WSL Redis 8.0.5。测试使用独立临时 Redis，未访问原生产数据库。部署模板仍使用 Redis 7，7.x 容器组合未在本机实跑。
+日期：2026-11-03。Windows 主机 + WSL Ubuntu；Go 1.27.3、Node 24.14.0、WSL Redis 8.0.5。自动化测试使用独立临时 Redis。随后在 Debian 12 VPS 的独立 Redis 7.0.15 上完成原生部署验收；Redis 7 容器组合未实跑。
 
-最新补充：[第二轮修复与验收](ROUND2.md)。已覆盖注册底层重发、秘密 API 往返、PSL、存储错误/丢响应/租约和大结果/前端竞态；本轮没有真实注册、线上部署或账号接入。
+补充记录：[第二轮修复与验收](ROUND2.md)、[VPS 部署验收](VPS-ACCEPTANCE-20261103.md)。已覆盖注册底层重发、秘密 API 往返、PSL、存储错误/丢响应/租约和大结果/前端竞态。线上部署已完成，真实注册和第三方产品账号接入未执行。
 
 ## 已执行
 
@@ -59,6 +59,7 @@ go build -o ../../.work/powerwhois ./cmd/powerwhois
 go build -o ../../.work/powerwhois-mcp ./cmd/powerwhois-mcp
 cd ../..
 python3 tools/acceptance.py
+python3 tools/acceptance.py --stress
 cd src/frontend
 npm ci
 npm test
@@ -71,7 +72,7 @@ npm audit --omit=dev
 
 ## 尚未验收
 
-目标服务器上的 Docker/systemd 安装、Redis 7 容器组合、线上历史数据真实迁移/回滚、百万域名或长时间压力、整机断电/磁盘满故障、真实 SOCKS 代理、所有 TLD/WHOIS 格式、真实付费注册、ChatGPT dot/Grok/Codex 账号级接入。没有推送或部署到公网。CI 工作流已提供，但未在 GitHub Actions 云端触发。
+Docker 构建/启动、Redis 7 容器组合、旧 bbolt 数据向本版迁移、实际回滚演练、百万域名或长时间压力、整机断电/磁盘满故障、真实 SOCKS 代理、所有 TLD/WHOIS 格式、真实付费注册、ChatGPT dot/Grok 云端账号级接入。Windows CLI 和 stdio MCP 调用 VPS 已验证，不能据此声称特定产品账号连接完成。没有推送 GitHub 或开放公网服务。CI 工作流已提供，但未在 GitHub Actions 云端触发。
 
 ## 界面留档
 

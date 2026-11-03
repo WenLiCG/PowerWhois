@@ -110,6 +110,12 @@ func main() {
 
 	// Setup Fiber API Router
 	app.Route("/api", api.ApiRoute, "api.")
+	if webRoot := os.Getenv("POWERWHOIS_WEB_ROOT"); webRoot != "" {
+		if err := api.ServeWeb(app, webRoot); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 
 	// ---------- Start Server ----------
 	workerDone := make(chan struct{})
