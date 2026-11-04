@@ -22,6 +22,16 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// Preserve transport causes so only actual deadline failures count as timeouts.
+func whoisTransportError(err error) error {
+	kind := lookuperror.ErrorWhoisServerFailed
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
+		kind = lookuperror.ErrorWhoisTimeout
+	}
+	return fmt.Errorf("%w: %w", kind, err)
+}
+
 // WhoisQuery function is used to query the WHOIS information for a given domain.
 // If the useProxy parameter is set to true, it will use the proxy server to query the WHOIS information.
 func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy bool) (lookupinfo.DomainInfo, error) {
@@ -90,7 +100,7 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 		proxyConn, err := proxyDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
 		if err != nil {
 			log.Warnf("Failed to connect to the whois server %s via proxy: %s", whoisAddr, err)
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+			return domainInfo, whoisTransportError(err)
 		}
 
 		// Set timeouts for the proxy connection
@@ -98,7 +108,7 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 		if err != nil {
 			log.Warnf("Failed to set deadline for proxy connection: %s", err)
 			proxyConn.Close()
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+			return domainInfo, whoisTransportError(err)
 		}
 
 		conn = proxyConn
@@ -106,7 +116,7 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 		rawConn, err := (&net.Dialer{Timeout: time.Second * time.Duration(cfg.WhoisTimeout)}).DialContext(ctx, "tcp", whoisAddr)
 		if err != nil {
 			log.Warnf("Failed to connect to the whois server %s: %s", whoisAddr, err)
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+			return domainInfo, whoisTransportError(err)
 		}
 
 		// Set timeouts for the direct connection
@@ -114,7 +124,7 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 		if err != nil {
 			log.Warnf("Failed to set deadline for connection: %s", err)
 			rawConn.Close()
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+			return domainInfo, whoisTransportError(err)
 		}
 
 		conn = rawConn
@@ -132,7 +142,7 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	// Set write deadline
 	err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
 	if err != nil {
-		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+		return domainInfo, whoisTransportError(err)
 	}
 
 	queryInfo := fmt.Sprintf("%s\r\n", domain)
@@ -144,13 +154,13 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	_, err = conn.Write([]byte(queryInfo))
 	if err != nil {
 		log.Warnf("Failed to write query: %s", err)
-		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+		return domainInfo, whoisTransportError(err)
 	}
 
 	// Set read deadline
 	err = conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
 	if err != nil {
-		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+		return domainInfo, whoisTransportError(err)
 	}
 
 	// Read the response from the server
@@ -158,10 +168,7 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	_, err = io.Copy(&buf, io.LimitReader(conn, 2*1024*1024+1))
 	if err != nil {
 		log.Warnf("Failed to read WHOIS response: %s", err)
-		if _, ok := err.(net.Error); ok {
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
-		}
-		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisServerFailed, err.Error())
+		return domainInfo, whoisTransportError(err)
 	}
 
 	if buf.Len() > 2*1024*1024 {
