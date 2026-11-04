@@ -332,6 +332,7 @@ async function exportResults() {
     exporting.value = true;
     const { id, state } = task.value;
     const chunks = ["\ufeff"];
+    let exportedCount = 0;
     try {
         for (let offset = 0; offset >= 0;) {
             const { data, headers } = await api.get(`/v1/tasks/${id}/export`, {
@@ -340,6 +341,12 @@ async function exportResults() {
                 timeout: 60000
             });
             chunks.push(offset === 0 ? data : data.slice(data.indexOf("\n") + 1));
+            // Counts come from the server: quoted CSV fields can contain newlines.
+            const count = Number(headers["x-result-count"]);
+            const completed = Number(headers["x-task-completed"]);
+            exportedCount += count;
+            const stopped = ["completed", "canceled", "paused", "failed"].includes(headers["x-task-state"]);
+            if (stopped && Number.isInteger(completed) && completed >= 0 && exportedCount >= completed) break;
             const next = Number(headers["x-next-offset"]);
             if (!Number.isInteger(next) || (next >= 0 && next <= offset)) throw new Error("invalid export cursor");
             offset = next;

@@ -44,6 +44,7 @@ func TestQueryAPIAndTasks(t *testing.T) {
 	t.Setenv("POWERWHOIS_QUERY_TOKEN", token)
 	app := fiber.New()
 	app.Route("/api", ApiRoute)
+	var lastHeaders map[string][]string
 	request := func(method, path string, body interface{}, authorized bool, key string) (int, []byte) {
 		t.Helper()
 		data, _ := json.Marshal(body)
@@ -58,6 +59,7 @@ func TestQueryAPIAndTasks(t *testing.T) {
 			t.Fatal(e)
 		}
 		defer resp.Body.Close()
+		lastHeaders = resp.Header
 		raw, e := io.ReadAll(resp.Body)
 		if e != nil {
 			t.Fatal(e)
@@ -116,6 +118,9 @@ func TestQueryAPIAndTasks(t *testing.T) {
 	code, csv := request("GET", "/api/v1/tasks/"+task.ID+"/export?format=csv", nil, true, "")
 	if code != 200 || !bytes.Contains(csv, []byte("Queried At")) || !bytes.Contains(csv, []byte("unknown")) {
 		t.Fatalf("CSV %d %s", code, csv)
+	}
+	if strings.Join(lastHeaders["X-Result-Count"], "") != "2" || strings.Join(lastHeaders["X-Task-Completed"], "") != "2" {
+		t.Fatal("export result counts missing", lastHeaders)
 	}
 	if code, _ := request("GET", "/api/v1/tasks?limit=-1", nil, true, ""); code != 400 {
 		t.Fatal("invalid pagination accepted")

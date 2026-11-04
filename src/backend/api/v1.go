@@ -251,6 +251,8 @@ func V1Routes(router fiber.Router) {
 			c.Set("X-Export-Consistency", "complete")
 		}
 		c.Set("X-Next-Offset", strconv.Itoa(p.NextOffset))
+		c.Set("X-Result-Count", strconv.Itoa(len(p.Items)))
+		c.Set("X-Task-Completed", strconv.Itoa(t.Completed))
 		c.Set("Content-Disposition", `attachment; filename="powerwhois-`+t.ID+`.`+format+`"`)
 		if format == "json" {
 			return c.JSON(p)

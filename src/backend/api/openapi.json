@@ -1005,6 +1005,20 @@
                 "schema": {
                   "type": "integer"
                 }
+              },
+              "X-Result-Count": {
+                "description": "Number of result records in this page, independent of CSV newlines.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "X-Task-Completed": {
+                "description": "Completed results when the task state was read. A stopped task export may finish once this many records have been collected.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             }
           },
@@ -1121,7 +1135,7 @@
             }
           }
         ],
-        "description": "Pages are bounded by input count and approximately 8 MiB encoded result bytes. Always follow X-Next-Offset/nextOffset. X-Task-State and X-Export-Consistency describe partial/complete results; active exports are not atomic snapshots."
+        "description": "Pages are bounded by input count and approximately 8 MiB encoded result bytes. Always follow X-Next-Offset/nextOffset. X-Task-State and X-Export-Consistency describe partial/complete results; active exports are not atomic snapshots. X-Result-Count and X-Task-Completed allow stopped-task exports to finish after collecting all existing results without scanning an unprocessed tail."
       }
     },
     "/tasks/{id}/results/{index}": {
