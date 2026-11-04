@@ -8,7 +8,10 @@
             <q-btn flat icon="refresh" label="刷新" :loading="refreshing" @click="refresh" />
         </div>
         <q-banner v-if="error" class="bg-red-1 text-negative q-mb-md" role="alert"
-            >{{ error }}<template #action><q-btn flat label="重试" @click="refresh" /></template
+            >{{ error }}<template #action><q-btn flat label="关闭提示" @click="error = ''" /></template
+        ></q-banner>
+        <q-banner v-if="refreshError" class="bg-red-1 text-negative q-mb-md" role="alert"
+            >{{ refreshError }}<template #action><q-btn flat label="刷新任务" @click="refresh" /></template
         ></q-banner>
         <q-expansion-item label="新建查询任务" icon="add" default-opened header-class="text-weight-medium">
             <q-form @submit.prevent="createTask" class="q-py-md">
@@ -179,6 +182,7 @@ const tasks = ref([]),
     results = ref([]),
     details = ref(null);
 const error = ref(""),
+    refreshError = ref(""),
     creating = ref(false),
     refreshing = ref(false),
     acting = ref(false),
@@ -201,8 +205,8 @@ const columns = [
     { name: "lookupType", label: "来源类型", field: "lookupType", align: "left" },
     { name: "queryError", label: "说明", field: "queryError", align: "left" }
 ];
-function showError(e) {
-    error.value = e.response?.data?.error?.message || "连接失败，请重试。已有任务和结果保留在服务器。";
+function showError(e, target = error) {
+    target.value = e.response?.data?.error?.message || "连接失败，请重试。已有任务和结果保留在服务器。";
 }
 async function loadResults() {
     if (!selectedID.value) return;
@@ -215,7 +219,7 @@ async function loadResults() {
         }
         return true;
     } catch (e) {
-        if (!stopped && selectedID.value === id && resultOffset.value === offset && request === resultRequest) showError(e);
+        if (!stopped && selectedID.value === id && resultOffset.value === offset && request === resultRequest) showError(e, refreshError);
         return false;
     }
 }
@@ -241,7 +245,7 @@ async function refresh() {
             if (selectedID.value === id) task.value = response.data;
             if (!(await loadResults())) return;
         }
-        error.value = "";
+        refreshError.value = "";
     } catch (e) {
         if (e.response?.status === 404) {
             selectedID.value = null;
@@ -249,7 +253,7 @@ async function refresh() {
             results.value = [];
             localStorage.removeItem("powerwhois-task");
         }
-        showError(e);
+        showError(e, refreshError);
     } finally {
         refreshing.value = false;
     }
@@ -261,6 +265,7 @@ async function createTask() {
         return;
     }
     creating.value = true;
+    error.value = "";
     try {
         const domains = (await file.value.text())
             .replace(/^\uFEFF/, "")
