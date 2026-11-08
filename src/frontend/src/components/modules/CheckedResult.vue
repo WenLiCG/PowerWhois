@@ -4,11 +4,14 @@
         row-key="domainID"
         :columns="tableColumns"
         :visibleColumns="visibleColumns"
-        :pagination="tablePagination"
         :selection="tokenStore.token ? 'multiple' : 'none'"
         v-model:selected="selectedDomains"
-        hide-bottom
-        class="no-shadow bg-grey-1"
+        virtual-scroll
+        :virtual-scroll-sticky-start="true"
+        :virtual-scroll-item-size="48"
+        :virtual-scroll-slice-size="30"
+        :rows-per-page-options="[0]"
+        class="no-shadow bg-grey-1 checked-result-table"
         v-if="domainResults.length > 0"
     >
         <template v-slot:top>
@@ -240,7 +243,6 @@ const tableColumns = ref([
 
 const visibleColumns = ref(["domain", "status", "createdDate", "expiryDate", "nameServer", "domainStatus"]);
 
-const tablePagination = ref({ rowsPerPage: 10000 });
 
 function updateVisibleColumns() {
     if (props.queryType == "whoisQuery" || props.queryType == "whoisQueryWithProxy") {
@@ -407,5 +409,10 @@ onMounted(() => {
     background-color: #f5f5f5;
     border-radius: 4px;
     overflow-y: auto;
+}
+
+.checked-result-table {
+    height: calc(100vh - 220px);
+    max-height: calc(100vh - 220px);
 }
 </style>
