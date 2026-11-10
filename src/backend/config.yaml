@@ -3,9 +3,10 @@ LogLevel: Info
 
 # Setting authentication information
 AuthUsername: admin
-AuthPassword: 123456
+# Admin password and JWT secret are environment variables, not this file.
+# POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET are required.
+# Startup refuses if either one is missing. Changing the JWT secret invalidates issued tokens.
 AuthExpireDays: 30
-JwtSecretKey: 1234567890abcdef
 
 # ------ Common settings ------
 ## Setting whois parameters

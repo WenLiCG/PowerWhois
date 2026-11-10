@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"text/template"
 
@@ -122,8 +123,52 @@ func init() {
 	// Unmarshal the configuration into the config variable.
 	viper.Unmarshal(&config)
 
+	// Admin password and JWT secret come only from the environment. A missing
+	// value refuses startup. Tests apply the same function explicitly.
+	if err := ApplyRequiredSecrets(); err != nil {
+		if testing.Testing() {
+			return
+		}
+		fmt.Fprintln(os.Stderr, err.Error())
+		_ = os.Stderr.Sync()
+		log.Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Print the configuration to the debug log at startup.
-	log.Debugf("Read config: %+v", config)
+	// Password fields are cleared in the copy so debug logs do not contain them.
+	logged := config
+	logged.AuthPassword = ""
+	logged.JwtSecretKey = ""
+	logged.SocketProxyPassword = ""
+	log.Debugf("Read config: %+v", logged)
+}
+
+// ApplyRequiredSecrets copies POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET
+// into the in-memory config. Blank values are missing. The yaml file is not a
+// fallback, and this function does not generate a secret.
+func ApplyRequiredSecrets() error {
+	return applyRequiredSecretsTo(&config)
+}
+
+func applyRequiredSecretsTo(cfg *Config) error {
+	password := strings.TrimSpace(os.Getenv("POWERWHOIS_ADMIN_PASSWORD"))
+	jwtSecret := strings.TrimSpace(os.Getenv("POWERWHOIS_JWT_SECRET"))
+	var missing []string
+	if password == "" {
+		missing = append(missing, "POWERWHOIS_ADMIN_PASSWORD")
+	}
+	if jwtSecret == "" {
+		missing = append(missing, "POWERWHOIS_JWT_SECRET")
+	}
+	if len(missing) > 0 {
+		cfg.AuthPassword = ""
+		cfg.JwtSecretKey = ""
+		return fmt.Errorf("refusing to start: required environment variable not set: %s", strings.Join(missing, ", "))
+	}
+	cfg.AuthPassword = password
+	cfg.JwtSecretKey = jwtSecret
+	return nil
 }
 
 func GetConfig() Config {
@@ -183,6 +228,13 @@ func UpdateConfig(newConfig Config) error {
 		}
 	}
 
+	// Keep the env-sourced admin password and JWT secret. The request body and
+	// the yaml file cannot replace them.
+	if err := applyRequiredSecretsTo(&newConfig); err != nil {
+		log.Error(err.Error())
+		return err
+	}
+
 	// Write the new configuration to the file specified by the configFile variable.
 	// If the file does not exist, it will be created.
 	// If the file cannot be written, the program will exit with code 1.
@@ -206,10 +258,11 @@ func WriteConfig(newConfig Config) error {
 LogLevel: {{ .LogLevel }}
 
 # Setting authentication information
+# Admin password: POWERWHOIS_ADMIN_PASSWORD
+# JWT secret: POWERWHOIS_JWT_SECRET
+# Those two values are not stored in this file.
 AuthUsername: {{ .AuthUsername }}
-AuthPassword: {{ .AuthPassword }}
 AuthExpireDays: {{ .AuthExpireDays }}
-JwtSecretKey: {{ .JwtSecretKey }}
 
 # ------ Common settings ------
 ## Setting whois parameters

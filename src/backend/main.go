@@ -70,6 +70,9 @@ func newApp() *fiber.App {
 	// Check if APP_TUNING is true. Read at app build time; unset stays off.
 	appTuning := os.Getenv("APP_TUNING")
 	if appTuning != "" && strings.ToLower(appTuning) == "true" {
+		// Same login check as the admin API. pprof and the monitor page stay
+		// behind it for every path under /api/tuning.
+		app.Use("/api/tuning", api.LoginRequired())
 		app.Use(pprof.New(pprof.Config{Prefix: "/api/tuning"})) // 启用 pprof
 		app.Get("/api/tuning/monitor", monitor.New())           // 监控页面
 	}
