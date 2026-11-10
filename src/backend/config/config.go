@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"testing"
 	"text/template"
 
 	"typonamer/log"
@@ -109,6 +110,11 @@ func init() {
 	// Read the configuration file.
 	err = viper.ReadInConfig()
 	if err != nil {
+		// Tests build a temporary binary that has no config.yaml beside it.
+		// Production still refuses to start when the file cannot be read.
+		if testing.Testing() {
+			return
+		}
 		log.Error("Error reading config file: ", err)
 		os.Exit(1)
 	}
