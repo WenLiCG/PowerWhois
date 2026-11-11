@@ -16,7 +16,7 @@ backend:
 	@echo "Starting building backend..."
 	@echo Backend file destination path is: $(BACKEND_DEST_DIR)
 	mkdir -p $(BACKEND_DEST_DIR)
-	cd backend && go build -o typonamer -v
+	cd backend && CGO_ENABLED=1 go build -trimpath -buildvcs=true -o typonamer -v
 	rm -f $(BACKEND_DEST_DIR)/typonamer
 	mv backend/typonamer $(BACKEND_DEST_DIR)/
 	chmod +x $(BACKEND_DEST_DIR)/typonamer
