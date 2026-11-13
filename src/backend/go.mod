@@ -3,6 +3,7 @@ module typonamer
 go 1.23.0
 
 require (
+	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/bytedance/sonic v1.12.10
 	github.com/dromara/carbon/v2 v2.5.4
 	github.com/duke-git/lancet/v2 v2.3.4
@@ -58,6 +59,7 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.59.0 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.15.0 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
