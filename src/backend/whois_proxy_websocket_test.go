@@ -30,6 +30,11 @@ func proxyFixture(t *testing.T, mode, upstream string) (int, *atomic.Int32) {
 }
 
 func proxyFixtureForTarget(t *testing.T, mode, upstream, expectedTarget string) (int, *atomic.Int32) {
+	return proxyFixtureWithReply(t, mode, upstream, expectedTarget, 0)
+}
+
+// A nonzero reply authenticates successfully, rejects CONNECT, and never dials upstream.
+func proxyFixtureWithReply(t *testing.T, mode, upstream, expectedTarget string, reply byte) (int, *atomic.Int32) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -65,9 +70,17 @@ func proxyFixtureForTarget(t *testing.T, mode, upstream, expectedTarget string) 
 					t.Error("fixture received non-SOCKS5 greeting")
 					return
 				}
-				if mode == "auth" {
+				if mode == "auth" || reply != 0 {
+					if !strings.Contains(string(methods), string([]byte{2})) {
+						t.Error("fixture requires username/password authentication")
+						return
+					}
 					c.Write([]byte{5, 2})
 					if _, err := io.ReadFull(c, h[:]); err != nil {
+						return
+					}
+					if h[0] != 1 {
+						t.Error("unexpected authentication version")
 						return
 					}
 					user := make([]byte, int(h[1]))
@@ -84,11 +97,16 @@ func proxyFixtureForTarget(t *testing.T, mode, upstream, expectedTarget string) 
 					}
 					if string(user) != proxyTestUser || string(password) != proxyTestPassword {
 						t.Error("unexpected fixture credentials")
+						return
 					}
-					c.Write([]byte{1, 1})
-					return
+					if mode == "auth" {
+						c.Write([]byte{1, 1})
+						return
+					}
+					c.Write([]byte{1, 0})
+				} else {
+					c.Write([]byte{5, 0})
 				}
-				c.Write([]byte{5, 0})
 				var req [4]byte
 				if _, err := io.ReadFull(c, req[:]); err != nil {
 					return
@@ -126,6 +144,12 @@ func proxyFixtureForTarget(t *testing.T, mode, upstream, expectedTarget string) 
 				target := net.JoinHostPort(host, fmt.Sprint(binary.BigEndian.Uint16(port[:])))
 				if target != expectedTarget {
 					t.Errorf("unexpected SOCKS target %q, want %q", target, expectedTarget)
+					return
+				}
+				if reply != 0 {
+					if _, err := c.Write([]byte{5, reply, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+						t.Error("write CONNECT rejection:", err)
+					}
 					return
 				}
 				// Even the failure case attempts only a closed loopback upstream.
