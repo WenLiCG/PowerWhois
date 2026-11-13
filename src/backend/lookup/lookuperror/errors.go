@@ -9,6 +9,7 @@ var (
 	ErrorWhoisNotFound            = errors.New("whois not found")
 	ErrorNsNotFound               = errors.New("dns ns record not found")
 	ErrorWhoisServerFailed        = errors.New("whois server failed")
+	ErrorProxyNotConfigured       = errors.New("proxy not configured")
 	ErrorConnectToProxy           = errors.New("connect to proxy failed")
 	ErrorNoContentInWhoisResponse = errors.New("no content in whois response")
 	ErrorNoParseRuleForTld        = errors.New("no parsing rule for tld")

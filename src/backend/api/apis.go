@@ -70,7 +70,7 @@ func SettingUpdate(c *fiber.Ctx) error {
 	newConfig := new(config.Config)
 	if err := c.BodyParser(newConfig); err != nil {
 		// Error parsing the config info
-		log.Error("Parse config info error: ", err)
+		log.Error("Parse config info error")
 		return c.Status(500).SendString(err.Error())
 	}
 

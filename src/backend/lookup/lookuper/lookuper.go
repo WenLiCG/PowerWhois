@@ -3,6 +3,7 @@ package lookuper
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"typonamer/config"
@@ -105,6 +106,9 @@ func Whois(mainDomain string, tld string, useProxy bool) (lookupinfo.DomainInfo,
 	}
 
 	cfg := config.GetConfig()
+	if useProxy && (strings.TrimSpace(cfg.SocketProxyHost) == "" || cfg.SocketProxyPort <= 0) {
+		return domainInfo, lookuperror.ErrorProxyNotConfigured
+	}
 
 	// If the RDAP server for the TLD is known, query the RDAP information for the domain
 	if slice.Contain(rdaplib.RdapSupportedTlds, tld) {

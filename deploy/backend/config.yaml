@@ -61,10 +61,10 @@ MixedDnsTlds:
     - pt
 
 ## Setting proxy information
-SocketProxyHost: test.superproxy.io
-SocketProxyPort: 22222
-SocketProxyAuth: true
-SocketProxyUser: testuser
+SocketProxyHost: ""
+SocketProxyPort: 0
+SocketProxyAuth: false
+SocketProxyUser: ""
 SocketProxyPassword: __PW_EXAMPLE_SOCKET_PROXY_PASSWORD__
 
 # ------ Bulk check settings ------

@@ -9,19 +9,14 @@ import (
 	"testing"
 )
 
-func TestWhoisSelectionDoesNotOfferProxy(t *testing.T) {
-	path := filepath.Join(backendDir(t), "..", "frontend", "src", "components", "modules", "WhoisSelection.vue")
-	body, err := os.ReadFile(path)
+func TestWhoisSelectionOffersProxyAfterWhois(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(backendDir(t), "..", "frontend", "src", "components", "modules", "WhoisSelection.vue"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(body), `val="whoisQueryWithProxy"`) {
-		t.Error("WhoisSelection.vue still contains val=\"whoisQueryWithProxy\"")
-	}
-	for _, radio := range regexp.MustCompile(`<q-radio\b[^>]*>`).FindAllString(string(body), -1) {
-		if strings.Contains(radio, `label="Whois + Proxy"`) {
-			t.Error("WhoisSelection.vue still offers a q-radio labelled Whois + Proxy")
-		}
+	radios := regexp.MustCompile(`<q-radio\b[^>]*>`).FindAllString(string(body), -1)
+	if len(radios) < 2 || !strings.Contains(radios[0], `val="whoisQuery"`) || !strings.Contains(radios[1], `val="whoisQueryWithProxy"`) || !strings.Contains(radios[1], `label="Whois + Proxy"`) {
+		t.Error("WhoisSelection.vue must offer Whois + Proxy immediately after Whois")
 	}
 }
 
@@ -41,9 +36,10 @@ func TestCheckPagesDefaultToWhoisQuery(t *testing.T) {
 	}
 }
 
-func TestDeployFrontendDoesNotOfferWhoisProxy(t *testing.T) {
+func TestDeployFrontendOffersWhoisProxy(t *testing.T) {
 	root := filepath.Join(backendDir(t), "..", "..", "deploy", "frontend")
 	jsFiles := 0
+	found := false
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -57,12 +53,15 @@ func TestDeployFrontendDoesNotOfferWhoisProxy(t *testing.T) {
 			return err
 		}
 		if strings.Contains(string(body), `val:"whoisQueryWithProxy",label:"Whois + Proxy"`) {
-			t.Errorf("%s still contains the compiled Whois + Proxy radio option", path)
+			found = true
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !found {
+		t.Error("deploy/frontend must contain the compiled Whois + Proxy radio option")
 	}
 	if jsFiles == 0 {
 		t.Fatal("deploy/frontend contains no built JavaScript to check")

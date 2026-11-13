@@ -128,13 +128,13 @@ func onMessage(ep *socketio.EventPayload) {
 	// It will log the event, unmarshal the message into a MessageObject, and fire the event with the data if the event is not empty.
 	// If the unmarshalling fails, or the event is empty, it will log an error.
 
-	log.Debugf("New message from user %s is: %s", ep.Kws.UUID, string(ep.Data))
+	log.Debugf("New message from user %s, bytes: %d", ep.Kws.UUID, len(ep.Data))
 
 	message := MessageObject{}
 	err := sonic.Unmarshal(ep.Data, &message)
 	if err != nil {
 		// If the unmarshalling fails, log an error.
-		log.Warnf("Error unmarshalling websocket message from user %s: %s", ep.Kws.UUID, err)
+		log.Warnf("Error unmarshalling websocket message from user %s", ep.Kws.UUID)
 		return
 	}
 
@@ -165,7 +165,7 @@ func onAdminAuth(ep *socketio.EventPayload) {
 	isValid, err := ValidateToken(token)
 	if err != nil {
 		// If the validation fails, log an error.
-		log.Warnf("Error validating token from user %s: %s", ep.Kws.UUID, err)
+		log.Warnf("Error validating token from user %s", ep.Kws.UUID)
 	} else if !isValid {
 		// If the token is invalid, log an error.
 		log.Warnf("Invalid token from user %s", ep.Kws.UUID)
@@ -191,7 +191,7 @@ func onBulkCheckStart(ep *socketio.EventPayload) {
 		err := sonic.Unmarshal(ep.Data, &startMessage)
 		if err != nil {
 			// If the unmarshalling fails, log an error, and emit an error message back to the user.
-			log.Warnf("Error unmarshalling websocket bulk check start message from user %s: %s", ep.Kws.UUID, err)
+			log.Warnf("Error unmarshalling websocket bulk check start message from user %s", ep.Kws.UUID)
 			responseError := map[string]interface{}{
 				"event": constant.WebsocketResponseBulkCheckErrorEvent,
 				"data":  "出现错误: " + err.Error(),
@@ -203,12 +203,12 @@ func onBulkCheckStart(ep *socketio.EventPayload) {
 		// Set the query type of the bulk check task.
 		err = scheduler.SetBulkCheckQueryType(startMessage.QueryType)
 		if err == nil {
-			log.Debugf("Admin user UUID %s set bulk check query type to %s", ep.Kws.UUID, startMessage.QueryType)
+			log.Debugf("Admin user UUID %s set bulk check query type", ep.Kws.UUID)
 			// Start the bulk check task.
 			go scheduler.CreateBulkCheckTask()
 		} else {
 			// If the setting fails, log an error, and emit an error message back to the user.
-			log.Warnf("Error setting bulk check query type for user %s: %s", ep.Kws.UUID, err)
+			log.Warnf("Error setting bulk check query type for user %s", ep.Kws.UUID)
 			responseError := map[string]interface{}{
 				"event": constant.WebsocketResponseBulkCheckErrorEvent,
 				"data":  "出现错误: " + err.Error(),
@@ -332,12 +332,12 @@ func onWebCheck(ep *socketio.EventPayload) {
 	// It will log the event, unmarshal the message into a WebCheck, and run the web task if the user is in the client map.
 	// If the user is not in the client map, it will log an error, and emit an error message back to the user.
 
-	log.Debugf("Web check message from user %s is: %s", ep.Kws.UUID, string(ep.Data))
+	log.Debugf("Web check message from user %s, bytes: %d", ep.Kws.UUID, len(ep.Data))
 
 	checkMessage := WebCheck{}
 	err := sonic.Unmarshal(ep.Data, &checkMessage)
 	if err != nil {
-		log.Warnf("Error unmarshalling websocket web check message from user %s: %s", ep.Kws.UUID, err)
+		log.Warnf("Error unmarshalling websocket web check message from user %s", ep.Kws.UUID)
 		return
 	}
 
@@ -352,7 +352,7 @@ func onWebCheck(ep *socketio.EventPayload) {
 					uniqueDomains = append(uniqueDomains, mainDomain)
 				}
 			} else {
-				log.Error("Skip invalid domain name: ", domain)
+				log.Error("Skip invalid domain name")
 			}
 		}
 	}
@@ -401,7 +401,7 @@ func onTypoCheck(ep *socketio.EventPayload) {
 		typoMessage := TypoCheck{}
 		err := sonic.Unmarshal(ep.Data, &typoMessage)
 		if err != nil {
-			log.Warnf("Error unmarshalling websocket typo check message from user %s: %s", ep.Kws.UUID, err)
+			log.Warnf("Error unmarshalling websocket typo check message from user %s", ep.Kws.UUID)
 			responseError := fiber.Map{
 				"event": constant.WebsocketResponseTypoCheckErrorEvent,
 				"data":  "服务端错误, 格式化请求数据失败",
@@ -412,7 +412,7 @@ func onTypoCheck(ep *socketio.EventPayload) {
 
 		mainDomain, err := utils.TrimAndGetMainDomain(typoMessage.Domain)
 		if err != nil {
-			log.Errorf("Error trimming and getting main domain for typo check domain %s: %s", typoMessage.Domain, err)
+			log.Error("Invalid typo check domain")
 			responseError := fiber.Map{
 				"event": constant.WebsocketResponseTypoCheckErrorEvent,
 				"data":  "域名格式错误，请重新输入",
@@ -527,7 +527,7 @@ func onRegister(ep *socketio.EventPayload) {
 		registerMessage := Register{}
 		err := sonic.Unmarshal(ep.Data, &registerMessage)
 		if err != nil {
-			log.Warnf("Error unmarshalling websocket register message from user %s: %s", ep.Kws.UUID, err)
+			log.Warnf("Error unmarshalling websocket register message from user %s", ep.Kws.UUID)
 			responseError := fiber.Map{
 				"event": constant.WebsocketResponseRegisterErrorEvent,
 				"data":  "服务端错误, 格式化请求数据失败",
