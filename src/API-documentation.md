@@ -83,13 +83,14 @@ POST /api/login
 
 - `Authorization`: Bearer {JWT 令牌}
 
-**响应** (200)：完整配置信息
+**响应** (200)：配置信息；`authPassword`、`jwtSecretKey`、`socketProxyPassword` 只返回已设置标记 `"__PW_SECRET_SET__"` 或未设置标记 `""`（存储值为空或仅含空白），绝不返回明文。
 
 ```json
 {
   "logLevel": "Info", // string: 日志等级，可选值：Error, Warn, Info, Debug, Off
   "authUsername": "admin", // string: 认证用户名
-  "authPassword": "123456", // string: 认证密码
+  "authPassword": "__PW_SECRET_SET__", // string: 认证密码已设置标记
+  "jwtSecretKey": "__PW_SECRET_SET__", // string: JWT 密钥已设置标记
   "authExpireDays": 30, // int: 认证过期天数
   "whoisTimeout": 5, // int: whois查询超时时间(秒)
   "dnsTimeout": 3, // int: DNS查询超时时间(秒)
@@ -103,7 +104,7 @@ POST /api/login
   "socketProxyPort": 1080, // int: 代理服务器端口
   "socketProxyAuth": false, // bool: 代理服务器是否需要认证
   "socketProxyUser": "test", // string: 代理服务器用户名
-  "socketProxyPassword": "123456", // string: 代理服务器密码
+  "socketProxyPassword": "__PW_SECRET_SET__", // string: 代理服务器密码已设置标记
   "bulkCheckConcurrencyLimit": 100, // int: 批量检查并发限制
   "webCheckConcurrencyLimit": 10, // int: 网页检查并发限制
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制
@@ -173,11 +174,21 @@ POST /api/login
 - `Authorization`: Bearer {JWT 令牌}
 
 **请求体**：
-新的配置信息
+新的配置信息（结构见 Config 示例）。可以把 GET 返回的配置修改非密钥字段后原样提交，例如保留：
+
+```json
+{
+  "authPassword": "__PW_SECRET_SET__",
+  "jwtSecretKey": "__PW_SECRET_SET__",
+  "socketProxyPassword": "__PW_SECRET_SET__"
+}
+```
+
+以上仅展示完整配置中的密钥字段，其余字段仍应随配置提交。三个字段分别在缺失、为 `null`、空字符串、仅含空白，或 trim 后等于 `"__PW_SECRET_SET__"` 时保持原值。`socketProxyPassword` 的非空、非标记新值可以更新；`authPassword` 和 `jwtSecretKey` 无论提交什么值都只采用环境变量 `POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET`，不会写入 YAML。
 
 **响应**：
 
-- 成功 (200)：更新后的配置信息
+- 成功 (200)：更新后的存储配置，与 GET 使用相同的打码视图；三项密钥仅返回 `"__PW_SECRET_SET__"` 或 `""`，不回显请求或存储中的明文
 - 失败 (500)：错误信息
 
 ### 日志相关
@@ -260,7 +271,8 @@ POST /api/login
 {
   "logLevel": "Info", // string: 日志等级，可选值：Error, Warn, Info, Debug, Off
   "authUsername": "admin", // string: 认证用户名
-  "authPassword": "123456", // string: 认证密码
+  "authPassword": "__PW_SECRET_SET__", // string: 认证密码已设置标记
+  "jwtSecretKey": "__PW_SECRET_SET__", // string: JWT 密钥已设置标记
   "authExpireDays": 30, // int: 认证过期天数
   "whoisTimeout": 5, // int: whois查询超时时间(秒)
   "dnsTimeout": 3, // int: DNS查询超时时间(秒)
@@ -274,7 +286,7 @@ POST /api/login
   "socketProxyPort": 1080, // int: 代理服务器端口
   "socketProxyAuth": false, // bool: 代理服务器是否需要认证
   "socketProxyUser": "test", // string: 代理服务器用户名
-  "socketProxyPassword": "123456", // string: 代理服务器密码
+  "socketProxyPassword": "__PW_SECRET_SET__", // string: 代理服务器密码已设置标记
   "bulkCheckConcurrencyLimit": 100, // int: 批量检查并发限制
   "webCheckConcurrencyLimit": 10, // int: 网页检查并发限制
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制

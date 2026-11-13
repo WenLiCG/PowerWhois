@@ -62,6 +62,7 @@ Upload the contents of the `deploy` folder to the server as is.
 - Copy the Nginx configuration file `deploy/nginx/typonamer.conf` to the Nginx configuration directory on the host, typically `/etc/nginx/conf.d/`.
   
 - Set `AuthUsername` in `deploy/backend/config.yaml`. That name is the administrator username. Do not put the administrator password or the JWT signing secret in the file. Set `POWERWHOIS_ADMIN_PASSWORD` and `POWERWHOIS_JWT_SECRET` in the environment before starting the backend. The process refuses to start if either variable is missing. Changing `POWERWHOIS_JWT_SECRET` invalidates tokens that were already issued. This repository does not rotate an existing secret for you. Leave `APP_TUNING` unset unless you intend to expose `/api/tuning`; that route requires the same administrator token as the other admin APIs.
+- Set permissions on `deploy/backend/config.yaml` and the runtime `config.yaml` written by the program to `600` (owner read/write only), with the service user as owner. Saving settings also enforces mode `0600`.
 
 ## Deployment Steps
 
