@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"text/template"
 
@@ -18,6 +19,9 @@ import (
 
 var config Config
 var configFile string
+
+var writeConfigChown func(string, int, int) error = os.Chown
+var writeConfigSync func(*os.File) error = func(f *os.File) error { return f.Sync() }
 
 type Config struct {
 	LogLevel string `json:"logLevel"` //日志等级
@@ -136,14 +140,7 @@ func init() {
 		os.Exit(1)
 	}
 
-	// Print the configuration to the debug log at startup.
-	// Secrets and proxy credentials are cleared in the copy before logging.
-	logged := config
-	logged.AuthPassword = ""
-	logged.JwtSecretKey = ""
-	logged.SocketProxyPassword = ""
-	logged.SocketProxyUser = ""
-	log.Debugf("Read config: %+v", logged)
+	log.Debug("Configuration loaded")
 }
 
 // ApplyRequiredSecrets copies POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET
@@ -388,10 +385,6 @@ WhoisApis:
 	temporaryPath := file.Name()
 	defer os.Remove(temporaryPath)
 	defer file.Close()
-	// Restore owner permissions if the process umask removed any of them.
-	if err := file.Chmod(0600); err != nil {
-		return err
-	}
 	n, err := file.Write(newConfigContent.Bytes())
 	if err != nil {
 		return err
@@ -399,7 +392,22 @@ WhoisApis:
 	if n != newConfigContent.Len() {
 		return io.ErrShortWrite
 	}
-	if err := file.Sync(); err != nil {
+	if info, err := os.Stat(configFile); err == nil {
+		owner, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("get config file ownership: unsupported file metadata")
+		}
+		if err := writeConfigChown(temporaryPath, int(owner.Uid), int(owner.Gid)); err != nil {
+			return fmt.Errorf("preserve config file ownership: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat config file: %w", err)
+	}
+	// Chown may clear permission bits; set the final mode afterwards.
+	if err := file.Chmod(0600); err != nil {
+		return err
+	}
+	if err := writeConfigSync(file); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {

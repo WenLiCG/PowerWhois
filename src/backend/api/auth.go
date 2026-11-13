@@ -40,7 +40,7 @@ func Login(c *fiber.Ctx) error {
 	// Parse the request body and get the login information.
 	var login LoginInfo
 	if err := c.BodyParser(&login); err != nil {
-		log.Error("Parse login info error: ", err)
+		log.Error("Parse login info error")
 		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the parse fails.
 	}
 
@@ -62,7 +62,7 @@ func Login(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusInternalServerError) // Return a 500 status if the token generation fails.
 	}
 
-	log.Infof("Login success with username: %s", login.Username)
+	log.Info("admin login succeeded")
 
 	// Return the username and token in the response body.
 	return c.JSON(fiber.Map{"username": cfg.AuthUsername, "token": token})
@@ -106,7 +106,7 @@ func ValidateToken(tokenString string) (bool, error) {
 
 	if err != nil {
 		// Log the error if the token parsing fails.
-		log.Errorf("Failed to parse token: %s", err)
+		log.Error("Failed to parse token")
 		return false, err
 	}
 
