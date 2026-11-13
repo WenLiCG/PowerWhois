@@ -32,7 +32,12 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
-      - APP_TUNING=true
+      # Required. The process exits if either value is empty.
+      # Changing POWERWHOIS_JWT_SECRET invalidates tokens already issued.
+      - POWERWHOIS_ADMIN_PASSWORD
+      - POWERWHOIS_JWT_SECRET
+      # Leave APP_TUNING unset unless /api/tuning should be exposed.
+      # That route still requires an admin token.
     depends_on:
       - redis
     restart: always

@@ -49,7 +49,9 @@ func Login(c *fiber.Ctx) error {
 
 	// Compare the username and password in the request body with the config values.
 	if (login.Username != cfg.AuthUsername) || (login.Password != cfg.AuthPassword) {
-		log.Warnf("Login failed. Username: %s, Password: %s", login.Username, login.Password)
+		// Do not log the submitted password. This line matches PowerWhois pull
+		// request 3, commit b9244efbe37b281867b552fd047546cf9428b6fb.
+		log.Warn("Login failed")
 		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the username or password is incorrect.
 	}
 

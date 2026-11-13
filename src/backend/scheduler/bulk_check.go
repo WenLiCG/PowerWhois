@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"testing"
 	"time"
 	"typonamer/config"
 	"typonamer/constant"
@@ -76,6 +77,12 @@ type BulkCheckStatusInfo struct {
 // init is the entry point of the batch task package.
 // It is responsible for initializing the package by connecting to Redis and initializing the batch task status.
 func init() {
+	// Unit tests must not dial Redis or exit the test process. Production
+	// startup still connects here and exits if Redis is unavailable.
+	if testing.Testing() {
+		return
+	}
+
 	// Get a Redis client
 	client, err := database.GetRedis()
 	if err != nil {

@@ -25,10 +25,6 @@ const (
 	listenPort = ":8080"
 )
 
-var (
-	appTuning string = os.Getenv("APP_TUNING")
-)
-
 func init() {
 	// init carbon config
 	carbon.SetDefault(carbon.Default{
@@ -45,15 +41,25 @@ func init() {
 }
 
 func main() {
-	// ---------- Init Fiber App ----------
-	app := fiber.New(fiber.Config{
-		AppName:   fmt.Sprintf("%s v%s", appName, appVersion),
-		BodyLimit: 100 * 1024 * 1024, // 100MB
-	})
+	app := newApp()
 	defer app.Shutdown()
 
 	// 延迟同步日志
 	defer log.Sync()
+
+	// ---------- Start Server ----------
+	if err := app.Listen(listenPort); err != nil {
+		panic(err)
+	}
+}
+
+// newApp builds the HTTP server. APP_TUNING is read when the app is built so
+// an unset variable leaves tuning disabled.
+func newApp() *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:   fmt.Sprintf("%s v%s", appName, appVersion),
+		BodyLimit: 100 * 1024 * 1024, // 100MB
+	})
 
 	app.Use(compress.New())
 	app.Use(cors.New(cors.Config{
@@ -61,8 +67,12 @@ func main() {
 	}))
 	app.Use(recover.New())
 
-	// Check if appTuning is true
+	// Check if APP_TUNING is true. Read at app build time; unset stays off.
+	appTuning := os.Getenv("APP_TUNING")
 	if appTuning != "" && strings.ToLower(appTuning) == "true" {
+		// Same login check as the admin API. pprof and the monitor page stay
+		// behind it for every path under /api/tuning.
+		app.Use("/api/tuning", api.LoginRequired())
 		app.Use(pprof.New(pprof.Config{Prefix: "/api/tuning"})) // 启用 pprof
 		app.Get("/api/tuning/monitor", monitor.New())           // 监控页面
 	}
@@ -74,8 +84,5 @@ func main() {
 	// Setup Fiber API Router
 	app.Route("/api", api.ApiRoute, "api.")
 
-	// ---------- Start Server ----------
-	if err := app.Listen(listenPort); err != nil {
-		panic(err)
-	}
+	return app
 }
