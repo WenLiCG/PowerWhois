@@ -16,6 +16,7 @@ import (
 	"typonamer/log"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
+	"typonamer/lookup/proxydial"
 
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -64,7 +65,7 @@ func RDAPQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo,
 			auth = &proxy.Auth{User: cfg.SocketProxyUser, Password: cfg.SocketProxyPassword}
 		}
 		timeout := time.Duration(cfg.WhoisTimeout) * time.Second
-		dialer, err := proxy.SOCKS5("tcp", proxyServer, auth, &net.Dialer{Timeout: timeout})
+		dialer, err := proxy.SOCKS5("tcp", proxyServer, auth, &proxydial.ForwardDialer{})
 		if err != nil {
 			log.Warn("代理拨号失败")
 			return domainInfo, lookuperror.ErrorConnectToProxy

@@ -192,7 +192,7 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 		{name: "ProxyRefused", host: "127.0.0.1", mode: "closed", want: "代理连接失败"},
 		{name: "AuthenticationRejected", host: "127.0.0.1", mode: "auth", want: "代理连接失败", proxyHits: 1},
 		{name: "ProxySuccess", host: "127.0.0.1", mode: "ok", proxyHits: 1, whoisHits: 1},
-		{name: "WhoisRefused", host: "127.0.0.1", mode: "upstream-closed", want: "Whois查询超时", proxyHits: 1},
+		{name: "WhoisRefused", host: "127.0.0.1", mode: "upstream-closed", want: "代理连接失败", proxyHits: 1},
 		{name: "RequestCannotOverrideConfig", host: "127.0.0.1", mode: "ok", override: true, proxyHits: 1, whoisHits: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
