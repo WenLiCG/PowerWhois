@@ -18,6 +18,7 @@ type WhoisInfoMatcher struct {
 // 使用正则表达式匹配 WHOIS 数据中的相关信息
 var WhoisMatchers = map[string]WhoisInfoMatcher{
 	"cn": {
+		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -26,6 +27,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReFree:         regexp.MustCompile(`^No matching record`),
 	},
 	"中国": {
+		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -34,6 +36,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReFree:         regexp.MustCompile(`^No matching record`),
 	},
 	"中國": {
+		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -97,6 +100,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReFree:         regexp.MustCompile(`The queried object does not exist:`),
 	},
 	"tw": {
+		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Registration Service Provider: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Record created on ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})`),
