@@ -137,11 +137,12 @@ func init() {
 	}
 
 	// Print the configuration to the debug log at startup.
-	// Password fields are cleared in the copy so debug logs do not contain them.
+	// Secrets and proxy credentials are cleared in the copy before logging.
 	logged := config
 	logged.AuthPassword = ""
 	logged.JwtSecretKey = ""
 	logged.SocketProxyPassword = ""
+	logged.SocketProxyUser = ""
 	log.Debugf("Read config: %+v", logged)
 }
 

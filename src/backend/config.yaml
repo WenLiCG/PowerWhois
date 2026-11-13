@@ -30,10 +30,10 @@ MixedProxyTlds:
 MixedDnsTlds:
 
 ## Setting proxy information
-SocketProxyHost: 192.168.1.1
-SocketProxyPort: 7890
+SocketProxyHost: ""
+SocketProxyPort: 0
 SocketProxyAuth: false
-SocketProxyUser: test
+SocketProxyUser: ""
 SocketProxyPassword: __PW_EXAMPLE_SOCKET_PROXY_PASSWORD__
 
 # ------ Bulk check settings ------

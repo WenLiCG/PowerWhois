@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/fasthttp/websocket"
 )
+
+const proxyTestUser = "pw7-test-only-proxy-user-xyz"
+const proxyTestPassword = "pw7-test-only-proxy-pass-xyz"
 
 // The SOCKS fixture never resolves the requested hostname: its only upstream is
 // a loopback WHOIS fixture. cn is WHOIS-only, so no RDAP/IANA access is needed.
@@ -39,6 +43,12 @@ func proxyFixture(t *testing.T, mode, upstream string) (int, *atomic.Int32) {
 			go func() {
 				defer c.Close()
 				c.SetDeadline(time.Now().Add(5 * time.Second))
+				if mode == "hang" {
+					c.SetDeadline(time.Now().Add(30 * time.Second))
+					t.Cleanup(func() { c.Close() })
+					io.Copy(io.Discard, c)
+					return
+				}
 				var h [2]byte
 				if _, err := io.ReadFull(c, h[:]); err != nil {
 					return
@@ -68,7 +78,7 @@ func proxyFixture(t *testing.T, mode, upstream string) (int, *atomic.Int32) {
 					if _, err := io.ReadFull(c, password); err != nil {
 						return
 					}
-					if string(user) != "fixture-user" || string(password) != "fixture-password" {
+					if string(user) != proxyTestUser || string(password) != proxyTestPassword {
 						t.Error("unexpected fixture credentials")
 					}
 					c.Write([]byte{1, 1})
@@ -129,6 +139,8 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 		proxyHits, whoisHits   int32
 	}{
 		{name: "MissingHost", mode: "ok", want: "未配置代理"},
+		{name: "WhitespaceHost", host: " \t ", mode: "ok", want: "未配置代理"},
+		{name: "ProxyHandshakeHang", host: "127.0.0.1", mode: "hang", want: "代理连接失败", proxyHits: 1},
 		{name: "MissingPort", host: "127.0.0.1", mode: "ok", zero: true, want: "未配置代理"},
 		{name: "ProxyRefused", host: "127.0.0.1", mode: "closed", want: "代理连接失败"},
 		{name: "AuthenticationRejected", host: "127.0.0.1", mode: "auth", want: "代理连接失败", proxyHits: 1},
@@ -197,7 +209,7 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 			if err := os.WriteFile(runBin, binary, 0700); err != nil {
 				t.Fatal(err)
 			}
-			cfg := fmt.Sprintf("LogLevel: Info\nAuthUsername: admin\nAuthExpireDays: 1\nWhoisTimeout: 2\nDnsTimeout: 2\nRetryOnTimeout: false\nBulkCheckConcurrencyLimit: 1\nWebCheckConcurrencyLimit: 1\nWebCheckDomainLimit: 5\nSocketProxyHost: %q\nSocketProxyPort: %d\nSocketProxyAuth: %t\nSocketProxyUser: fixture-user\nSocketProxyPassword: fixture-password\n", tc.host, port, tc.mode == "auth")
+			cfg := fmt.Sprintf("LogLevel: Debug\nAuthUsername: admin\nAuthExpireDays: 1\nWhoisTimeout: 2\nDnsTimeout: 2\nRetryOnTimeout: false\nBulkCheckConcurrencyLimit: 1\nWebCheckConcurrencyLimit: 1\nWebCheckDomainLimit: 5\nSocketProxyHost: %q\nSocketProxyPort: %d\nSocketProxyAuth: %t\nSocketProxyUser: %s\nSocketProxyPassword: %s\n", tc.host, port, true, proxyTestUser, proxyTestPassword)
 			if err := os.WriteFile(filepath.Join(runDir, "config.yaml"), []byte(cfg), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -239,6 +251,18 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 			t.Cleanup(func() {
 				_ = cmd.Process.Kill()
 				<-done
+				for _, path := range []string{output.Name(), filepath.Join(runDir, "logs", "typonamer.log")} {
+					body, err := os.ReadFile(path)
+					if err != nil {
+						t.Errorf("read log: %v", err)
+						continue
+					}
+					for _, secret := range []string{proxyTestUser, proxyTestPassword} {
+						if strings.Contains(string(body), secret) {
+							t.Errorf("proxy credential leaked in %s", filepath.Base(path))
+						}
+					}
+				}
 			})
 			assertAlive := func() {
 				t.Helper()
@@ -267,7 +291,9 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 				}
 			}
 			defer conn.Close()
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			started := time.Now()
+			const maxQueryDuration = 6 * time.Second // WhoisTimeout*2 + 2 seconds
+			conn.SetReadDeadline(started.Add(maxQueryDuration))
 			data := map[string]any{"queryType": "whoisQueryWithProxy", "domains": []string{"fixture.cn"}}
 			if tc.override {
 				data["socketProxyHost"] = "127.0.0.1"
@@ -283,6 +309,11 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 				_, raw, err := conn.ReadMessage()
 				if err != nil {
 					t.Fatal(err)
+				}
+				for _, secret := range []string{proxyTestUser, proxyTestPassword} {
+					if strings.Contains(string(raw), secret) {
+						t.Error("proxy credential leaked in WebSocket message")
+					}
 				}
 				var msg struct {
 					Event string                     `json:"event"`
@@ -300,6 +331,9 @@ func TestWhoisProxyWebSocketFullProcess(t *testing.T) {
 				}
 				if err := json.Unmarshal(raw, &msg); err != nil {
 					t.Fatal(err)
+				}
+				if elapsed := time.Since(started); elapsed > maxQueryDuration {
+					t.Errorf("query took %v, maximum %v", elapsed, maxQueryDuration)
 				}
 				t.Logf("webCheckResult: %s", raw)
 				for field, want := range map[string]string{"queryError": tc.want, "domain": "fixture.cn", "lookupType": "whois"} {

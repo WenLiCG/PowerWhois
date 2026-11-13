@@ -3,10 +3,12 @@ package whoislib
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"typonamer/config"
@@ -30,6 +32,11 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		ViaProxy:   useProxy,
 	}
 
+	cfg := config.GetConfig()
+	if useProxy && (strings.TrimSpace(cfg.SocketProxyHost) == "" || cfg.SocketProxyPort <= 0) {
+		return domainInfo, lookuperror.ErrorProxyNotConfigured
+	}
+
 	// Check if the TLD is supported
 	whoisServer, ok := WhoisSupportedTlds[tld]
 	if !ok {
@@ -37,59 +44,35 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
 	}
 
-	// Read the configuration
-	cfg := config.GetConfig()
-
 	// Create the address for the WHOIS server
 	whoisAddr := net.JoinHostPort(whoisServer, "43")
 
 	// Create the connection
 	conn := net.Conn(nil)
 	if useProxy {
-		proxyServer := net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort))
-		var proxyDialer proxy.Dialer
-		var err error
-
-		baseTCPDialer := &net.Dialer{
-			Timeout:  time.Second * time.Duration(cfg.WhoisTimeout),
-			Deadline: time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout*2)),
-		}
-
-		if cfg.SocketProxyAuth {
-			proxyAuth := proxy.Auth{
-				User:     cfg.SocketProxyUser,
-				Password: cfg.SocketProxyPassword,
-			}
-
-			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, &proxyAuth, baseTCPDialer)
-			if err != nil {
-				log.Warnf("Failed to connect to the proxy server with auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
-		} else {
-			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, nil, baseTCPDialer)
-			if err != nil {
-				log.Warnf("Failed to connect to the proxy server without auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(cfg.WhoisTimeout))
 		defer cancel()
-
-		proxyConn, err := proxyDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
-		if err != nil {
-			log.Warnf("Failed to connect to the whois server %s via proxy: %s", whoisAddr, err)
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+		forward := &proxyForwardDialer{}
+		var auth *proxy.Auth
+		if cfg.SocketProxyAuth {
+			auth = &proxy.Auth{User: cfg.SocketProxyUser, Password: cfg.SocketProxyPassword}
 		}
-
-		// Set timeouts for the proxy connection
-		err = proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+		dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(strings.TrimSpace(cfg.SocketProxyHost), strconv.Itoa(cfg.SocketProxyPort)), auth, forward)
 		if err != nil {
-			log.Warnf("Failed to set deadline for proxy connection: %s", err)
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+			return domainInfo, lookuperror.ErrorConnectToProxy
 		}
-
+		proxyConn, err := dialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
+		if err != nil {
+			// Never expose the original proxy error or credentials in logs/results.
+			if errors.Is(err, lookuperror.ErrorWhoisTimeout) {
+				return domainInfo, lookuperror.ErrorWhoisTimeout
+			}
+			return domainInfo, lookuperror.ErrorConnectToProxy
+		}
+		if err := proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout))); err != nil {
+			proxyConn.Close()
+			return domainInfo, lookuperror.ErrorWhoisTimeout
+		}
 		conn = proxyConn
 	} else {
 		rawConn, err := net.DialTimeout("tcp", whoisAddr, time.Second*time.Duration(cfg.WhoisTimeout))
@@ -177,4 +160,56 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		log.Error("No parsing rule for TLD: ", tld)
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNoParseRuleForTld, tld)
 	}
+}
+
+// proxyForwardDialer bounds both TCP establishment and SOCKS negotiation by the
+// caller's deadline. Only a negative CONNECT reply means the upstream failed.
+type proxyForwardDialer struct{}
+
+func (d *proxyForwardDialer) Dial(network, address string) (net.Conn, error) {
+	return d.DialContext(context.Background(), network, address)
+}
+
+func (d *proxyForwardDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	c, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, lookuperror.ErrorConnectToProxy
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := c.SetDeadline(deadline); err != nil {
+			c.Close()
+			return nil, lookuperror.ErrorConnectToProxy
+		}
+	}
+	return &proxyHandshakeConn{Conn: c}, nil
+}
+
+// x/net/proxy erases the SOCKS reply code in its error. Preserve that code's
+// meaning at the wire boundary instead of inspecting error text or addresses.
+type proxyHandshakeConn struct {
+	net.Conn
+	connectReply bool
+	reply        []byte
+}
+
+func (c *proxyHandshakeConn) Write(p []byte) (int, error) {
+	// Greeting and username/password auth use different packet headers.
+	if len(p) >= 7 && p[0] == 5 && p[1] == 1 && p[2] == 0 {
+		c.connectReply = true
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *proxyHandshakeConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if c.connectReply {
+		c.reply = append(c.reply, p[:n]...)
+		if len(c.reply) >= 4 {
+			c.connectReply = false
+			if c.reply[0] == 5 && c.reply[2] == 0 && c.reply[1] >= 1 && c.reply[1] <= 8 {
+				return 0, lookuperror.ErrorWhoisTimeout
+			}
+		}
+	}
+	return n, err
 }
