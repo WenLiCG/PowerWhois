@@ -20,6 +20,12 @@ import (
 // Exercise the real main (including carbon defaults), not the parser in the
 // testing process. All RDAP discovery and responses are local fixtures.
 func TestRDAPDatesWebSocketFullProcess(t *testing.T) {
+	for _, zone := range []string{"Asia/Shanghai", "America/New_York"} {
+		t.Run(zone, func(t *testing.T) { pw7bRDAPDatesInZone(t, zone) })
+	}
+}
+
+func pw7bRDAPDatesInZone(t *testing.T, zone string) {
 	cases := []struct {
 		name, domain, registration, expiration, created, expiry string
 	}{
@@ -127,7 +133,7 @@ WebCheckDomainLimit: 5
 	cmd := exec.Command(bin)
 	cmd.Dir = dir
 	cmd.Env = startupEnv(map[string]string{
-		"HOME": home, "POWERWHOIS_ADMIN_PASSWORD": testEnvPassword, "POWERWHOIS_JWT_SECRET": testEnvJWT,
+		"TZ": zone, "HOME": home, "POWERWHOIS_ADMIN_PASSWORD": testEnvPassword, "POWERWHOIS_JWT_SECRET": testEnvJWT,
 		"REDIS_HOST": redis.Host(), "REDIS_PORT": redis.Port(), "REDIS_DB": "0",
 	})
 	for _, key := range []string{"GOEXPERIMENT", "GOFLAGS", "GOCACHE"} {
