@@ -54,6 +54,7 @@
 ## 配置
 
 - 在`deploy/backend/config.yaml`中设置`AuthUsername`，这是管理员用户名。不要把管理员口令或 JWT 签名密钥写进该文件。启动后端之前，在环境变量中设置`POWERWHOIS_ADMIN_PASSWORD`和`POWERWHOIS_JWT_SECRET`。任一变量缺失时，进程拒绝启动。更换`POWERWHOIS_JWT_SECRET`会使已经签发的令牌失效。本仓库不会替你轮换现有密钥。除非确实要暴露`/api/tuning`，否则不要设置`APP_TUNING`；该路径与其他管理接口一样，需要管理员令牌。
+- `deploy/backend/config.yaml` 以及程序运行时写出的 `config.yaml` 应由运行服务的用户所有，权限设为 `600`（仅属主可读写）。保存设置时程序也会将权限收紧为 `0600`。
 
 - 将 Nginx 配置文件`deploy/nginx/typonamer.conf`中 443 端口和 80 端口的`server_name`修改为真实的目标域名。
 
