@@ -26,6 +26,10 @@ const proxyTestPassword = "pw7-test-only-proxy-pass-xyz"
 // The SOCKS fixture never resolves the requested hostname: its only upstream is
 // a loopback WHOIS fixture. cn is WHOIS-only, so no RDAP/IANA access is needed.
 func proxyFixture(t *testing.T, mode, upstream string) (int, *atomic.Int32) {
+	return proxyFixtureForTarget(t, mode, upstream, "whois.cnnic.cn:43")
+}
+
+func proxyFixtureForTarget(t *testing.T, mode, upstream, expectedTarget string) (int, *atomic.Int32) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -89,20 +93,39 @@ func proxyFixture(t *testing.T, mode, upstream string) (int, *atomic.Int32) {
 				if _, err := io.ReadFull(c, req[:]); err != nil {
 					return
 				}
-				if req != [4]byte{5, 1, 0, 3} {
+				if req[0] != 5 || req[1] != 1 || req[2] != 0 {
 					t.Errorf("unexpected SOCKS request header %v", req)
 					return
 				}
-				var n [1]byte
-				if _, err := io.ReadFull(c, n[:]); err != nil {
+				var host string
+				switch req[3] {
+				case 1:
+					var ip [4]byte
+					if _, err := io.ReadFull(c, ip[:]); err != nil {
+						return
+					}
+					host = net.IP(ip[:]).String()
+				case 3:
+					var n [1]byte
+					if _, err := io.ReadFull(c, n[:]); err != nil {
+						return
+					}
+					name := make([]byte, int(n[0]))
+					if _, err := io.ReadFull(c, name); err != nil {
+						return
+					}
+					host = string(name)
+				default:
+					t.Errorf("unexpected SOCKS address type %d", req[3])
 					return
 				}
-				target := make([]byte, int(n[0])+2)
-				if _, err := io.ReadFull(c, target); err != nil {
+				var port [2]byte
+				if _, err := io.ReadFull(c, port[:]); err != nil {
 					return
 				}
-				if string(target[:len(target)-2]) != "whois.cnnic.cn" || binary.BigEndian.Uint16(target[len(target)-2:]) != 43 {
-					t.Errorf("unexpected SOCKS target %q", target)
+				target := net.JoinHostPort(host, fmt.Sprint(binary.BigEndian.Uint16(port[:])))
+				if target != expectedTarget {
+					t.Errorf("unexpected SOCKS target %q, want %q", target, expectedTarget)
 					return
 				}
 				// Even the failure case attempts only a closed loopback upstream.

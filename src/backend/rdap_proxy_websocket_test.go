@@ -32,8 +32,9 @@ func TestRDAPProxyWebSocketFullProcess(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, host, mode, want string
-		proxyHits              int32
+		proxyHits, rdapHits    int32
 	}{
+		{name: "TargetTimeout", host: "127.0.0.1", mode: "ok", want: "Whois查询超时", proxyHits: 1, rdapHits: 1},
 		{name: "MissingHost", mode: "ok", want: "未配置代理"},
 		{name: "ProxyRefused", host: "127.0.0.1", mode: "closed", want: "代理连接失败"},
 		{name: "ProxyHandshakeHang", host: "127.0.0.1", mode: "hang", want: "代理连接失败", proxyHits: 1},
@@ -62,7 +63,7 @@ func TestRDAPProxyWebSocketFullProcess(t *testing.T) {
 				}
 			}()
 			upstream := rdapTrap.Addr().String()
-			port, hits := proxyFixture(t, tc.mode, upstream)
+			port, hits := proxyFixtureForTarget(t, tc.mode, upstream, upstream)
 			if tc.mode == "closed" {
 				closed, err := net.Listen("tcp", "127.0.0.1:0")
 				if err != nil {
@@ -93,8 +94,8 @@ func TestRDAPProxyWebSocketFullProcess(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
-				if got := rdapHits.Load(); got != 0 {
-					t.Errorf("direct RDAP trap hits=%d, want 0", got)
+				if got := rdapHits.Load(); got != tc.rdapHits {
+					t.Errorf("RDAP trap hits=%d, want %d", got, tc.rdapHits)
 				}
 				if got := hits.Load(); got != tc.proxyHits {
 					t.Errorf("proxy hits=%d, want %d", got, tc.proxyHits)
@@ -225,7 +226,11 @@ func TestRDAPProxyWebSocketFullProcess(t *testing.T) {
 					t.Errorf("query took %v, maximum %v", elapsed, maxQueryDuration)
 				}
 				t.Logf("webCheckResult: %s", raw)
-				for field, want := range map[string]string{"queryError": tc.want, "domain": "fixture.com", "lookupType": "rdap"} {
+				expected := map[string]string{"queryError": tc.want, "domain": "fixture.com"}
+				if tc.name != "MissingHost" {
+					expected["lookupType"] = "rdap"
+				}
+				for field, want := range expected {
 					var got string
 					if err := json.Unmarshal(msg.Data[field], &got); err != nil || got != want {
 						t.Errorf("%s=%s, want %q", field, msg.Data[field], want)
@@ -234,8 +239,8 @@ func TestRDAPProxyWebSocketFullProcess(t *testing.T) {
 				if got := hits.Load(); got != tc.proxyHits {
 					t.Errorf("configured proxy hits=%d, want %d", got, tc.proxyHits)
 				}
-				if got := rdapHits.Load(); got != 0 {
-					t.Errorf("direct RDAP hits=%d, want %d", got, 0)
+				if got := rdapHits.Load(); got != tc.rdapHits {
+					t.Errorf("RDAP hits=%d, want %d", got, tc.rdapHits)
 				}
 				break
 			}

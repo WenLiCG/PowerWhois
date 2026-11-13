@@ -1,11 +1,14 @@
 package rdaplib
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"typonamer/config"
@@ -50,29 +53,47 @@ func RDAPQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo,
 		},
 	}
 
+	var proxyDialFailed atomic.Bool
+	var proxyDials sync.WaitGroup
+	var proxyDialMu sync.Mutex
+	proxyDialsStopped := false
 	if useProxy {
-		// Set up the proxy server
 		proxyServer := net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort))
+		var auth *proxy.Auth
 		if cfg.SocketProxyAuth {
-			proxyAuth := proxy.Auth{
-				User:     cfg.SocketProxyUser,
-				Password: cfg.SocketProxyPassword,
+			auth = &proxy.Auth{User: cfg.SocketProxyUser, Password: cfg.SocketProxyPassword}
+		}
+		timeout := time.Duration(cfg.WhoisTimeout) * time.Second
+		dialer, err := proxy.SOCKS5("tcp", proxyServer, auth, &net.Dialer{Timeout: timeout})
+		if err != nil {
+			log.Warn("代理拨号失败")
+			return domainInfo, lookuperror.ErrorConnectToProxy
+		}
+		contextDialer, ok := dialer.(proxy.ContextDialer)
+		if !ok {
+			log.Warn("代理拨号失败")
+			return domainInfo, lookuperror.ErrorConnectToProxy
+		}
+		httpClient.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			// Transport can return before a timed-out dial finishes. Wait for
+			// registered dials before classifying the RDAP result.
+			proxyDialMu.Lock()
+			if proxyDialsStopped {
+				proxyDialMu.Unlock()
+				return nil, context.Canceled
 			}
-			dialer, err := proxy.SOCKS5("tcp", proxyServer, &proxyAuth, proxy.Direct)
-			if err == nil {
-				httpClient.Transport = &http.Transport{Dial: dialer.Dial}
-			} else {
-				log.Warnf("Failed to create proxy dialer with auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
+			proxyDials.Add(1)
+			proxyDialMu.Unlock()
+			defer proxyDials.Done()
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			conn, err := contextDialer.DialContext(ctx, network, address)
+			if err != nil {
+				proxyDialFailed.Store(true)
+				log.Warn("代理拨号失败")
+				return nil, lookuperror.ErrorConnectToProxy
 			}
-		} else {
-			dialer, err := proxy.SOCKS5("tcp", proxyServer, nil, proxy.Direct)
-			if err == nil {
-				httpClient.Transport = &http.Transport{Dial: dialer.Dial}
-			} else {
-				log.Warnf("Failed to create proxy dialer: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
+			return conn, nil
 		}
 	}
 
@@ -92,7 +113,15 @@ func RDAPQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo,
 
 	// Do the RDAP query
 	rdapResp, err := rdapClient.Do(rdapReq)
+	proxyDialMu.Lock()
+	proxyDialsStopped = true
+	proxyDialMu.Unlock()
+	proxyDials.Wait()
 	if err != nil {
+		if proxyDialFailed.Load() {
+			domainInfo.RawResponse = lookuperror.ErrorConnectToProxy.Error()
+			return domainInfo, lookuperror.ErrorConnectToProxy
+		}
 		log.Debugf("Failed to query RDAP for domain %s: %s", domain, err)
 
 		domainInfo.RawResponse = err.Error()

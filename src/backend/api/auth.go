@@ -58,7 +58,7 @@ func Login(c *fiber.Ctx) error {
 	// Generate a JWT token with the username.
 	token, err := generateToken(login.Username)
 	if err != nil {
-		log.Error("Generate token error: ", err)
+		log.Error("Generate token error")
 		return c.SendStatus(fiber.StatusInternalServerError) // Return a 500 status if the token generation fails.
 	}
 
@@ -113,7 +113,7 @@ func ValidateToken(tokenString string) (bool, error) {
 	// Check if the token is valid.
 	// If the token is invalid, expired, or missing, it will return false and an error.
 	if _, ok := token.Claims.(jwt.MapClaims); !ok {
-		log.Error("Parse token claims error: ", err)
+		log.Error("Parse token claims error")
 		return false, fmt.Errorf("parse token claims error")
 	}
 
@@ -169,7 +169,7 @@ func generateToken(username string) (string, error) {
 	token, err := tokenObj.SignedString([]byte(cfg.JwtSecretKey))
 	if err != nil {
 		// Log the error if the token generation fails.
-		log.Error("Generate token error: ", err)
+		log.Error("Generate token error")
 		return "", err
 	}
 
