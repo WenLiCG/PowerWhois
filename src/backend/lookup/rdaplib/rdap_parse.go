@@ -3,12 +3,12 @@ package rdaplib
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"typonamer/constant"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/utils"
 
-	"github.com/dromara/carbon/v2"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -71,7 +71,7 @@ func getRegistrar(responseEntities []rdap.Entity) string {
 // It loops through the events and checks if the event action is "registration" or "expiration".
 // If the event action is "registration", it sets the creation date to the date of the event.
 // If the event action is "expiration", it sets the expiry date to the date of the event.
-// The dates are parsed using the Carbon library and set to UTC timezone.
+// The dates are parsed as RFC3339 and formatted in UTC without global defaults.
 // The function returns the creation and expiry dates as a tuple.
 func getDomainDates(responseEvents []rdap.Event) (string, string) {
 	var creationDate, expiryDate string
@@ -79,13 +79,25 @@ func getDomainDates(responseEvents []rdap.Event) (string, string) {
 		switch strings.ToLower(event.Action) {
 		case "registration":
 			// Set the creation date to the date of the event
-			creationDate = carbon.SetTimezone(carbon.UTC).Parse(event.Date).ToDateTimeString()
+			creationDate = parseRDAPDate(event.Date)
 		case "expiration":
 			// Set the expiry date to the date of the event
-			expiryDate = carbon.SetTimezone(carbon.UTC).Parse(event.Date).ToDateTimeString()
+			expiryDate = parseRDAPDate(event.Date)
 		}
 	}
 	return creationDate, expiryDate
+}
+
+// parseRDAPDate returns an empty string for missing or invalid event dates.
+func parseRDAPDate(value string) string {
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339Nano, value)
+	}
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02 15:04:05")
 }
 
 // getNameServer takes the response nameservers and returns the nameservers as a slice of strings.
