@@ -67,6 +67,8 @@ func GetDomainHumanError(err error) string {
 			return "后缀不支持"
 		case errors.Is(err, lookuperror.ErrorWhoisServerFailed):
 			return "Whois查询失败"
+		case errors.Is(err, lookuperror.ErrorProxyNotConfigured):
+			return "未配置代理"
 		case errors.Is(err, lookuperror.ErrorConnectToProxy):
 			return "代理连接失败"
 		case errors.Is(err, lookuperror.ErrorNoContentInWhoisResponse):

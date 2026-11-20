@@ -44,3 +44,31 @@ func TestPW6WebsocketSourceOmitsTokenLog(t *testing.T) {
 		t.Error("websocket source still contains forbidden admin token log phrase")
 	}
 }
+
+func TestPW7ExampleProxyIsUnconfigured(t *testing.T) {
+	for _, relative := range []string{"src/backend/config.yaml", "deploy/backend/config.yaml"} {
+		t.Run(relative, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(backendDir(t), "..", "..", relative))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal(body, &values); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]any{"SocketProxyHost": nil, "SocketProxyPort": 0, "SocketProxyAuth": false, "SocketProxyUser": nil} {
+				got, exists := values[key]
+				if !exists {
+					t.Errorf("missing proxy config key %s", key)
+					continue
+				}
+				if (key == "SocketProxyHost" || key == "SocketProxyUser") && got == "" {
+					continue
+				}
+				if got != want {
+					t.Errorf("%s = %v, want empty/zero placeholder %v", key, got, want)
+				}
+			}
+		})
+	}
+}

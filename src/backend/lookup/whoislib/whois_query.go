@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"typonamer/config"
@@ -14,6 +15,7 @@ import (
 	"typonamer/log"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
+	"typonamer/lookup/proxydial"
 
 	"github.com/duke-git/lancet/v2/maputil"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -30,6 +32,11 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		ViaProxy:   useProxy,
 	}
 
+	cfg := config.GetConfig()
+	if useProxy && (strings.TrimSpace(cfg.SocketProxyHost) == "" || cfg.SocketProxyPort <= 0) {
+		return domainInfo, lookuperror.ErrorProxyNotConfigured
+	}
+
 	// Check if the TLD is supported
 	whoisServer, ok := WhoisSupportedTlds[tld]
 	if !ok {
@@ -37,59 +44,32 @@ func WhoisQuery(domain string, tld string, useProxy bool) (lookupinfo.DomainInfo
 		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
 	}
 
-	// Read the configuration
-	cfg := config.GetConfig()
-
 	// Create the address for the WHOIS server
 	whoisAddr := net.JoinHostPort(whoisServer, "43")
 
 	// Create the connection
 	conn := net.Conn(nil)
 	if useProxy {
-		proxyServer := net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort))
-		var proxyDialer proxy.Dialer
-		var err error
-
-		baseTCPDialer := &net.Dialer{
-			Timeout:  time.Second * time.Duration(cfg.WhoisTimeout),
-			Deadline: time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout*2)),
-		}
-
-		if cfg.SocketProxyAuth {
-			proxyAuth := proxy.Auth{
-				User:     cfg.SocketProxyUser,
-				Password: cfg.SocketProxyPassword,
-			}
-
-			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, &proxyAuth, baseTCPDialer)
-			if err != nil {
-				log.Warnf("Failed to connect to the proxy server with auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
-		} else {
-			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, nil, baseTCPDialer)
-			if err != nil {
-				log.Warnf("Failed to connect to the proxy server without auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(cfg.WhoisTimeout))
 		defer cancel()
-
-		proxyConn, err := proxyDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
-		if err != nil {
-			log.Warnf("Failed to connect to the whois server %s via proxy: %s", whoisAddr, err)
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+		forward := &proxydial.ForwardDialer{}
+		var auth *proxy.Auth
+		if cfg.SocketProxyAuth {
+			auth = &proxy.Auth{User: cfg.SocketProxyUser, Password: cfg.SocketProxyPassword}
 		}
-
-		// Set timeouts for the proxy connection
-		err = proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+		dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(strings.TrimSpace(cfg.SocketProxyHost), strconv.Itoa(cfg.SocketProxyPort)), auth, forward)
 		if err != nil {
-			log.Warnf("Failed to set deadline for proxy connection: %s", err)
-			return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisTimeout, err.Error())
+			return domainInfo, lookuperror.ErrorConnectToProxy
 		}
-
+		proxyConn, err := dialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
+		if err != nil {
+			// Never expose the original proxy error or credentials in logs/results.
+			return domainInfo, lookuperror.ErrorConnectToProxy
+		}
+		if err := proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout))); err != nil {
+			proxyConn.Close()
+			return domainInfo, lookuperror.ErrorWhoisTimeout
+		}
 		conn = proxyConn
 	} else {
 		rawConn, err := net.DialTimeout("tcp", whoisAddr, time.Second*time.Duration(cfg.WhoisTimeout))

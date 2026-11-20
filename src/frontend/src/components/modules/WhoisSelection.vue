@@ -15,6 +15,14 @@
                     v-model="queryType"
                     checked-icon="check_circle"
                     unchecked-icon="radio_button_unchecked"
+                    val="whoisQueryWithProxy"
+                    label="Whois + Proxy"
+                    :disable="disable"
+                />
+                <q-radio
+                    v-model="queryType"
+                    checked-icon="check_circle"
+                    unchecked-icon="radio_button_unchecked"
                     val="dnsQuery"
                     label="DNS"
                     :disable="disable"
