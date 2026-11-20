@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 
 	"typonamer/config"
 	"typonamer/log"
@@ -21,8 +22,23 @@ import (
 // It is prepended to files to indicate UTF-8 encoding.
 var utf8BomData = []byte{0xEF, 0xBB, 0xBF}
 
-func AdminSettingList(c *fiber.Ctx) error {
+const secretSetMarker = "__PW_SECRET_SET__"
+
+// maskedSettings changes only a response copy, keeping runtime secrets intact.
+func maskedSettings() config.Config {
 	cfg := config.GetConfig()
+	for _, secret := range []*string{&cfg.AuthPassword, &cfg.JwtSecretKey, &cfg.SocketProxyPassword} {
+		if strings.TrimSpace(*secret) == "" {
+			*secret = ""
+		} else {
+			*secret = secretSetMarker
+		}
+	}
+	return cfg
+}
+
+func AdminSettingList(c *fiber.Ctx) error {
+	cfg := maskedSettings()
 	log.Info("Getting admin setting list success")
 	return c.JSON(cfg)
 }
@@ -58,6 +74,13 @@ func SettingUpdate(c *fiber.Ctx) error {
 		return c.Status(500).SendString(err.Error())
 	}
 
+	// Missing/null string fields parse as empty. Blank and marker values mean
+	// keep the stored proxy password; real new values are preserved verbatim.
+	password := strings.TrimSpace(newConfig.SocketProxyPassword)
+	if password == "" || password == secretSetMarker {
+		newConfig.SocketProxyPassword = config.GetConfig().SocketProxyPassword
+	}
+
 	err := config.UpdateConfig(*newConfig)
 	if err != nil {
 		// Error updating the config
@@ -74,7 +97,7 @@ func SettingUpdate(c *fiber.Ctx) error {
 	// Update the config success
 	log.Info("Update config success")
 
-	return c.JSON(newConfig)
+	return c.JSON(maskedSettings())
 }
 
 func DownloadLog(c *fiber.Ctx) error {

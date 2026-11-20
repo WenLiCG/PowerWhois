@@ -238,7 +238,6 @@ func UpdateConfig(newConfig Config) error {
 	// Write the new configuration to the file specified by the configFile variable.
 	// If the file does not exist, it will be created.
 	// If the file cannot be written, the program will exit with code 1.
-	// The configuration is also printed to the debug log at startup.
 	err := WriteConfig(newConfig)
 	if err != nil {
 		log.Error("Error writing config file: ", err)
@@ -377,15 +376,23 @@ WhoisApis:
 		return err
 	}
 
-	// Print the new configuration content to the debug log.
-	// The new configuration content is printed to the debug log for debugging purposes.
-	log.Debugf("New config content: %s", newConfigContent.String())
-
-	// Write the new configuration content to the file specified by the configFile variable.
-	// The file is created if it does not exist.
-	// The new configuration content is written to the file in the specified order.
-	// The file is closed after the write operation is complete.
-	return os.WriteFile(configFile, newConfigContent.Bytes(), 0644)
+	// Restrict existing files before writing too: WriteFile's mode only applies
+	// when creating a file. Never log the YAML, which contains the proxy password.
+	file, err := os.OpenFile(configFile, os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Chmod(0600); err != nil {
+		return err
+	}
+	if err := file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := file.Write(newConfigContent.Bytes()); err != nil {
+		return err
+	}
+	return file.Close()
 }
 
 func trimTlds(tlds []string) []string {
