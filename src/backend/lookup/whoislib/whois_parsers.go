@@ -2,6 +2,7 @@ package whoislib
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"typonamer/constant"
 	"typonamer/lookup/lookupinfo"
@@ -22,8 +23,13 @@ var whoisResponseReplaceList = map[string]string{
 }
 
 // ParseWhoisResponse parses the WHOIS response and returns the DomainInfo struct.
-func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher) (lookupinfo.DomainInfo, error) {
-	domainInfo := lookupinfo.DomainInfo{
+func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher) (domainInfo lookupinfo.DomainInfo, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("whois response parse failed: %v", r)
+		}
+	}()
+	domainInfo = lookupinfo.DomainInfo{
 		LookupType:  constant.LookupTypeWhois,
 		DomainName:  domain,
 		RawResponse: response,
@@ -73,21 +79,11 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 		matchCreationDate := matcher.ReCreationDate.FindStringSubmatch(responseContent)
 		if len(matchCreationDate) > 1 {
 			matchCreationDateStr := strutil.ReplaceWithMap(strutil.Trim(matchCreationDate[1]), dateSeqRemoveList)
-			if matcher.DateTimeLayoutForCreationDate != "" {
-				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayoutForCreationDate).ToDateTimeString()
-			} else if matcher.DateTimeLayout != "" {
-				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayout).ToDateTimeString()
-			} else {
-				creationDate := carbon.SetTimezone(carbon.UTC).Parse(matchCreationDateStr).ToDateTimeString()
-				if creationDate != "" {
-					domainInfo.CreationDate = creationDate
-				} else {
-					if strings.Contains(matchCreationDateStr, "+") {
-						dateTimStrs := strutil.SplitAndTrim(matchCreationDateStr, "+")
-						domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).Parse(dateTimStrs[0]).ToDateTimeString()
-					}
-				}
+			layout := matcher.DateTimeLayoutForCreationDate
+			if layout == "" {
+				layout = matcher.DateTimeLayout
 			}
+			domainInfo.CreationDate = parseWhoisDate(matchCreationDateStr, layout)
 		}
 	}
 
@@ -96,21 +92,11 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 		matchExpiryDate := matcher.ReExpiryDate.FindStringSubmatch(responseContent)
 		if len(matchExpiryDate) > 1 {
 			matchExpiryDateStr := strutil.ReplaceWithMap(strutil.Trim(matchExpiryDate[1]), dateSeqRemoveList)
-			if matcher.DateTimeLayoutForExpiryDate != "" {
-				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayoutForExpiryDate).ToDateTimeString()
-			} else if matcher.DateTimeLayout != "" {
-				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayout).ToDateTimeString()
-			} else {
-				expiryDate := carbon.SetTimezone(carbon.UTC).Parse(matchExpiryDateStr).ToDateTimeString()
-				if expiryDate != "" {
-					domainInfo.ExpiryDate = expiryDate
-				} else {
-					if strings.Contains(matchExpiryDateStr, "+") {
-						dateTimStrs := strutil.SplitAndTrim(matchExpiryDateStr, "+")
-						domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).Parse(dateTimStrs[0]).ToDateTimeString()
-					}
-				}
+			layout := matcher.DateTimeLayoutForExpiryDate
+			if layout == "" {
+				layout = matcher.DateTimeLayout
 			}
+			domainInfo.ExpiryDate = parseWhoisDate(matchExpiryDateStr, layout)
 		}
 	}
 
@@ -154,4 +140,31 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	}
 
 	return domainInfo, nil
+}
+
+// parseWhoisDate isolates date failures so the remaining record is still parsed.
+func parseWhoisDate(value, layout string) (result string) {
+	defer func() {
+		if recover() != nil {
+			result = ""
+		}
+	}()
+	c := carbon.SetTimezone(carbon.UTC)
+	// Carbon Parse does not guard an existing error and may use a nil Location.
+	if c.Error != nil {
+		return ""
+	}
+	if layout != "" {
+		c = c.ParseByLayout(value, layout)
+	} else {
+		c = c.Parse(value)
+		if c.Error != nil && strings.Contains(value, "+") {
+			// Preserve the existing fallback, starting with a fresh, checked Carbon.
+			return parseWhoisDate(strutil.SplitAndTrim(value, "+")[0], "")
+		}
+	}
+	if c.Error != nil {
+		return ""
+	}
+	return c.ToDateTimeString()
 }
