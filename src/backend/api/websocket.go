@@ -162,7 +162,6 @@ func onAdminAuth(ep *socketio.EventPayload) {
 
 	log.Infof("Admin auth message from user %s", ep.Kws.UUID)
 	token := strutil.Trim(string(ep.Data), "\"")
-	log.Debug("Admin auth token is: " + token)
 	isValid, err := ValidateToken(token)
 	if err != nil {
 		// If the validation fails, log an error.

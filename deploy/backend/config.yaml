@@ -65,7 +65,7 @@ SocketProxyHost: test.superproxy.io
 SocketProxyPort: 22222
 SocketProxyAuth: true
 SocketProxyUser: testuser
-SocketProxyPassword: 1234567890
+SocketProxyPassword: __PW_EXAMPLE_SOCKET_PROXY_PASSWORD__
 
 # ------ Bulk check settings ------
 BulkCheckConcurrencyLimit: 50

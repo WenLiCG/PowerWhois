@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,7 +238,7 @@ func UpdateConfig(newConfig Config) error {
 
 	// Write the new configuration to the file specified by the configFile variable.
 	// If the file does not exist, it will be created.
-	// If the file cannot be written, the program will exit with code 1.
+	// If writing fails, return the error and keep the in-memory configuration unchanged.
 	err := WriteConfig(newConfig)
 	if err != nil {
 		log.Error("Error writing config file: ", err)
@@ -376,23 +377,34 @@ WhoisApis:
 		return err
 	}
 
-	// Restrict existing files before writing too: WriteFile's mode only applies
-	// when creating a file. Never log the YAML, which contains the proxy password.
-	file, err := os.OpenFile(configFile, os.O_WRONLY|os.O_CREATE, 0600)
+	// CreateTemp creates the file with mode 0600 before any secrets are written.
+	// Keep it beside the destination so Rename can atomically replace the file.
+	// Never log the YAML, which contains the proxy password.
+	file, err := os.CreateTemp(filepath.Dir(configFile), filepath.Base(configFile)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	temporaryPath := file.Name()
+	defer os.Remove(temporaryPath)
 	defer file.Close()
+	// Restore owner permissions if the process umask removed any of them.
 	if err := file.Chmod(0600); err != nil {
 		return err
 	}
-	if err := file.Truncate(0); err != nil {
+	n, err := file.Write(newConfigContent.Bytes())
+	if err != nil {
 		return err
 	}
-	if _, err := file.Write(newConfigContent.Bytes()); err != nil {
+	if n != newConfigContent.Len() {
+		return io.ErrShortWrite
+	}
+	if err := file.Sync(); err != nil {
 		return err
 	}
-	return file.Close()
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, configFile)
 }
 
 func trimTlds(tlds []string) []string {

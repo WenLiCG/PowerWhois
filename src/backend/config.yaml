@@ -34,7 +34,7 @@ SocketProxyHost: 192.168.1.1
 SocketProxyPort: 7890
 SocketProxyAuth: false
 SocketProxyUser: test
-SocketProxyPassword: 123456
+SocketProxyPassword: __PW_EXAMPLE_SOCKET_PROXY_PASSWORD__
 
 # ------ Bulk check settings ------
 BulkCheckConcurrencyLimit: 100
