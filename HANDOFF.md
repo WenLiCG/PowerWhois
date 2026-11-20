@@ -1,5 +1,23 @@
 # PowerWhois 程序员交接文档
 
+## 0 2026-11-19 开发停止
+
+开发已经停止。本节只归档既有记录，不恢复开发，不跑测试，不合并，不部署，不发布。
+
+完整说明、交接正文和已审报告在 [`docs/archive/2026-11-19-stop/`](docs/archive/2026-11-19-stop/README.md)。材料在仓库内，可直接阅读。整理方法是 software-handoff 1.3 与 software-team-workflow 1.4：由既有项目记录和已审交接附件整理，附件 zip SHA256 为 `0e0543019e095f0a16b99311341ad6e0f04e792f4f430a735820a167486217aa`。没有新的测试结论。
+
+写入本节前只读核对远程，head 与 tree 仍与历史预期一致，因此保留原结论，不把旧结论套用到别的提交：
+
+- `main`：`eb422ab7221ade327a08fd1334c5e813870872e7`，tree `789901b59f4a8174642463357b4531cad4b6b68b`。
+- [PR #8](https://github.com/WenLiCG/PowerWhois/pull/8) `pw-7-whois-proxy-hardening`：head `f83824c3b9e4d374a24826c11c81c64ffbaddf87`，tree `8583233582ee7e0344e4a5abed2aa9a0d9368add`。总体 **blocked**。
+- [PR #9](https://github.com/WenLiCG/PowerWhois/pull/9) `pw-8-cn-parse-panic`：head `9fba695ff93c5d243e608b484e5473733b2d9019`，tree `f9ff8aa626f8725d49c99bb6a2b17bff337e0636`。这是历史独立 pass，不是与 PR #8 的组合通过，也不是合并批准。
+
+必须保留的边界：真实 Bright Data 的 443、43 与认证仍然 blocked。本地 D1 与 L1 不能代替真实验证。SOCKS greeting 没有响应时，不能归因于产品，也不能归因于供应商。PW-7 与 PW-8 组合回归、付费代理、出口或凭据变更、.cn 查询、ZONEINFO 或生产变更、RDAP 修复都未做，也不在本次授权内。PR #5 与 PR #6 仍是 open draft，本次没有推送它们，也没有推送 PR #8 与 PR #9 的源码分支。
+
+以下第 1–10 节是 2026-11-08 的历史交接，不是本次停止结论，也不授权继续实现。
+
+## 历史交接（2026-11-08）
+
 核查日期：2026 年 11 月 8 日（UTC）
 交接对象：接手开发、测试和部署的程序员
 
