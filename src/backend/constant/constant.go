@@ -137,7 +137,9 @@ const (
 
 const (
 	// DomainRegisterStatusTaken is the status when a domain is taken.
-	DomainRegisterStatusTaken = "Taken"
+	DomainRegisterStatusTaken    = "Taken"
+	DomainRegisterStatusUnknown  = "Unknown"
+	DomainRegisterStatusReserved = "Reserved"
 
 	// DomainRegisterStatusFree is the status when a domain is free.
 	DomainRegisterStatusFree = "Free"
@@ -211,5 +213,6 @@ const (
 	RegisterStatusFailed = "failed"
 
 	// RegisterStatusError is the status when a register is error.
-	RegisterStatusError = "error"
+	RegisterStatusError   = "error"
+	RegisterStatusUnknown = "outcome_unknown"
 )

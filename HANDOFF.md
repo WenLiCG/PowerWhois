@@ -1,6 +1,57 @@
 # PowerWhois 程序员交接文档
 
-## 0 2026-11-19 开发停止
+## 当前交接（2026-11-22）
+
+本期交付 PowerWhois 的域名查询、批量任务、注册及部署修复。交接分支为 `codex/powerwhois-review-fixes`，基于 GitHub `main@6f7dac40cf2c94d24afa492da0baaeccfbc1d006`。已验收的应用与部署包对应提交 `6551edc7f22ead74081721c9293ecaf4f8a4ae93`。交接文档在该版本之后提交。
+
+### 变更和兼容性
+
+- [查询入口](src/backend/lookup/lookuper/lookuper.go)与[域名规范化](src/backend/utils/domain_tools.go)统一网页、Typo 和批量的结果判定。DNS 无委派记录为证据不足，注册局保留单独标记，直连 RDAP 校验证书。批量 CSV 将旧版 DNS 的 `Free` 记录标为证据不足，便于补查。
+- [WebSocket](src/backend/api/websocket.go)统一通过 `adminAuth` 消息登录。现有客户端须改用该消息并处理 `adminAuthResult`。管理设置返回脱敏值，代理与供应商凭据留空时由后端保留旧值。匿名流量只使用公开查询模式，服务器限制连接、批次和上游并发。完整事件契约见 [API 文档](API%20documentation.md)。
+- [注册](src/backend/register/register.go)要求每次确认带 UUID 格式的 `operationId`。Redis 保存按域名去重的提交与结果。对不确定的结果，先向注册商核对，再通过前端或 `PUT /api/admin/registration/{operationId}` 写回结果。
+- [批量任务](src/backend/scheduler/bulk_check.go)沿用 GitHub main 的单任务 Redis 键，并原子写入结果和移除待办。清理只处理本项目的批量键。Web 查询保留原始响应，批量 Redis 记录只保存 CSV 所需字段。
+- [部署](README.zh.md#部署与升级)使用 Go 1.27.4 和 Node 22 构建，生成 Linux amd64、arm64 包。源码仓库保留构建方式和部署模板。CLI、MCP 与多任务数据模型属于历史 `codex/review-ai-access@4b6d816` 工作线，见下方版本记录。准备更新现网前先核对实际版本、功能和 Redis 数据格式。
+
+### 验收证据
+
+| 检查 | 结果与覆盖边界 |
+|---|---|
+| Go | Linux `go test -race -count=1 ./...` 和 `go vet ./...` 通过。使用专用临时 Redis 和本地模拟供应商验证注册防重、结果不确定时的核对、批量暂停与恢复、故障保留待办，以及上传、查询和 CSV 下载。 |
+| 浏览器与代理配置 | Node 22.23.5、Yarn 1.22.22 冻结锁文件安装后，前端测试、lint 和构建通过。最终 amd64 包在隔离网络中经 Caddy 完成游客访问、管理员登录、私有查询、断线恢复、模拟注册、退出和 SIGTERM 停机。Compose 配置解析、Caddy 配置校验和 Nginx 语法检查通过。 |
+| 批量容量 | 在同机专用 Redis 和模拟查询下完成 100 万行，CSV 有 100 万条数据和一行表头。最终一次从上传到查询完成约 34 秒，CSV 生成与计数约 9 秒。Go 进程峰值 RSS 约 444 MiB，Redis 报告内存峰值约 285 MiB。真实注册局吞吐另行测量。 |
+| 依赖与产物 | `govulncheck` 对源码及两份实际交付的 Go 二进制均未报告已知漏洞。两份包通过 SHA-256 校验，内部 `deploy/REVISION` 与二进制 `vcs.revision` 均为 `6551edc7f22ead74081721c9293ecaf4f8a4ae93`。 |
+
+### 部署包与重建
+
+以下校验和对应 2026-11-22 本地候选包。发布流水线会为每个新构建生成自己的 `.sha256` 文件。
+
+| 归档 | SHA-256 |
+|---|---|
+| `PowerWhois-linux-amd64-6551edc7f22e.tar.gz` | `0335a06295d5725537b15e81c570f9685b5c6ea7392f95365c603a227d90ac8c` |
+| `PowerWhois-linux-arm64-6551edc7f22e.tar.gz` | `8375c47316fbc8f70ac01549d3635231be9f22c1ee9b904bb1794a5c4b540dd3` |
+
+从已验收的应用提交重建需使用干净的 Linux 检出，并安装 Go 1.27.4、Node 22、Yarn 1.22.22 和 `make`。Go 集成测试需要 `redis-server`。在新克隆的工作目录执行以下命令。
+
+```bash
+git switch --detach 6551edc7f22ead74081721c9293ecaf4f8a4ae93
+make -C src setup
+(cd src/backend && go vet ./... && go test -race -count=1 ./...)
+(cd src/frontend && yarn lint && yarn test)
+make -C src bundle
+bash src/package.sh amd64
+bash src/package.sh arm64
+(cd dist && sha256sum -c ./*.sha256)
+```
+
+[GitHub Actions](.github/workflows/check.yml)在收到拉取请求或 `main` 推送时构建、测试并生成 `PowerWhois-linux` 产物。
+
+### 接手与上线边界
+
+1. **代码验收**由维护者核对分支差异和 GitHub Actions 结果。关键行为变化集中在管理员 WebSocket 登录、付费供应商授权、注册确认和 Redis 提交语义。
+2. **现场验收**由部署负责人核对现网版本并备份配置、前后端文件及 Redis。先用现场数据副本测试完整 Compose、HTTPS/WebSocket 和导出恢复，再一起更新前后端。使用 ARM64 时补做对应实机启动和功能验收。升级步骤见[中文部署说明](README.zh.md#部署与升级)。
+3. **上游验收**用现场网络确认真实 WHOIS/RDAP、付费代理认证及连接。注册流程优先使用注册商沙箱。当前记录只有模拟注册结果，之前草稿的验证范围和阻塞见[历史归档](docs/archive/2026-11-19-stop/README.md)。
+
+## 历史归档（2026-11-19 开发停止）
 
 开发已经停止。本节只归档既有记录，不恢复开发，不跑测试，不合并，不部署，不发布。
 

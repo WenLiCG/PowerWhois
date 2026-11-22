@@ -8,20 +8,20 @@
             v-model="domainInput"
             type="textarea"
             placeholder="请输入查询域名, 每行一个域名"
-            :disable="webStore.unCheckDomains > 0"
+            :disable="webStore.checking || webStore.unRegisterDomains > 0"
         />
     </div>
 
     <q-separator class="q-mt-md" />
 
     <div>
-        <WhoisSelection v-model:queryType="queryType" :disable="webStore.unCheckDomains > 0" />
+        <WhoisSelection v-model:queryType="queryType" :disable="webStore.checking || webStore.unRegisterDomains > 0" />
     </div>
 
     <q-separator v-if="tokenStore.token" />
 
     <div v-if="tokenStore.token">
-        <RegisterSelection v-model:registerType="registerType" :disable="webStore.unCheckDomains > 0" />
+        <RegisterSelection v-model:registerType="registerType" :disable="webStore.checking || webStore.unRegisterDomains > 0" />
     </div>
 
     <q-separator class="q-mb-md" />
@@ -32,9 +32,9 @@
             color="primary"
             label="查询"
             class="full-width"
-            :loading="webCheckDomains.length > 0 && webStore.unCheckDomains > 0"
+            :loading="webCheckDomains.length > 0 && webStore.checking"
             :percentage="handleProgress"
-            :disable="webStore.unCheckDomains > 0"
+            :disable="webStore.checking || webStore.unRegisterDomains > 0"
             @click="queryDomains()"
         >
             <template v-slot:loading>
@@ -92,7 +92,7 @@ function isWebsocketConnected() {
         $q.notify({
             position: "top",
             type: "warning",
-            message: "网络连接失败, 请尝试刷新网页后重试",
+            message: "网络连接失败, 请等待重连后重试",
             progress: true,
             timeout: 5000,
             actions: [{ label: "确定", color: "white" }]
@@ -112,7 +112,6 @@ function queryDomains() {
                     message: "每次最多查询 " + settingStore.webCheckDomainLimit + " 个域名, 请分批次输入"
                 });
             } else {
-                webStore.clearDomains();
 
                 const webCheckData = {
                     event: "webCheck",
@@ -121,7 +120,7 @@ function queryDomains() {
                         domains: inputDomainList
                     }
                 };
-                send(JSON.stringify(webCheckData));
+                if (send(JSON.stringify(webCheckData))) webStore.beginCheck();
             }
         }
     } else {

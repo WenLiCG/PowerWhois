@@ -1,410 +1,304 @@
 package config
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
-	"testing"
-	"text/template"
+	"sync"
+	"sync/atomic"
 
+	"typonamer/constant"
 	"typonamer/log"
 
-	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
-var config Config
+// Published configurations and their slices are immutable.
+var current atomic.Pointer[Config]
+var saveMu sync.Mutex
 var configFile string
 
 type Config struct {
-	LogLevel string `json:"logLevel"` //日志等级
+	LogLevel string `json:"logLevel" yaml:"LogLevel"`
 
-	AuthUsername   string `json:"authUsername"`   //认证账号
-	AuthPassword   string `json:"authPassword"`   //认证密码
-	AuthExpireDays int    `json:"authExpireDays"` //认证有效期
-	JwtSecretKey   string `json:"jwtSecretKey"`   //JWT密钥
+	AuthUsername   string `json:"authUsername" yaml:"AuthUsername"`
+	AuthPassword   string `json:"-" yaml:"-"`
+	AuthExpireDays int    `json:"authExpireDays" yaml:"AuthExpireDays"`
+	JwtSecretKey   string `json:"-" yaml:"-"`
 
-	WhoisTimeout int `json:"whoisTimeout"` //whois超时
-	DnsTimeout   int `json:"dnsTimeout"`   //DNS超时
+	WhoisTimeout int `json:"whoisTimeout" yaml:"WhoisTimeout"`
+	DnsTimeout   int `json:"dnsTimeout" yaml:"DnsTimeout"`
 
-	RetryOnTimeout bool `json:"retryOnTimeout"` //是否重试
-	RetryInterval  int  `json:"retryInterval"`  //重试间隔
-	RetryMax       int  `json:"retryMax"`       //最大重试次数
+	RetryOnTimeout bool `json:"retryOnTimeout" yaml:"RetryOnTimeout"`
+	RetryInterval  int  `json:"retryInterval" yaml:"RetryInterval"`
+	RetryMax       int  `json:"retryMax" yaml:"RetryMax"`
 
-	GlobalProxyTlds []string `json:"globalProxyTlds"` //全局代理TLD
+	GlobalProxyTlds []string `json:"globalProxyTlds" yaml:"GlobalProxyTlds"`
 
-	MixedProxyTlds []string `json:"mixedProxyTlds"` //混合查询代理TLD
-	MixedDnsTlds   []string `json:"mixedDnsTlds"`   //混合查询DNS TLDS
+	MixedProxyTlds []string `json:"mixedProxyTlds" yaml:"MixedProxyTlds"`
+	MixedDnsTlds   []string `json:"mixedDnsTlds" yaml:"MixedDnsTlds"`
 
-	SocketProxyHost     string `json:"socketProxyHost"`     //代理服务器地址
-	SocketProxyPort     int    `json:"socketProxyPort"`     //代理服务器端口
-	SocketProxyAuth     bool   `json:"socketProxyAuth"`     //代理服务器认证
-	SocketProxyUser     string `json:"socketProxyUser"`     //代理服务器账号
-	SocketProxyPassword string `json:"socketProxyPassword"` //代理服务器密码
+	SocketProxyHost     string `json:"socketProxyHost" yaml:"SocketProxyHost"`
+	SocketProxyPort     int    `json:"socketProxyPort" yaml:"SocketProxyPort"`
+	SocketProxyAuth     bool   `json:"socketProxyAuth" yaml:"SocketProxyAuth"`
+	SocketProxyUser     string `json:"socketProxyUser" yaml:"SocketProxyUser"`
+	SocketProxyPassword string `json:"socketProxyPassword" yaml:"SocketProxyPassword"`
 
-	BulkCheckConcurrencyLimit int `json:"bulkCheckConcurrencyLimit"` //批量查询并发限制
+	BulkCheckConcurrencyLimit int `json:"bulkCheckConcurrencyLimit" yaml:"BulkCheckConcurrencyLimit"`
 
-	WebCheckConcurrencyLimit int `json:"webCheckConcurrencyLimit"` //网页查询并发限制
-	WebCheckDomainLimit      int `json:"webCheckDomainLimit"`      //单次网页查询域名数量限制
+	WebCheckConcurrencyLimit int `json:"webCheckConcurrencyLimit" yaml:"WebCheckConcurrencyLimit"`
+	WebCheckDomainLimit      int `json:"webCheckDomainLimit" yaml:"WebCheckDomainLimit"`
 
-	TypoDefaultCcTlds      []CcTld  `json:"typoDefaultCcTlds"`      //默认ccTLD
-	TypoCustomizedReplaces []string `json:"typoCustomizedReplaces"` //自定义替换
+	TypoDefaultCcTlds      []CcTld  `json:"typoDefaultCcTlds" yaml:"TypoDefaultCcTlds"`
+	TypoCustomizedReplaces []string `json:"typoCustomizedReplaces" yaml:"TypoCustomizedReplaces"`
 
-	RegisterApis []RegisterApi `json:"registerApis"` //注册接口
-	WhoisApis    []WhoisApi    `json:"whoisApis"`    //自定义whois接口
+	RegisterApis []RegisterApi `json:"registerApis" yaml:"RegisterApis"`
+	WhoisApis    []WhoisApi    `json:"whoisApis" yaml:"WhoisApis"`
 }
 
 type CcTld struct {
-	Tld        string `json:"tld"`        //TLD
-	IsSelected bool   `json:"isSelected"` //是否选中
+	Tld        string `json:"tld" yaml:"Tld"`
+	IsSelected bool   `json:"isSelected" yaml:"IsSelected"`
 }
 
 type RegisterApi struct {
-	ApiName          string   `json:"apiName"`          //接口名称
-	ApiUrl           string   `json:"apiUrl"`           //接口地址
-	SuccessText      []string `json:"successText"`      //成功标识
-	FailText         []string `json:"failText"`         //失败标识
-	ConcurrencyLimit int      `json:"concurrencyLimit"` //并发限制
+	ApiName          string   `json:"apiName" yaml:"ApiName"`
+	ApiUrl           string   `json:"apiUrl" yaml:"ApiUrl"`
+	SuccessText      []string `json:"successText" yaml:"SuccessText"`
+	FailText         []string `json:"failText" yaml:"FailText"`
+	ConcurrencyLimit int      `json:"concurrencyLimit" yaml:"ConcurrencyLimit"`
 }
 
 type WhoisApi struct {
-	ApiName          string   `json:"apiName"`          //接口名称
-	ApiUrl           string   `json:"apiUrl"`           //接口地址
-	FreeText         []string `json:"freeText"`         //Free标识
-	TakenText        []string `json:"takenText"`        //Taken标识
-	ConcurrencyLimit int      `json:"concurrencyLimit"` //并发限制
+	ApiName          string   `json:"apiName" yaml:"ApiName"`
+	ApiUrl           string   `json:"apiUrl" yaml:"ApiUrl"`
+	FreeText         []string `json:"freeText" yaml:"FreeText"`
+	TakenText        []string `json:"takenText" yaml:"TakenText"`
+	ConcurrencyLimit int      `json:"concurrencyLimit" yaml:"ConcurrencyLimit"`
 }
 
-const (
-	// configFileName is the name of the configuration file.
-	// The file is located in the same directory as the executable.
-	configFileName = "config"
-
-	// configFileType is the type of the configuration file.
-	// Currently, only YAML is supported.
-	configFileType = "yaml"
-)
-
-func init() {
-	// Get the path of the executable file.
-	exePath, err := os.Executable()
-	if err != nil {
-		log.Error("Error getting executable file path: ", err)
-		os.Exit(1)
-	}
-
-	// Get the directory of the executable file.
-	execDir := filepath.Dir(exePath)
-
-	// Set the configuration file path.
-	// The configuration file is named config.yaml and located in the same directory as the executable.
-	configFile = filepath.Join(execDir, fmt.Sprintf("%s.%s", configFileName, configFileType))
-
-	// Set the configuration file name, type and path.
-	viper.SetConfigName(configFileName)
-	viper.SetConfigType(configFileType)
-	viper.AddConfigPath(execDir)
-	// viper.AddConfigPath(".")
-
-	// Read the configuration file.
-	err = viper.ReadInConfig()
-	if err != nil {
-		// Tests build a temporary binary that has no config.yaml beside it.
-		// Production still refuses to start when the file cannot be read.
-		if testing.Testing() {
-			return
-		}
-		log.Error("Error reading config file: ", err)
-		os.Exit(1)
-	}
-
-	// Unmarshal the configuration into the config variable.
-	viper.Unmarshal(&config)
-
-	// Admin password and JWT secret come only from the environment. A missing
-	// value refuses startup. Tests apply the same function explicitly.
-	if err := ApplyRequiredSecrets(); err != nil {
-		if testing.Testing() {
-			return
-		}
-		fmt.Fprintln(os.Stderr, err.Error())
-		_ = os.Stderr.Sync()
-		log.Error(err.Error())
-		os.Exit(1)
-	}
-
-	// Print the configuration to the debug log at startup.
-	// Password fields are cleared in the copy so debug logs do not contain them.
-	logged := config
-	logged.AuthPassword = ""
-	logged.JwtSecretKey = ""
-	logged.SocketProxyPassword = ""
-	log.Debugf("Read config: %+v", logged)
+var defaults = Config{
+	LogLevel: "Info", AuthUsername: "admin", AuthExpireDays: 1,
+	WhoisTimeout: 6, DnsTimeout: 5, RetryInterval: 3, RetryMax: 2,
+	BulkCheckConcurrencyLimit: 15, WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500,
 }
 
-// ApplyRequiredSecrets copies POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET
-// into the in-memory config. Blank values are missing. The yaml file is not a
-// fallback, and this function does not generate a secret.
-func ApplyRequiredSecrets() error {
-	return applyRequiredSecretsTo(&config)
+func Load(path string) error {
+	next := defaults
+	reader := viper.New()
+	reader.SetConfigFile(path)
+	if err := reader.ReadInConfig(); err != nil {
+		return fmt.Errorf("cannot read configuration file %s", path)
+	}
+	if err := reader.Unmarshal(&next); err != nil {
+		return errors.New("cannot decode configuration fields")
+	}
+	if err := applyRequiredSecretsTo(&next); err != nil {
+		return err
+	}
+	normalize(&next)
+	if err := validate(next); err != nil {
+		return err
+	}
+
+	configFile = path
+	current.Store(&next)
+	log.SetLevel(next.LogLevel)
+	return nil
 }
 
 func applyRequiredSecretsTo(cfg *Config) error {
 	password := strings.TrimSpace(os.Getenv("POWERWHOIS_ADMIN_PASSWORD"))
-	jwtSecret := strings.TrimSpace(os.Getenv("POWERWHOIS_JWT_SECRET"))
+	secret := strings.TrimSpace(os.Getenv("POWERWHOIS_JWT_SECRET"))
 	var missing []string
 	if password == "" {
 		missing = append(missing, "POWERWHOIS_ADMIN_PASSWORD")
 	}
-	if jwtSecret == "" {
+	if secret == "" {
 		missing = append(missing, "POWERWHOIS_JWT_SECRET")
 	}
 	if len(missing) > 0 {
-		cfg.AuthPassword = ""
-		cfg.JwtSecretKey = ""
 		return fmt.Errorf("refusing to start: required environment variable not set: %s", strings.Join(missing, ", "))
 	}
-	cfg.AuthPassword = password
-	cfg.JwtSecretKey = jwtSecret
+	cfg.AuthPassword, cfg.JwtSecretKey = password, secret
 	return nil
 }
 
 func GetConfig() Config {
-	return config
+	if cfg := current.Load(); cfg != nil {
+		return *cfg
+	}
+	return defaults
 }
 
-func UpdateConfig(newConfig Config) error {
-	// Update the log level if it has changed.
-	// The log level is special cased because it needs to be updated immediately.
-	currentLogLevel := strutil.UpperSnakeCase(config.LogLevel)
-	newLogLevel := strutil.UpperSnakeCase(newConfig.LogLevel)
-	if currentLogLevel != newLogLevel {
-		log.Debugf("Log level changed from %s to %s", currentLogLevel, newLogLevel)
-
-		// Update the log level immediately.
-		log.SetLevel(newLogLevel)
+func PublicSettings(cfg Config) Config {
+	cfg.AuthPassword, cfg.JwtSecretKey, cfg.SocketProxyPassword = "", "", ""
+	cfg.RegisterApis = slices.Clone(cfg.RegisterApis)
+	for i := range cfg.RegisterApis {
+		cfg.RegisterApis[i].ApiUrl = ""
 	}
-
-	// Trim the TLDs to remove any whitespace.
-	newConfig.GlobalProxyTlds = trimTlds(newConfig.GlobalProxyTlds)
-	newConfig.MixedProxyTlds = trimTlds(newConfig.MixedProxyTlds)
-	newConfig.MixedDnsTlds = trimTlds(newConfig.MixedDnsTlds)
-
-	for i, tld := range newConfig.TypoDefaultCcTlds {
-		newConfig.TypoDefaultCcTlds[i].Tld = strutil.Trim(tld.Tld, ".")
+	cfg.WhoisApis = slices.Clone(cfg.WhoisApis)
+	for i := range cfg.WhoisApis {
+		cfg.WhoisApis[i].ApiUrl = ""
 	}
+	return cfg
+}
 
-	if len(newConfig.RegisterApis) > 0 {
-		for i, api := range newConfig.RegisterApis {
-			newConfig.RegisterApis[i].ApiName = strutil.Trim(api.ApiName)
-			newConfig.RegisterApis[i].ApiUrl = strutil.RemoveWhiteSpace(api.ApiUrl, true)
-			for j, successText := range api.SuccessText {
-				newConfig.RegisterApis[i].SuccessText[j] = strutil.Trim(successText)
-			}
-			for k, failText := range api.FailText {
-				newConfig.RegisterApis[i].FailText[k] = strutil.Trim(failText)
-			}
-			if newConfig.RegisterApis[i].ConcurrencyLimit <= 0 {
-				newConfig.RegisterApis[i].ConcurrencyLimit = 1
+func UpdateConfig(next Config) (Config, error) {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	prev := GetConfig()
+
+	next.AuthPassword, next.JwtSecretKey = prev.AuthPassword, prev.JwtSecretKey
+	if next.SocketProxyPassword == "" {
+		next.SocketProxyPassword = prev.SocketProxyPassword
+	}
+	normalize(&next)
+	for i := range next.RegisterApis {
+		if next.RegisterApis[i].ApiUrl == "" {
+			for _, old := range prev.RegisterApis {
+				if old.ApiName == next.RegisterApis[i].ApiName {
+					next.RegisterApis[i].ApiUrl = old.ApiUrl
+					break
+				}
 			}
 		}
 	}
-
-	if len(newConfig.WhoisApis) > 0 {
-		for i, api := range newConfig.WhoisApis {
-			newConfig.WhoisApis[i].ApiName = strutil.Trim(api.ApiName)
-			newConfig.WhoisApis[i].ApiUrl = strutil.RemoveWhiteSpace(api.ApiUrl, true)
-			for j, freeText := range api.FreeText {
-				newConfig.WhoisApis[i].FreeText[j] = strutil.Trim(freeText)
-			}
-			for k, takenText := range api.TakenText {
-				newConfig.WhoisApis[i].TakenText[k] = strutil.Trim(takenText)
-			}
-			if newConfig.WhoisApis[i].ConcurrencyLimit <= 0 {
-				newConfig.WhoisApis[i].ConcurrencyLimit = 1
+	for i := range next.WhoisApis {
+		if next.WhoisApis[i].ApiUrl == "" {
+			for _, old := range prev.WhoisApis {
+				if old.ApiName == next.WhoisApis[i].ApiName {
+					next.WhoisApis[i].ApiUrl = old.ApiUrl
+					break
+				}
 			}
 		}
 	}
-
-	// Keep the env-sourced admin password and JWT secret. The request body and
-	// the yaml file cannot replace them.
-	if err := applyRequiredSecretsTo(&newConfig); err != nil {
-		log.Error(err.Error())
-		return err
+	if err := validate(next); err != nil {
+		return Config{}, err
+	}
+	if err := writeConfig(configFile, next); err != nil {
+		log.Error("Could not save configuration file")
+		return Config{}, ErrWriteConfig
 	}
 
-	// Write the new configuration to the file specified by the configFile variable.
-	// If the file does not exist, it will be created.
-	// If the file cannot be written, the program will exit with code 1.
-	// The configuration is also printed to the debug log at startup.
-	err := WriteConfig(newConfig)
-	if err != nil {
-		log.Error("Error writing config file: ", err)
-		return err
+	current.Store(&next)
+	log.SetLevel(next.LogLevel)
+	return PublicSettings(next), nil
+}
+
+var ErrWriteConfig = errors.New("could not save configuration")
+
+func normalize(c *Config) {
+	c.LogLevel = strings.TrimSpace(c.LogLevel)
+	c.AuthUsername = strings.TrimSpace(c.AuthUsername)
+	for _, list := range [][]string{c.GlobalProxyTlds, c.MixedProxyTlds, c.MixedDnsTlds} {
+		for i := range list {
+			list[i] = strings.Trim(strings.ToLower(strings.TrimSpace(list[i])), ".")
+		}
 	}
+	for i := range c.TypoDefaultCcTlds {
+		tld := &c.TypoDefaultCcTlds[i].Tld
+		*tld = strings.Trim(strings.ToLower(strings.TrimSpace(*tld)), ".")
+	}
+	for i := range c.RegisterApis {
+		p := &c.RegisterApis[i]
+		p.ApiName, p.ApiUrl = strings.TrimSpace(p.ApiName), strings.TrimSpace(p.ApiUrl)
+		p.SuccessText, p.FailText = trimMarkers(p.SuccessText), trimMarkers(p.FailText)
+	}
+	for i := range c.WhoisApis {
+		p := &c.WhoisApis[i]
+		p.ApiName, p.ApiUrl = strings.TrimSpace(p.ApiName), strings.TrimSpace(p.ApiUrl)
+		p.FreeText, p.TakenText = trimMarkers(p.FreeText), trimMarkers(p.TakenText)
+	}
+}
 
-	// Update the configuration variable.
-	// The configuration is not reloaded from the file until the program is restarted.
-	config = newConfig
+func trimMarkers(markers []string) []string {
+	for i := range markers {
+		markers[i] = strings.TrimSpace(markers[i])
+	}
+	return slices.DeleteFunc(markers, func(s string) bool { return s == "" })
+}
 
+func validate(c Config) error {
+	switch strings.ToLower(c.LogLevel) {
+	case "debug", "info", "warn", "error", "off":
+	default:
+		return errors.New("invalid logLevel")
+	}
+	if c.AuthUsername == "" || c.AuthExpireDays < 1 || c.AuthExpireDays > 365 {
+		return errors.New("invalid administrator username or session lifetime")
+	}
+	if c.WhoisTimeout < 1 || c.WhoisTimeout > 60 || c.DnsTimeout < 1 || c.DnsTimeout > 60 {
+		return errors.New("WHOIS and DNS timeouts must be 1–60 seconds")
+	}
+	if c.RetryMax < 0 || c.RetryMax > 5 || c.RetryInterval < 0 || c.RetryInterval > 30 {
+		return errors.New("invalid retry count or interval")
+	}
+	if c.WebCheckDomainLimit < 1 || c.WebCheckDomainLimit > 5000 ||
+		c.WebCheckConcurrencyLimit < 1 || c.WebCheckConcurrencyLimit > 64 ||
+		c.BulkCheckConcurrencyLimit < 1 || c.BulkCheckConcurrencyLimit > 128 {
+		return errors.New("invalid domain limit or worker count")
+	}
+	if len(c.TypoCustomizedReplaces) > 200 || len(c.TypoDefaultCcTlds) > 100 {
+		return errors.New("too many Typo options")
+	}
+	if c.SocketProxyPort < 0 || c.SocketProxyPort > 65535 || (c.SocketProxyHost != "" && c.SocketProxyPort == 0) {
+		return errors.New("invalid SOCKS proxy port")
+	}
+	registerNames := make(map[string]bool)
+	for _, p := range c.RegisterApis {
+		if registerNames[p.ApiName] || !validProvider(p.ApiName, p.ApiUrl, p.ConcurrencyLimit, p.SuccessText, p.FailText) {
+			return errors.New("invalid or duplicate registration provider")
+		}
+		registerNames[p.ApiName] = true
+	}
+	whoisNames := map[string]bool{constant.WhoisQuery: true, constant.WhoisQueryWithProxy: true, constant.DnsQuery: true, constant.MixedQuery: true}
+	for _, p := range c.WhoisApis {
+		if whoisNames[p.ApiName] || !validProvider(p.ApiName, p.ApiUrl, p.ConcurrencyLimit, p.FreeText, p.TakenText) {
+			return errors.New("invalid or duplicate lookup provider")
+		}
+		whoisNames[p.ApiName] = true
+	}
 	return nil
 }
 
-func WriteConfig(newConfig Config) error {
-	configTemplate := `
-# Setting the log level, available values are: Error, Warn, Info, Debug, Off
-LogLevel: {{ .LogLevel }}
-
-# Setting authentication information
-# Admin password: POWERWHOIS_ADMIN_PASSWORD
-# JWT secret: POWERWHOIS_JWT_SECRET
-# Those two values are not stored in this file.
-AuthUsername: {{ .AuthUsername }}
-AuthExpireDays: {{ .AuthExpireDays }}
-
-# ------ Common settings ------
-## Setting whois parameters
-WhoisTimeout: {{ .WhoisTimeout }}
-
-## Setting DNS parameters
-DnsTimeout: {{ .DnsTimeout }}
-
-## Setting retry parameters
-RetryOnTimeout: {{ .RetryOnTimeout }}
-RetryInterval: {{ .RetryInterval }}
-RetryMax: {{ .RetryMax }}
-
-## The TLDs forced to go through proxy
-GlobalProxyTlds:
-{{- range .GlobalProxyTlds }}
-    - {{.}}
-{{- end}}
-
-## The TLDs forced to go through proxy in mixed query
-MixedProxyTlds:
-{{- range .MixedProxyTlds }}
-    - {{.}}
-{{- end}}
-
-## The TLDs forced to go through DNS check in mixed query
-MixedDnsTlds:
-{{- range .MixedDnsTlds }}
-    - {{.}}
-{{- end}}
-
-## Setting proxy information
-SocketProxyHost: {{ .SocketProxyHost }}
-SocketProxyPort: {{ .SocketProxyPort }}
-SocketProxyAuth: {{ .SocketProxyAuth }}
-SocketProxyUser: {{ .SocketProxyUser }}
-SocketProxyPassword: {{ .SocketProxyPassword }}
-
-# ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: {{ .BulkCheckConcurrencyLimit }}
-
-# ------ Web check settings ------
-WebCheckConcurrencyLimit: {{ .WebCheckConcurrencyLimit }}
-WebCheckDomainLimit: {{ .WebCheckDomainLimit }}
-
-# ------ Typo check settings ------
-TypoDefaultCcTlds:
-{{- range .TypoDefaultCcTlds }}
-    - Tld: {{.Tld}}
-      IsSelected: {{.IsSelected}}
-{{- end}}
-
-TypoCustomizedReplaces:
-{{- range .TypoCustomizedReplaces }}
-    - {{.}}
-{{- end}}
-
-# ------ Register APIs ------
-RegisterApis:
-{{- range .RegisterApis }}
-    - ApiName: {{.ApiName}}
-      ApiUrl: {{.ApiUrl}}
-      SuccessText: 
-{{- range .SuccessText }}
-          - {{.}}
-{{- end}}
-      FailText: 
-{{- range .FailText }}
-          - {{.}}
-{{- end}}
-      ConcurrencyLimit: {{.ConcurrencyLimit}}
-{{- end}}
-
-# ------ Whois APIs ------
-WhoisApis:
-{{- range .WhoisApis }}
-    - ApiName: {{.ApiName}}
-      ApiUrl: {{.ApiUrl}}
-      FreeText: 
-{{- range .FreeText }}
-          - {{.}}
-{{- end}}
-      TakenText: 
-{{- range .TakenText }}
-          - {{.}}
-{{- end}}
-      ConcurrencyLimit: {{.ConcurrencyLimit}}
-{{- end}}
-`
-
-	// Create a new template for the configuration file.
-	// The template is parsed from the configTemplate string.
-	// The template is used to generate the new configuration content.
-	configBody, err := template.New("config").Parse(configTemplate)
-	if err != nil {
-		// Error parsing the config template.
-		log.Error("Error parsing config template: ", err)
-		return err
+func validProvider(name, template string, concurrent int, positive, negative []string) bool {
+	if name == "" || len(name) > 100 || !strings.Contains(template, "{domain}") ||
+		concurrent < 1 || concurrent > 64 || len(positive) == 0 || len(negative) == 0 {
+		return false
 	}
-
-	// Create a new buffer to store the new configuration content.
-	// The buffer is used to write the new configuration content to the file.
-	var newConfigContent bytes.Buffer
-
-	// Execute the template with the new configuration and write the result to the buffer.
-	// The new configuration content is generated using the template and the newConfig variable.
-	// The result is written to the newConfigContent buffer.
-	err = configBody.Execute(&newConfigContent, newConfig)
-	if err != nil {
-		// Error executing the config template.
-		log.Error("Error executing config template: ", err)
-		return err
-	}
-
-	// Print the new configuration content to the debug log.
-	// The new configuration content is printed to the debug log for debugging purposes.
-	log.Debugf("New config content: %s", newConfigContent.String())
-
-	// Write the new configuration content to the file specified by the configFile variable.
-	// The file is created if it does not exist.
-	// The new configuration content is written to the file in the specified order.
-	// The file is closed after the write operation is complete.
-	return os.WriteFile(configFile, newConfigContent.Bytes(), 0644)
+	address, err := url.Parse(strings.ReplaceAll(template, "{domain}", "example.test"))
+	return err == nil && address.Hostname() != "" && address.Fragment == "" &&
+		(address.Scheme == "https" || address.Scheme == "http")
 }
 
-func trimTlds(tlds []string) []string {
-	// Trim leading and trailing dots from a slice of TLDs.
-	// The function takes a slice of strings as input and returns a new slice of strings.
-	// The function iterates over the input slice and trims leading and trailing dots from each string.
-	// The trimmed strings are appended to a new slice which is returned.
-	//
-	// Example: trimTlds([]string{".com.", "net."}) returns []string{"com", "net"}
-	//
-	// The function is used to trim leading and trailing dots from the TLDs configuration.
-
-	var trimmedTlds []string
-	for _, tld := range tlds {
-		tldStr := strutil.Trim(tld, ".")
-		if tldStr == "" {
-			continue
-		}
-		trimmedTlds = append(trimmedTlds, tldStr)
+func writeConfig(path string, cfg Config) error {
+	if path == "" {
+		return ErrWriteConfig
 	}
-	return trimmedTlds
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".powerwhois-config-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err = file.Write(data); err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }

@@ -13,9 +13,9 @@ English | [中文](./README.zh.md)
 
 
 ## Features
-1. In addition to web queries, supports batch domain name queries. Tested with uploading 1 million domain names without issues, and the speed is extremely fast.
+1. Supports interactive and bulk domain checks with pause, resume and CSV export.
 2. Clicking on the web query results will pop up the original WHOIS information.
-3. Supports all suffixes. Some can only use DNS mode, so a small number of domains reserved by registrars may be inaccurate, but should be very few.
+3. Supports RDAP, WHOIS and DNS. Registry coverage varies, and DNS provides delegation evidence.
 4. Supports proxy settings and allows setting proxies for different suffixes.
 5. Added Mix mode, which allows freely setting direct connection, proxy, or DNS scanning for different suffixes.
 6. Supports typo generation.
@@ -43,84 +43,26 @@ English | [中文](./README.zh.md)
 
 # Deployment
 
-## Server Dependencies
+Download the `PowerWhois-linux` artifact from GitHub Actions for the commit you want, or build it below. Choose Linux `amd64` or `arm64`, verify the archive with its `.sha256` file, then extract it.
 
-- Docker
+On a fresh install, set `POWERWHOIS_ADMIN_PASSWORD` and `POWERWHOIS_JWT_SECRET` in the environment or a private Compose `.env` file. Make `deploy/backend` and its configuration writable by the application user, UID/GID 1000 by default. Use `POWERWHOIS_UID` and `POWERWHOIS_GID` to match the deployment account. Set your hostname and certificate paths in `deploy/nginx/typonamer.conf`, include it in the host's Nginx configuration, and run `nginx -t`. Nginx terminates TLS. Compose publishes Caddy on host loopback only.
 
-## Upload Files
+Run `docker compose up -d --build` from `deploy`. For upgrades, back up the running release, configuration and Redis data first. Replace the executable and SPA as a pair, and retain the existing runtime configuration and Redis data. Each installation uses one process for its legacy single bulk task. Verify migration separately if you used the unreleased multi-job branch.
 
-Upload the contents of the `deploy` folder to the server as is.
-
-## Configuration
-
-- Modify the `server_name` in the Nginx configuration file `deploy/nginx/typonamer.conf` for ports 443 and 80 to your actual target domain name.
-  
-- Update the `ssl_certificate` and `ssl_certificate_key` paths in the Nginx configuration file `deploy/nginx/typonamer.conf` for port 443 to the actual paths of your SSL certificate and key.
-  
-- Change the `root` path in the Nginx configuration file `deploy/nginx/typonamer.conf` for port 443 to the actual absolute path of the `deploy/frontend` folder on your host.
-  
-- Copy the Nginx configuration file `deploy/nginx/typonamer.conf` to the Nginx configuration directory on the host, typically `/etc/nginx/conf.d/`.
-  
-- Set `AuthUsername` in `deploy/backend/config.yaml`. That name is the administrator username. Do not put the administrator password or the JWT signing secret in the file. Set `POWERWHOIS_ADMIN_PASSWORD` and `POWERWHOIS_JWT_SECRET` in the environment before starting the backend. The process refuses to start if either variable is missing. Changing `POWERWHOIS_JWT_SECRET` invalidates tokens that were already issued. This repository does not rotate an existing secret for you. Leave `APP_TUNING` unset unless you intend to expose `/api/tuning`; that route requires the same administrator token as the other admin APIs.
-
-## Deployment Steps
-
-- Navigate to the `deploy` directory on the server.
-- Execute the command: `docker compose up -d`
-- Restart Nginx on the host: `sudo systemctl restart nginx`
-- Visit the website, for example: `https://typonamer.example.com`
+Anonymous sessions can use direct WHOIS, RDAP, DNS and Mixed mode. Paid proxy and custom provider access requires an administrator. DNS without delegation is reported as unknown. A registrar confirms whether the domain can be purchased. Registrations with an uncertain outcome remain pending for review by operation ID.
 
 # Development
 
-## Backend
+Use Go 1.27.4, Node 22 and Yarn 1.22.22. The release build runs on Linux.
 
-The backend is developed using the Golang language, with the Gofiber web framework.
-
-### Dependencies
-
-- Golang 1.23+
-
-## Frontend
-
-The frontend is developed using Vue3, with the Quasar 2 UI framework.
-
-### Dependencies
-
-- Node.js v20+
-- yarn 1.22+
-
-### Initialization
-
-```
-cd src/frontend
-yarn
-quasar dev
+```bash
+make -C src setup
+(cd src/backend && go test -race ./... && go vet ./...)
+(cd src/frontend && yarn lint && yarn test)
+make -C src package GOARCH=amd64
 ```
 
-## Compilation
-
-A `src/Makefile` file is provided in the project source directory. After installing backend dependencies, frontend dependencies, and the `make` command on Linux, you can start compiling. The compiled output will automatically replace the contents of `deploy/backend` and `deploy/frontend`. You need to manually upload the newly compiled files to the server to replace the old server files, then restart the containers for the changes to take effect.
-
-### Compile Backend Code Only
-
-```
-cd src/
-make backend
-```
-
-### Compile Frontend Code Only
-
-```
-cd src/
-make frontend
-```
-
-### Compile Both Frontend and Backend Code
-
-```
-cd src/
-make all
-```
+The package includes its source revision and a checksum. `make -C src all` builds directly into `deploy` for development. For native execution, set `POWERWHOIS_LISTEN` and `POWERWHOIS_CONFIG` to override the loopback listener and executable-relative configuration path.
 
 ## Contributing
 

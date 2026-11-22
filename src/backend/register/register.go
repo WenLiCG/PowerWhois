@@ -1,126 +1,211 @@
 package register
 
 import (
-	"fmt"
-	"sync"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"typonamer/config"
 	"typonamer/constant"
 	"typonamer/log"
+	"typonamer/lookup/network"
+	"typonamer/utils"
 
-	"github.com/duke-git/lancet/v2/maputil"
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/go-resty/resty/v2"
-	"github.com/zh-five/golimit"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
-var limiterList = map[string]*golimit.GoLimit{}
+const requestTimeout = 10 * time.Second
+const submitting = "submitting"
 
-const (
-	defaultRegisterTimeout = 10 * time.Second
-)
+var ErrReconcile = errors.New("没有可核对的注册操作，或者操作仍在进行")
 
-func init() {
-	SetupLimiter()
+var registrarClient = func() *http.Client {
+	transport := network.DirectTransport()
+	// These legacy GETs may charge money. Avoid transport retries on reused connections.
+	transport.DisableKeepAlives = true
+	transport.Protocols = new(http.Protocols)
+	transport.Protocols.SetHTTP1(true)
+	return &http.Client{Transport: transport, CheckRedirect: network.NoRedirect, Timeout: requestTimeout}
+}()
+
+type record struct {
+	RegisterInfo
+	Started int64 `json:"started"`
 }
 
-func SetupLimiter() {
-	cfg := config.GetConfig()
-
-	for _, api := range cfg.RegisterApis {
-		limiterList[api.ApiName] = golimit.NewGoLimit(uint(api.ConcurrencyLimit))
-	}
-}
-
-func Register(domain string, registerType string) (RegisterInfo, error) {
-	registerInfo := RegisterInfo{
-		RegisterType: registerType,
-		DomainName:   domain,
-	}
-	cfg := config.GetConfig()
-
-	var apiInfo config.RegisterApi
-	for _, api := range cfg.RegisterApis {
-		if api.ApiName == registerType {
-			apiInfo = api
-			break
-		}
-	}
-
-	if apiInfo.ApiName == "" {
-		log.Debugf("Invalid register type: %s, no register api found", registerType)
-		registerInfo.RegisterStatus = constant.RegisterStatusError
-		registerInfo.RawResponse = fmt.Sprintf("Invalid register type: %s, no register api found", registerType)
-		return registerInfo, fmt.Errorf("%w: %s", ErrorInvalidRegisterType, registerType)
-	}
-
-	apiUrl := strutil.TemplateReplace(apiInfo.ApiUrl, map[string]string{
-		"domain": domain,
-	})
-
-	var response string
-	var err error
-
-	if maputil.HasKey(limiterList, apiInfo.ApiName) {
-		limiter := limiterList[apiInfo.ApiName]
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		limiter.Do(func() {
-			defer wg.Done()
-			response, err = sendRegisterRequest(apiUrl)
-		})
-
-		wg.Wait()
-	} else {
-		response, err = sendRegisterRequest(apiUrl)
-	}
-
-	if err != nil {
-		log.Errorf("Request register api %s response error: %v", apiInfo.ApiName, err)
-		registerInfo.RegisterStatus = constant.RegisterStatusError
-		if response != "" {
-			registerInfo.RawResponse = response
-		} else {
-			registerInfo.RawResponse = err.Error()
-		}
-		return registerInfo, err
-	}
-
-	registerInfo.RawResponse = response
-
-	log.Debugf("Request register api %s with domain %s, response: %s", apiInfo.ApiName, domain, response)
-
-	if strutil.ContainsAny(response, apiInfo.SuccessText) && strutil.ContainsAny(response, apiInfo.FailText) {
-		log.Errorf("Request register api %s with domain %s, response both contains success and fail text", apiInfo.ApiName, domain)
-		registerInfo.RegisterStatus = constant.RegisterStatusError
-		return registerInfo, fmt.Errorf("%w: %s", ErrorCustomizeApiRegisterResult, domain)
-	} else if strutil.ContainsAny(response, apiInfo.SuccessText) {
-		log.Debugf("Request register api %s with domain %s, response contains all success text", apiInfo.ApiName, domain)
-		registerInfo.RegisterStatus = constant.RegisterStatusSuccess
-	} else if strutil.ContainsAny(response, apiInfo.FailText) {
-		log.Debugf("Request register api %s with domain %s, response contains all fail text", apiInfo.ApiName, domain)
-		registerInfo.RegisterStatus = constant.RegisterStatusFailed
-	} else {
-		log.Errorf("Request register api %s with domain %s, response not contains success or fail text", apiInfo.ApiName, domain)
-		registerInfo.RegisterStatus = constant.RegisterStatusError
-		// registerInfo.RawResponse = fmt.Sprintf("Request register api %s with domain %s, response not contains success or fail text", apiInfo.ApiName, domain)
-		return registerInfo, fmt.Errorf("%w: %s", ErrorCustomizeApiRegisterResult, domain)
-	}
-
-	return registerInfo, nil
-}
-
-func sendRegisterRequest(apiUrl string) (string, error) {
-	client := resty.New()
-	client.SetTimeout(defaultRegisterTimeout)
-
-	response, err := client.R().Get(apiUrl)
+func CanonicalTarget(input string) (string, error) {
+	host, err := utils.TrimDomain(input)
 	if err != nil {
 		return "", err
 	}
+	name, err := utils.GetDomainSuffixPlusOne(host)
+	if err != nil || name != host {
+		return "", errors.New("注册只接受完整的可注册域名")
+	}
+	return name, nil
+}
 
-	return response.String(), nil
+func ValidOperationID(id string) bool {
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed != uuid.Nil && parsed.String() == id
+}
+
+func key(domain string) string { return "powerwhois:registration:" + domain }
+
+var claim = redis.NewScript(`
+local result = redis.call('HGET', KEYS[1], ARGV[1])
+if result then return result end
+local pending = redis.call('HGET', KEYS[1], '_pending')
+if pending then return redis.call('HGET', KEYS[1], pending) end
+local recent = redis.call('HGET', KEYS[1], '_recent')
+if recent then
+	local prior = redis.call('HGET', KEYS[1], recent)
+	if prior and tonumber(ARGV[3]) - cjson.decode(prior).started < 900 then return prior end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2], '_pending', ARGV[1])
+return ''
+`)
+
+var finish = redis.NewScript(`
+if redis.call('HGET', KEYS[1], '_pending') ~= ARGV[1] then return 0 end
+local previous = redis.call('HGET', KEYS[1], ARGV[1])
+if not previous or previous ~= ARGV[2] then return 0 end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+if ARGV[4] == '1' then redis.call('HDEL', KEYS[1], '_pending') end
+if ARGV[5] == 'success' then redis.call('HSET', KEYS[1], '_recent', ARGV[1]) end
+return 1
+`)
+
+func Register(ctx context.Context, store *redis.Client, domain, operationID string, provider config.RegisterApi) RegisterInfo {
+	info := RegisterInfo{DomainName: domain, RegisterType: provider.ApiName, OperationID: operationID, RegisterStatus: constant.RegisterStatusError}
+	name, err := CanonicalTarget(domain)
+	if err != nil || !ValidOperationID(operationID) || store == nil {
+		info.RawResponse = "注册参数无效或注册记录存储不可用"
+		return info
+	}
+	info.DomainName = name
+	address := strings.ReplaceAll(provider.ApiUrl, "{domain}", url.QueryEscape(name))
+	if _, err := http.NewRequest(http.MethodGet, address, nil); err != nil {
+		info.RawResponse = "注册接口地址无效"
+		return info
+	}
+	release, err := network.Acquire(ctx, "register:"+provider.ApiName, provider.ConcurrencyLimit)
+	if err != nil {
+		info.RawResponse = "注册在提交前中断"
+		return info
+	}
+	defer release()
+
+	entry := record{RegisterInfo: info, Started: time.Now().Unix()}
+	entry.RegisterStatus = submitting
+	initial, _ := json.Marshal(entry)
+	claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	prev, err := claim.Run(claimCtx, store, []string{key(name)}, operationID, initial, entry.Started).Text()
+	cancel()
+	if err != nil {
+		info.RegisterStatus, info.RawResponse = constant.RegisterStatusUnknown, "无法确认操作记录，提交已停止，请核对后重试"
+		return info
+	}
+	if prev != "" {
+		if err := json.Unmarshal([]byte(prev), &entry); err != nil {
+			info.RegisterStatus, info.RawResponse = constant.RegisterStatusUnknown, "注册记录不可读，请先核对注册商"
+			return info
+		}
+		if entry.RegisterStatus == submitting {
+			entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusUnknown, "已有注册操作，请先核对注册商"
+		}
+		return entry.RegisterInfo
+	}
+
+	if ctx.Err() != nil {
+		entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusFailed, "注册在首次提交前中断"
+	} else {
+		// Once accepted, collect and save the outcome even if the browser disconnects.
+		callCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
+		req, _ := http.NewRequestWithContext(callCtx, http.MethodGet, address, nil)
+		req.Header.Set("Idempotency-Key", operationID+":"+name)
+		body, status, err := network.ReadResponse(registrarClient, req)
+		stop()
+		entry.RegisterStatus, entry.RawResponse = classify(body, status, err, provider)
+	}
+
+	final, _ := json.Marshal(entry)
+	finishCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer stop()
+	unlock := 0
+	if entry.RegisterStatus != constant.RegisterStatusUnknown {
+		unlock = 1
+	}
+	saved, err := finish.Run(finishCtx, store, []string{key(name)}, operationID, initial, final, unlock, entry.RegisterStatus).Int()
+	if err != nil || saved != 1 {
+		entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusUnknown, "无法保存结果，请先用操作编号核对注册商"
+	}
+	log.Infof("Registration operation %s for %s: %s", operationID, name, entry.RegisterStatus)
+	return entry.RegisterInfo
+}
+
+func classify(body string, status int, err error, provider config.RegisterApi) (string, string) {
+	if err != nil || status < 200 || status >= 300 {
+		return constant.RegisterStatusUnknown, "注册接口未返回可确认的结果，请先核对注册商"
+	}
+	ok := strutil.ContainsAny(body, provider.SuccessText)
+	failed := strutil.ContainsAny(body, provider.FailText)
+	switch {
+	case ok && !failed:
+		return constant.RegisterStatusSuccess, "注册商返回了配置的成功标记"
+	case failed && !ok:
+		return constant.RegisterStatusFailed, "注册商返回了配置的失败标记"
+	default:
+		return constant.RegisterStatusUnknown, "注册接口未返回唯一状态，请先核对注册商"
+	}
+}
+
+func Reconcile(ctx context.Context, store *redis.Client, domain, operationID, outcome string) (RegisterInfo, error) {
+	name, err := CanonicalTarget(domain)
+	if err != nil || !ValidOperationID(operationID) || store == nil ||
+		(outcome != constant.RegisterStatusSuccess && outcome != constant.RegisterStatusFailed) {
+		return RegisterInfo{}, ErrReconcile
+	}
+	previous, err := store.HGet(ctx, key(name), operationID).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return RegisterInfo{}, ErrReconcile
+	}
+	if err != nil {
+		return RegisterInfo{}, err
+	}
+	var entry record
+	if err := json.Unmarshal(previous, &entry); err != nil {
+		return RegisterInfo{}, err
+	}
+	if entry.RegisterStatus != constant.RegisterStatusUnknown &&
+		(entry.RegisterStatus != submitting || time.Since(time.Unix(entry.Started, 0)) < 30*time.Second) {
+		return RegisterInfo{}, ErrReconcile
+	}
+	entry.RegisterStatus, entry.RawResponse = outcome, "管理员已向注册商核对结果"
+	entry.Started = time.Now().Unix()
+	final, _ := json.Marshal(entry)
+	ok, err := finish.Run(ctx, store, []string{key(name)}, operationID, previous, final, 1, entry.RegisterStatus).Int()
+	if err != nil {
+		return RegisterInfo{}, err
+	}
+	if ok != 1 {
+		return RegisterInfo{}, ErrReconcile
+	}
+	log.Infof("Registration operation %s for %s reconciled: %s", operationID, name, outcome)
+	return entry.RegisterInfo, nil
+}
+
+func FindProvider(cfg config.Config, name string) (config.RegisterApi, error) {
+	for _, provider := range cfg.RegisterApis {
+		if provider.ApiName == name {
+			return provider, nil
+		}
+	}
+	return config.RegisterApi{}, errors.New("未找到已配置的注册接口")
 }

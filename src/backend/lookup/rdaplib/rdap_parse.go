@@ -1,14 +1,13 @@
 package rdaplib
 
 import (
-	"fmt"
 	"strings"
+	"time"
 
 	"typonamer/constant"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/utils"
 
-	"github.com/dromara/carbon/v2"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -71,18 +70,22 @@ func getRegistrar(responseEntities []rdap.Entity) string {
 // It loops through the events and checks if the event action is "registration" or "expiration".
 // If the event action is "registration", it sets the creation date to the date of the event.
 // If the event action is "expiration", it sets the expiry date to the date of the event.
-// The dates are parsed using the Carbon library and set to UTC timezone.
+// RDAP timestamps are RFC 3339 and are displayed in UTC.
 // The function returns the creation and expiry dates as a tuple.
 func getDomainDates(responseEvents []rdap.Event) (string, string) {
 	var creationDate, expiryDate string
 	for _, event := range responseEvents {
+		parsed, err := time.Parse(time.RFC3339, event.Date)
+		if err != nil {
+			continue
+		}
 		switch strings.ToLower(event.Action) {
 		case "registration":
 			// Set the creation date to the date of the event
-			creationDate = carbon.SetTimezone(carbon.UTC).Parse(event.Date).ToDateTimeString()
+			creationDate = parsed.UTC().Format(time.DateTime)
 		case "expiration":
 			// Set the expiry date to the date of the event
-			expiryDate = carbon.SetTimezone(carbon.UTC).Parse(event.Date).ToDateTimeString()
+			expiryDate = parsed.UTC().Format(time.DateTime)
 		}
 	}
 	return creationDate, expiryDate
@@ -100,18 +103,4 @@ func getNameServer(responseNameservers []rdap.Nameserver) []string {
 	}
 
 	return slice.Map(nameServers, utils.LowerString)
-}
-
-// getWhoisStyleRawResponse takes the response and returns the raw response in whois style.
-// It loops through the http responses and appends the body of each http response to the raw response.
-// The function returns the raw response in whois style.
-func getWhoisStyleRawResponse(response *rdap.Response) string {
-	whoisStyleResponse := response.ToWhoisStyleResponse()
-	rawResponse := ""
-	for key, value := range whoisStyleResponse.Data {
-		for _, line := range value {
-			rawResponse += fmt.Sprintf("%s: %s\n", key, line)
-		}
-	}
-	return rawResponse
 }

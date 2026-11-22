@@ -1,72 +1,88 @@
 import { useWebSocket } from "@vueuse/core";
-import { getToken } from "./tokenHandler";
+import { getToken, removeToken } from "./tokenHandler";
 import { useBulkStore } from "src/stores/bulkStore";
 import { useWebStore } from "src/stores/webStore";
 import { Notify } from "quasar";
 
-var wsUrl = "/app/ws";
-if (process.env.DEV) {
-    wsUrl = process.env.QENV_API_URL + "/app/ws";
-}
-
-const token = getToken();
-if (token) {
-    wsUrl = wsUrl + "?token=" + token;
-}
-
+const wsUrl = process.env.DEV ? process.env.QENV_API_URL + "/app/ws" : "/app/ws";
 const bulkStore = useBulkStore();
 const webStore = useWebStore();
 
-export const { status, send, open, close } = useWebSocket(wsUrl, {
-    autoReconnect: true,
+const socket = useWebSocket(wsUrl, {
+    autoReconnect: { delay: 2000 },
     heartbeat: {
         message: JSON.stringify({ event: "ping" }),
         responseMessage: JSON.stringify({ event: "pong" }),
-        interval: 60000, //60秒
-        pongTimeout: 5000 //5秒
+        interval: 20000,
+        pongTimeout: 5000
     },
     onConnected: (ws) => {
-        console.log("Connected to websocket server: ", ws.url);
+        const token = getToken();
+        if (token) ws.send(JSON.stringify({ event: "adminAuth", data: token }));
     },
-    onDisconnected: (ws, event) => {
-        console.log("Disconnected from websocket server with code ", event.code, " reason: ", event.reason);
+    onDisconnected: () => {
+        webStore.finishCheck();
+        webStore.finishRegistration();
     },
-    onError: (ws, event) => {
-        console.error("Got error on websocket eventPhase: ", event.eventPhase);
-    },
-    onMessage: (ws, msg) => {
-        const msgObj = JSON.parse(msg.data);
-        switch (msgObj.event) {
+    onMessage: (_ws, msg) => {
+        let message;
+        try {
+            message = JSON.parse(msg.data);
+        } catch {
+            return;
+        }
+        const { event, data } = message;
+        switch (event) {
+            case "adminAuthResult":
+                if (!data) removeToken();
+                break;
             case "bulkCheckInfo":
-                bulkStore.setBulkCheckStatus(msgObj.data.Status);
-                bulkStore.setBulkCheckQueryType(msgObj.data.QueryType);
-                bulkStore.updateBulkCheckInfo(msgObj.data);
+                bulkStore.setBulkCheckStatus(data.Status);
+                bulkStore.setBulkCheckQueryType(data.QueryType);
+                bulkStore.updateBulkCheckInfo(data);
                 break;
             case "webCheckDomains":
-                webStore.setCheckingDomains(msgObj.data, "webCheck", "");
+                webStore.setCheckingDomains(data, "webCheck", "");
                 break;
             case "typoResult":
-                webStore.setCheckingDomains(msgObj.data.domains, "typoCheck", msgObj.data.typoType);
+                webStore.setCheckingDomains(data.domains, "typoCheck", data.typoType);
                 break;
             case "webCheckResult":
-                webStore.updateCheckResult(msgObj.data);
+                webStore.updateCheckResult(data);
+                break;
+            case "webCheckDone":
+                webStore.finishCheck();
                 break;
             case "registerResult":
-                webStore.updateRegisterResult(msgObj.data);
+                webStore.updateRegisterResult(data);
                 break;
-            case "bulkCheckError":
+            case "registerDone":
+                webStore.finishRegistration();
+                break;
             case "webCheckError":
             case "typoCheckError":
+                webStore.finishCheck();
+                notifyError(data);
+                break;
             case "registerError":
-                Notify.create({
-                    position: "top",
-                    type: "negative",
-                    message: "错误: " + msgObj.data,
-                    progress: true,
-                    timeout: 10000,
-                    actions: [{ label: "确定", color: "white" }]
-                });
+                webStore.finishRegistration(true);
+                notifyError(data);
+                break;
+            case "bulkCheckError":
+                notifyError(data);
                 break;
         }
     }
 });
+
+export const { status, open, close } = socket;
+
+export function send(data) {
+    if (socket.status.value === "OPEN" && socket.send(data, false)) return true;
+    notifyError("连接中断，请重连后再操作");
+    return false;
+}
+
+function notifyError(message) {
+    Notify.create({ position: "top", type: "negative", message, timeout: 10000 });
+}

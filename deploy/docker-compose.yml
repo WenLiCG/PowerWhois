@@ -1,62 +1,55 @@
 services:
   caddy:
-    container_name: caddy
-    image: caddy:2
+    image: caddy:2.11.9-alpine
     ports:
-      - 8080:8080
-    links:
-      - typonamer
+      - "127.0.0.1:8080:8080"
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-      - ./frontend:/typonamer
-    environment:
-      - TZ=Asia/Shanghai
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend:/typonamer:ro
     depends_on:
       - typonamer
-    restart: always
+    restart: unless-stopped
     logging:
       options:
         max-size: "10m"
-        max-file: "10"
+        max-file: "5"
 
   typonamer:
-    container_name: typonamer
-    image: golang:1
-    command: /typonamer/typonamer
+    build: ./backend
+    user: "${POWERWHOIS_UID:-1000}:${POWERWHOIS_GID:-1000}"
     volumes:
       - ./backend:/typonamer
-    links:
-      - redis
     environment:
-      - TZ=Asia/Shanghai
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      # Required. The process exits if either value is empty.
-      # Changing POWERWHOIS_JWT_SECRET invalidates tokens already issued.
-      - POWERWHOIS_ADMIN_PASSWORD
-      - POWERWHOIS_JWT_SECRET
-      # Leave APP_TUNING unset unless /api/tuning should be exposed.
-      # That route still requires an admin token.
+      TZ: Asia/Shanghai
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      POWERWHOIS_LISTEN: "0.0.0.0:8080"
+      POWERWHOIS_ADMIN_PASSWORD: "${POWERWHOIS_ADMIN_PASSWORD:?set POWERWHOIS_ADMIN_PASSWORD}"
+      POWERWHOIS_JWT_SECRET: "${POWERWHOIS_JWT_SECRET:?set POWERWHOIS_JWT_SECRET}"
     depends_on:
-      - redis
-    restart: always
+      redis:
+        condition: service_healthy
+    stop_grace_period: 20s
+    restart: unless-stopped
     logging:
       options:
         max-size: "10m"
-        max-file: "10"
+        max-file: "5"
 
   redis:
-    image: redis:7
-    container_name: redis
+    image: redis:7.4.12-alpine
     command: redis-server /usr/local/etc/redis/redis.conf
     volumes:
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - ./redis/redisdata:/data
-    environment:
-      - TZ=Asia/Shanghai
-    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
     logging:
       options:
         max-size: "10m"
-        max-file: "10"
+        max-file: "5"

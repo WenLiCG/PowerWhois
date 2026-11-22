@@ -13,9 +13,9 @@
 
 
 ## 功能介绍
-1. 除了网页查询，支持批量查询域名，测试上传了100w域名没有问题，而且速度巨快
+1. 支持网页查询和批量文件检查，批量任务可暂停、恢复与导出 CSV。
 2. 网页查询的结果点击后会弹出原始whois信息
-3. 支持所有的后缀，部分只能使用DNS模式，所以少部分被注册商保留的域名可能不准确，但应该极少
+3. 支持 RDAP、WHOIS 和 DNS。覆盖范围取决于注册局，DNS 仅提供委派证据。
 4. 支持设置代理，并可以针对不同的后缀设置代理
 5. 新增Mix模式，此模式下针对不同的后缀可以自由设置直连，代理，或者DNS扫描
 6. 支持typo生成
@@ -41,140 +41,37 @@
     └── Makefile
 ```
 
-# 部署
+# 部署与升级
 
-## 服务器依赖
+1. 从对应提交的 GitHub Actions 下载 `PowerWhois-linux`，或用下方命令打包。分别提供 Linux `amd64` 与 `arm64`。用 `sha256sum -c PowerWhois-linux-<架构>-<提交>.tar.gz.sha256` 校验下载，再解压。
+2. 新安装在解压得到的 `deploy` 中设置 `POWERWHOIS_ADMIN_PASSWORD` 和 `POWERWHOIS_JWT_SECRET`。可导出环境变量，或使用仅部署用户可读的 Compose `.env`。默认会话有效期一天，更换 JWT 密钥会使旧令牌失效。
+3. 默认应用以 UID/GID 1000 运行。使该用户可读写 `deploy/backend` 和 `config.yaml`，也可设置 `POWERWHOIS_UID`、`POWERWHOIS_GID` 使用现有部署用户。服务端配置更新通过在同目录安全替换文件完成。
+4. 在宿主机 Nginx 的 `http` 配置中引入 `deploy/nginx/typonamer.conf`，替换域名和证书路径，执行 `nginx -t`。Caddy 的发布端口绑定在宿主机 `127.0.0.1:8080`，由 Nginx 对外终止 TLS。
+5. 进入 `deploy` 执行 `docker compose up -d --build`。通过配置的 HTTPS 域名访问。
 
-- docker
+升级前先备份当前二进制、前端、配置和 Redis 数据，记录现网正在运行的提交。替换二进制及静态目录，按需合并代理配置；沿用原安装的配置文件与 Redis 数据目录。此分支兼容 GitHub main 原单任务 Redis 键。使用过本地多任务版或其他数据格式时，应先在隔离实例核对迁移。应用服务适合一个进程独占一套批量任务键。
 
-## 上传文件
+## 操作语义
 
-将 deploy 文件夹中的内容原样上传到服务器中
+- 网页允许匿名直连 WHOIS、RDAP、DNS 和 Mix。付费代理和自定义接口需要管理员身份。网页连接每次处理一批，默认查询并发 15，网页每批条数由服务端配置控制。
+- “未找到”来自注册信息查询。DNS 无委派显示“证据不足”，注册局保留会单独显示。购买前仍需由注册商确认。
+- 注册确认会生成操作编号。连接中断或上游返回不确定时，可以凭编号向注册商核对，再通过结果页面记录明确的成功或失败。留存记录由 Redis 持久化。
+- 批量上传支持 UTF-8 文本，每行一个域名或 HTTP(S) URL。上限 100 MiB、100 万行。暂停和取消在 worker 结束后显示终态。CSV 按首次出现顺序导出已保存行。
 
-## 配置
+# 开发与打包
 
-- 在`deploy/backend/config.yaml`中设置`AuthUsername`，这是管理员用户名。不要把管理员口令或 JWT 签名密钥写进该文件。启动后端之前，在环境变量中设置`POWERWHOIS_ADMIN_PASSWORD`和`POWERWHOIS_JWT_SECRET`。任一变量缺失时，进程拒绝启动。更换`POWERWHOIS_JWT_SECRET`会使已经签发的令牌失效。本仓库不会替你轮换现有密钥。除非确实要暴露`/api/tuning`，否则不要设置`APP_TUNING`；该路径与其他管理接口一样，需要管理员令牌。
+需要 Go 1.27.4、Node 22、Yarn 1.22.22 和 Linux 工具链。
 
-- 将 Nginx 配置文件`deploy/nginx/typonamer.conf`中 443 端口和 80 端口的`server_name`修改为真实的目标域名。
-
-- 将 Nginx 配置文件`deploy/nginx/typonamer.conf`中 443 端口的`ssl_certificate`路径和`ssl_certificate_key`路径修改为真实的目标证书路径和密钥路径。
-
-- 将 Nginx 配置文件`deploy/nginx/typonamer.conf`中 443 端口的`root`路径修改为前端文件夹`deploy/frontend`在主机上的真实绝对路径。
-
-- 将 Nginx 配置文件`deploy/nginx/typonamer.conf`复制到主机 Nginx 的配置目录中，主机的 Nginx 的配置目录一般为`/etc/nginx/conf.d/`
-更新一个宝塔的配置文件,直接把`testdomain.net`换成你域名就可以
-```
-server {
-    listen 443 ssl http2;
-
-    server_name testdomain.net;  # 修改为真实的域名
-
-    charset UTF-8;
-    client_max_body_size 100M;
-    keepalive_timeout    75s;
-    keepalive_requests   100;
-
-    ssl_certificate    /www/server/panel/vhost/cert/testdomain.net/fullchain.pem;
-    ssl_certificate_key    /www/server/panel/vhost/cert/testdomain.net/privkey.pem;
-
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:MozSSL:10m;
-    ssl_session_tickets off;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
-    ssl_prefer_server_ciphers off;
-    add_header Strict-Transport-Security "max-age=63072000" always;
-    ssl_stapling on;
-    ssl_stapling_verify on;
-
-    location ~ ^/(api|app) {
-        proxy_redirect off;
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-Ip $proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For $proxy_protocol_addr;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-
-    location / {
-        root /www/wwwroot/testdomain.net;  # 修改为前端文件夹路径
-        try_files $uri $uri/ /index.html
-        index index.html index.htm;
-    }
-}
-
-server {
-    listen       80;
-    server_name  testdomain.net;  # 修改为真实的域名
-
-    location / {
-        return 301 https://$host$request_uri;
-    }
-}
+```bash
+make -C src setup
+(cd src/backend && go test -race ./... && go vet ./...)
+(cd src/frontend && yarn lint && yarn test)
+make -C src package GOARCH=amd64
 ```
 
-## 部署
+打包在已提交的源码检出中运行，产物写到 `dist/`，包含版本、校验文件和完整的 `deploy` 目录。CI 同时构建 arm64 包。`make -C src all` 可将本地构建写入 `deploy` 目录，用于开发验证。
 
-- 安装docker
-- PowerWhois/deploy/frontend 内容复制到网站根目录
-- cd 到服务器中的 deploy 目录
-- 执行命令：`docker compose up -d`
-- 重启主机上的 Nginx：`sudo systemctl restart nginx`
-- 访问网站，例如：`https://typonamer.example.com`
-
-# 开发
-
-## 后端
-
-后端程序是用 Golang 语言开发，Web 框架使用的是 Gofiber。
-
-### 依赖
-
-- Golang 1.23+
-
-## 前端
-
-前端程序使用 Vue3 开发，UI 框架使用的是 Quasar 2。
-
-### 依赖
-
-- Nodejs v20+
-- yarn 1.22+
-
-### 初始化
-
-```
-cd src/frontend
-yarn
-quasar dev
-```
-
-## 编译
-
-项目源码目录中已编写好`src/Makefile`文件，在 Linux 中安装好后端依赖、前端依赖以及`make`命令之后即可开始编译。编译后的输出会自动替换 deploy 目录下 backend 和 frontend 中的内容，需要手动将编译后的新文件上传到服务器中替换旧的服务器文件，然后重启容器后生效。
-
-### 单独编译后端代码
-
-```
-cd src/
-make backend
-```
-
-### 单独编译前端代码
-
-```
-cd src/
-make frontend
-```
-
-### 同时编译前端和后端代码
-
-```
-cd src/
-make all
-```
+原生运行默认监听 `127.0.0.1:8080`，读取与程序同目录的 `config.yaml`。通过 `POWERWHOIS_LISTEN`、`POWERWHOIS_CONFIG` 覆盖，Redis 可用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB`、`REDIS_USERNAME`、`REDIS_PASSWORD`。前端使用跨源开发服务器时，设置 `POWERWHOIS_WEB_ORIGIN` 为具体的客户端 Origin。`POWERWHOIS_TRUSTED_PROXIES` 接受以空格分隔的可信代理地址或网段。
 
 ## 贡献
 

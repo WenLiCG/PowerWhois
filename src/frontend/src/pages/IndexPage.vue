@@ -61,10 +61,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useQuasar } from "quasar";
 import { api } from "boot/axios";
-import { removeToken } from "src/utils/tokenHandler";
+import { getToken, removeToken } from "src/utils/tokenHandler";
 import { close } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useSettingStore } from "src/stores/settingStore";
@@ -90,7 +90,17 @@ function loginedUpdate() {
 
 function logout() {
     removeToken();
-    tab.value = "webCheck";
+}
+
+watch(() => tokenStore.token, (token, previous) => {
+    if (!token && previous) {
+        close();
+        location.reload();
+    }
+});
+
+function onStorage(event) {
+    if (event.key === "token" && !event.newValue && getToken()) removeToken();
 }
 
 function getWebSettings() {
@@ -107,7 +117,7 @@ function getWebSettings() {
             }
         })
         .catch((error) => {
-            console.error("Get settings error: ", error);
+            console.error("Could not read public settings");
             $q.notify({
                 position: "top",
                 type: "negative",
@@ -118,9 +128,11 @@ function getWebSettings() {
 
 onMounted(() => {
     getWebSettings();
+    window.addEventListener("storage", onStorage);
 });
 
 onBeforeUnmount(() => {
+    window.removeEventListener("storage", onStorage);
     close();
 });
 </script>

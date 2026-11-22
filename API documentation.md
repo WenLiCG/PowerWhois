@@ -72,13 +72,14 @@ POST /api/login
 {
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制
   "typoDefaultCcTlds": ["com", "net", "org", "com.cn"], // string[]: 默认选中的顶级域名列表
-  "registerApis": ["test"], // string[]: 注册API列表
+  "registerApis": [], // string[]: 游客为空，管理员可见接口名称
   "whoisApis": [] // string[]: Whois API列表
 }
 ```
 
 #### 获取管理员配置
 
+响应不包含环境密码和 JWT 签名密钥。代理密码与接口 URL 在响应中固定为空。保存时留空表示保留旧值，接口名称变更或新建接口时需填写 URL。
 **请求头**：
 
 - `Authorization`: Bearer {JWT 令牌}
@@ -89,7 +90,6 @@ POST /api/login
 {
   "logLevel": "Info", // string: 日志等级，可选值：Error, Warn, Info, Debug, Off
   "authUsername": "admin", // string: 认证用户名
-  "authPassword": "123456", // string: 认证密码
   "authExpireDays": 30, // int: 认证过期天数
   "whoisTimeout": 5, // int: whois查询超时时间(秒)
   "dnsTimeout": 3, // int: DNS查询超时时间(秒)
@@ -103,7 +103,7 @@ POST /api/login
   "socketProxyPort": 1080, // int: 代理服务器端口
   "socketProxyAuth": false, // bool: 代理服务器是否需要认证
   "socketProxyUser": "test", // string: 代理服务器用户名
-  "socketProxyPassword": "123456", // string: 代理服务器密码
+  "socketProxyPassword": "", // string: 代理服务器密码
   "bulkCheckConcurrencyLimit": 100, // int: 批量检查并发限制
   "webCheckConcurrencyLimit": 10, // int: 网页检查并发限制
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制
@@ -147,7 +147,7 @@ POST /api/login
     // array: 注册API配置
     {
       "apiName": "test", // string: API名称
-      "apiUrl": "http://192.168.1.1:8080/{domain}", // string: API地址
+      "apiUrl": "", // string: API地址
       "successText": ["ok"], // string[]: 成功响应文本
       "failText": ["failed"], // string[]: 失败响应文本
       "concurrencyLimit": 1 // int: 并发限制
@@ -157,7 +157,7 @@ POST /api/login
     // array: Whois API配置
     {
       "apiName": "test", // string: API名称
-      "apiUrl": "http://192.168.1.1:8080/{domain}", // string: API地址
+      "apiUrl": "", // string: API地址
       "FreeText": ["free"], // string[]: 未注册匹配文本
       "TakenText": ["taken"], // string[]: 已注册匹配文本
       "concurrencyLimit": 1 // int: 并发限制
@@ -260,7 +260,6 @@ POST /api/login
 {
   "logLevel": "Info", // string: 日志等级，可选值：Error, Warn, Info, Debug, Off
   "authUsername": "admin", // string: 认证用户名
-  "authPassword": "123456", // string: 认证密码
   "authExpireDays": 30, // int: 认证过期天数
   "whoisTimeout": 5, // int: whois查询超时时间(秒)
   "dnsTimeout": 3, // int: DNS查询超时时间(秒)
@@ -274,7 +273,7 @@ POST /api/login
   "socketProxyPort": 1080, // int: 代理服务器端口
   "socketProxyAuth": false, // bool: 代理服务器是否需要认证
   "socketProxyUser": "test", // string: 代理服务器用户名
-  "socketProxyPassword": "123456", // string: 代理服务器密码
+  "socketProxyPassword": "", // string: 代理服务器密码
   "bulkCheckConcurrencyLimit": 100, // int: 批量检查并发限制
   "webCheckConcurrencyLimit": 10, // int: 网页检查并发限制
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制
@@ -318,7 +317,7 @@ POST /api/login
     // array: 注册API配置
     {
       "apiName": "test", // string: API名称
-      "apiUrl": "http://192.168.1.1:8080/{domain}", // string: API地址
+      "apiUrl": "", // string: API地址
       "successText": ["ok"], // string[]: 成功响应文本
       "failText": ["failed"], // string[]: 失败响应文本
       "concurrencyLimit": 1 // int: 并发限制
@@ -328,7 +327,7 @@ POST /api/login
     // array: Whois API配置
     {
       "apiName": "test", // string: API名称
-      "apiUrl": "http://192.168.1.1:8080/{domain}", // string: API地址
+      "apiUrl": "", // string: API地址
       "FreeText": ["free"], // string[]: 未注册匹配文本
       "TakenText": ["taken"], // string[]: 已注册匹配文本
       "concurrencyLimit": 1 // int: 并发限制
@@ -339,10 +338,7 @@ POST /api/login
 
 ## WebSocket API
 
-WebSocket 连接地址：
-
-- 公共连接地址：`/app/ws`
-- 管理员连接地址：`/app/ws?token={JWT 令牌}`
+连接地址为 `/app/ws`。管理员在连接后发送 `adminAuth`，令牌通过消息传递。到期后管理操作失效。客户端应定期发送 `ping`，并在退出时关闭连接。
 
 ### 连接建立
 
@@ -378,6 +374,9 @@ WebSocket 连接建立后，客户端和服务器可以使用消息事件进行�
 | 事件名称          | 描述             |
 | ----------------- | ---------------- |
 | `pong`            | 心跳响应         |
+| `adminAuthResult` | 认证结果或会话到期 |
+| `webCheckDone`    | 网页或 Typo 查询结束 |
+| `registerDone`    | 注册队列执行结束 |
 | `webCheckDomains` | 网页检查域名列表 |
 | `webCheckResult`  | 网页检查结果     |
 | `typoResult`      | Typo 检查结果    |
@@ -399,7 +398,7 @@ WebSocket 连接建立后，客户端和服务器可以使用消息事件进行�
 }
 ```
 
-**响应**：无显式响应，认证后可使用管理员功能
+响应事件 `adminAuthResult` 的 `data` 为布尔值。重新连接后需要再次认证。
 
 ### 批量检查操作
 
@@ -435,7 +434,7 @@ WebSocket 连接建立后，客户端和服务器可以使用消息事件进行�
     "TotalDomains": 0, // int: 去重域名数量
     "RemainDomains": 0, // int: 未检查域名数量
     "TakenDomains": 0, // int: 已注册域名数量
-    "FreeDomains": 0, // int: 可注册域名数量
+    "FreeDomains": 0, // int: 未找到注册记录的域名数
     "ErrorDomains": 0 // int: 错误域名数量
   }
 }
@@ -508,6 +507,7 @@ WebSocket 连接建立后，客户端和服务器可以使用消息事件进行�
 
 ### 网页检查操作
 
+游客可用 `whoisQuery`、`dnsQuery`、`mixedQuery`。代理和自定义接口只对管理员开放。单条 WS 消息最大 1 MiB，每个连接同时处理一个网页或 Typo 查询。
 **请求**：
 
 ```json
@@ -585,6 +585,8 @@ typo 类型可以是：
 
 ### 域名注册操作
 
+同一次确认复用同一操作编号。服务器按规范域名去重并在 Redis 保存结果。遇到 `outcome_unknown` 时先向注册商核对。已核实后使用 `PUT /api/admin/registration/{operationId}`，携带管理员 Bearer 令牌及 JSON `{"domain":"example.com","outcome":"failed"}`，`outcome` 也可为 `success`。
+
 **请求**：
 
 ```json
@@ -592,6 +594,7 @@ typo 类型可以是：
   "event": "register",
   "data": {
     "registerType": "注册类型", // string: 注册类型
+    "operationId": "11111111-1111-4111-8111-111111111111", // 每次确认生成 UUID，重试同一次确认时复用
     "domains": ["域名1", "域名2"] // string[]: 要注册的域名列表
   }
 }
@@ -604,8 +607,9 @@ typo 类型可以是：
   "event": "registerResult",
   "data": {
     "registerType": "注册类型", // string: 注册类型
+    "operationId": "11111111-1111-4111-8111-111111111111", // 每次确认生成 UUID，重试同一次确认时复用
     "domainName": "域名", // string: 域名
-    "registerStatus": "注册状态", // string: 注册状态，可选值：success, failed, error
+    "registerStatus": "注册状态", // string: 注册状态，可选值：success, failed, error, outcome_unknown
     "rawResponse": "原始响应" // string: 原始响应内容
   }
 }
@@ -679,6 +683,7 @@ typo 类型可以是：
 ```json
 {
   "registerType": "string", // 注册类型
+  "operationId": "UUID", // 操作编号
   "domains": ["string"] // 域名列表
 }
 ```
@@ -688,8 +693,9 @@ typo 类型可以是：
 ```json
 {
   "registerType": "string", // 注册类型
+  "operationId": "UUID", // 操作编号
   "domainName": "string", // 域名
-  "registerStatus": "string", // 注册状态，可选值：success, failed, error
+  "registerStatus": "string", // 注册状态，可选值：success, failed, error, outcome_unknown
   "rawResponse": "string" // 原始响应内容
 }
 ```
@@ -703,7 +709,7 @@ typo 类型可以是：
   "TotalDomains": 0, // 总域名数量
   "RemainDomains": 0, // 剩余未检查域名数量
   "TakenDomains": 0, // 已注册域名数量
-  "FreeDomains": 0, // 可注册域名数量
+  "FreeDomains": 0, // 未找到注册记录的域名数
   "ErrorDomains": 0 // 错误域名数量
 }
 ```
@@ -713,7 +719,9 @@ typo 类型可以是：
 ### 域名注册状态
 
 - `Taken`: 已被注册
-- `Free`: 可注册
+- `Free` 为查询来源未找到注册记录或供应商明确报告可用，交易由注册商确认。
+- `Unknown` 为证据不足，包含 DNS 无委派。
+- `Reserved` 为注册局保留。
 - `Error`: 查询错误
 
 ### 域名状态

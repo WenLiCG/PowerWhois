@@ -30,25 +30,6 @@
 
                 <q-card-section class="row q-pa-sm">
                     <q-item class="col-4 q-pa-sm">
-                        <q-item-section class="text-right">管理员密码</q-item-section>
-                    </q-item>
-                    <q-item class="col-8 q-pa-sm">
-                        <q-item-section>
-                            <q-input
-                                type="password"
-                                outlined
-                                dense
-                                round
-                                item-aligned
-                                v-model="settings.authPassword"
-                                :rules="[$rules.required('请输入管理员密码')]"
-                            />
-                        </q-item-section>
-                    </q-item>
-                </q-card-section>
-
-                <q-card-section class="row q-pa-sm">
-                    <q-item class="col-4 q-pa-sm">
                         <q-item-section class="text-right">登录有效期</q-item-section>
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
@@ -372,13 +353,13 @@
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section>
                             <q-input
-                                type="text"
+                                type="password"
                                 outlined
                                 dense
                                 round
                                 item-aligned
                                 v-model="settings.socketProxyPassword"
-                                :rules="[$rules.required('请设置Socks代理密码')]"
+                                placeholder="留空保留现有密码"
                             />
                         </q-item-section>
                     </q-item>
@@ -561,7 +542,7 @@
                         <tbody>
                             <tr v-for="apiItem in settings.registerApis" :key="apiItem.apiName">
                                 <td class="text-center">{{ apiItem.apiName }}</td>
-                                <td class="text-left">{{ apiItem.apiUrl }}</td>
+                                <td class="text-left">{{ apiItem.apiUrl ? "待保存" : "已配置" }}</td>
                                 <td class="text-center">{{ apiItem.concurrencyLimit }}</td>
                                 <td class="text-center q-gutter-sm">
                                     <q-btn color="primary" size="sm" icon="edit" label="修改" @click="openUpdateRegisterApiDialog(apiItem)" />
@@ -609,7 +590,7 @@
                         <tbody>
                             <tr v-for="apiItem in settings.whoisApis" :key="apiItem.apiName">
                                 <td class="text-center">{{ apiItem.apiName }}</td>
-                                <td class="text-left">{{ apiItem.apiUrl }}</td>
+                                <td class="text-left">{{ apiItem.apiUrl ? "待保存" : "已配置" }}</td>
                                 <td class="text-center">{{ apiItem.concurrencyLimit }}</td>
                                 <td class="text-center q-gutter-sm">
                                     <q-btn color="primary" size="sm" icon="edit" label="修改" @click="openUpdateWhoisApiDialog(apiItem)" />
@@ -676,10 +657,10 @@
                                         dense
                                         hide-bottom-space
                                         v-model="inputRegisterApiData.apiUrl"
-                                        type="textarea"
-                                        placeholder="在URL中使用{domain}作为占位符将会被替换为目标域名"
+                                        type="password"
+                                        placeholder="包含 {domain} 的 URL，同名接口留空保留"
                                         lazy-rules
-                                        :rules="[$rules.required('请设置API URL')]"
+                                        :rules="[(value) => (updateRegisterApiItem.apiName && updateRegisterApiItem.apiName === inputRegisterApiData.apiName) || !!value || '请输入 URL']"
                                     />
                                 </td>
                             </tr>
@@ -805,10 +786,10 @@
                                         dense
                                         hide-bottom-space
                                         v-model="inputWhoisApiData.apiUrl"
-                                        type="textarea"
-                                        placeholder="在URL中使用{domain}作为占位符将会被替换为目标域名"
+                                        type="password"
+                                        placeholder="包含 {domain} 的 URL，同名接口留空保留"
                                         lazy-rules
-                                        :rules="[$rules.required('请设置API URL')]"
+                                        :rules="[(value) => (updateWhoisApiItem.apiName && updateWhoisApiItem.apiName === inputWhoisApiData.apiName) || !!value || '请输入 URL']"
                                     />
                                 </td>
                             </tr>
@@ -1009,8 +990,7 @@ function getSettings() {
             }
         })
         .catch((error) => {
-            console.error("Get settings error: ", error);
-            this.$q.notify({
+             $q.notify({
                 position: "top",
                 type: "negative",
                 message: "获取数据失败"
@@ -1201,15 +1181,15 @@ function openUpdateRegisterApiDialog(apiItem) {
     updateRegisterApiItem.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        successText: apiItem.successText,
-        failText: apiItem.failText,
+        successText: [...(apiItem.successText || [])],
+        failText: [...(apiItem.failText || [])],
         concurrencyLimit: apiItem.concurrencyLimit
     };
     inputRegisterApiData.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        successText: apiItem.successText,
-        failText: apiItem.failText,
+        successText: [...(apiItem.successText || [])],
+        failText: [...(apiItem.failText || [])],
         concurrencyLimit: apiItem.concurrencyLimit
     };
 }
@@ -1317,15 +1297,15 @@ function openUpdateWhoisApiDialog(apiItem) {
     updateWhoisApiItem.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        freeText: apiItem.freeText,
-        takenText: apiItem.takenText,
+        freeText: [...(apiItem.freeText || [])],
+        takenText: [...(apiItem.takenText || [])],
         concurrencyLimit: apiItem.concurrencyLimit
     };
     inputWhoisApiData.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        freeText: apiItem.freeText,
-        takenText: apiItem.takenText,
+        freeText: [...(apiItem.freeText || [])],
+        takenText: [...(apiItem.takenText || [])],
         concurrencyLimit: apiItem.concurrencyLimit
     };
 }
@@ -1427,14 +1407,15 @@ function onSubmit() {
                         message: "配置参数保存成功"
                     });
                     submitting.value = false;
+                    settings.value.socketProxyPassword = "";
+                    for (const item of [...(settings.value.registerApis || []), ...(settings.value.whoisApis || [])]) item.apiUrl = "";
                     settingStore.updateSetting(response.data);
                 })
                 .catch((error) => {
-                    console.error("Update settings error: ", error);
                     $q.notify({
                         position: "top",
                         type: "negative",
-                        message: "配置参数保存失败, 请检查服务端日志"
+                        message: error.response?.status === 400 ? error.response.data : "配置参数保存失败，请检查服务端日志"
                     });
                     submitting.value = false;
                 });

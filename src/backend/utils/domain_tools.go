@@ -2,46 +2,22 @@ package utils
 
 import (
 	"errors"
-	"fmt"
+	"golang.org/x/net/idna"
+	"golang.org/x/net/publicsuffix"
+	"net"
+	"net/url"
 	"strings"
 
-	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
 )
 
-var replaces = map[string]string{
-	"~":  "",
-	"!":  "",
-	"@":  "",
-	"#":  "",
-	"$":  "",
-	"%":  "",
-	"^":  "",
-	"&":  "",
-	"*":  "",
-	"(":  "",
-	")":  "",
-	"_":  "",
-	"+":  "",
-	"=":  "",
-	"[":  "",
-	"]":  "",
-	"{":  "",
-	"}":  "",
-	"\\": "",
-	"|":  "",
-	":":  "",
-	";":  "",
-	"'":  "",
-	"`":  "",
-	"<":  "",
-	">":  "",
-	",":  "",
-	"/":  "",
-	"?":  "",
-}
-
-// var specialTreatmentDomain = []string{"gov.hu", "com.be", "gov.se"}
+var domainSuffixSet = func() map[string]bool {
+	set := make(map[string]bool, len(DomainSuffixes))
+	for _, suffix := range DomainSuffixes {
+		set[suffix] = true
+	}
+	return set
+}()
 
 // TrimAndGetMainDomain trims and parses a domain string, and returns the main domain string
 func TrimAndGetMainDomain(domain string) (string, error) {
@@ -59,46 +35,53 @@ func TrimAndGetMainDomain(domain string) (string, error) {
 }
 
 func TrimDomain(domain string) (string, error) {
-	if domain == "" {
-		return "", errors.New("domain is empty")
+	domain = strings.TrimSpace(domain)
+	if strings.Contains(domain, "://") {
+		address, err := url.Parse(domain)
+		if err != nil || (address.Scheme != "https" && address.Scheme != "http") || address.Hostname() == "" || address.User != nil {
+			return "", errors.New("invalid domain URL")
+		}
+		domain = address.Hostname()
 	}
-
-	// remove whitespaces from the domain string
-	domainStr1 := strutil.RemoveWhiteSpace(domain, true)
-	if domainStr1 == "" {
-		return "", errors.New("domain is empty")
+	domain = strings.TrimSuffix(domain, ".")
+	ascii, err := idna.Lookup.ToASCII(domain)
+	if err != nil || len(ascii) > 253 || !strings.Contains(ascii, ".") || net.ParseIP(ascii) != nil {
+		return "", errors.New("invalid domain name")
 	}
-
-	// remove special characters from the domain string
-	domainStr2 := strutil.ReplaceWithMap(domainStr1, replaces)
-	if domainStr2 == "" {
-		return "", errors.New("domain is invalid")
+	ascii = strings.ToLower(strings.TrimSuffix(ascii, "."))
+	for _, label := range strings.Split(ascii, ".") {
+		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", errors.New("invalid domain label")
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return "", errors.New("invalid domain character")
+			}
+		}
 	}
-
-	// convert the domain string to lowercase
-	domainStr3 := strings.ToLower(domainStr2)
-
-	// Trim the domain string to remove "-"
-	domainStr4 := strings.Trim(domainStr3, "-")
-	if strings.Contains(domainStr4, ".") {
-		return domainStr4, nil
-	}
-
-	return "", errors.New("domain is invalid")
+	return ascii, nil
 }
 
 func GetDomainSuffix(domain string) (string, error) {
+	// Use ICANN boundaries for registration; private hosting suffixes are not registries.
+	for candidate := domain; ; {
+		suffix, icann := publicsuffix.PublicSuffix(candidate)
+		if icann {
+			return suffix, nil
+		}
+		dot := strings.IndexByte(candidate, '.')
+		if dot < 0 {
+			break
+		}
+		candidate = candidate[dot+1:]
+	}
 	parts := strutil.SplitAndTrim(domain, ".")
 
-	maxLen := 3
-	if len(parts) < 3 {
-		maxLen = len(parts)
-	}
+	maxLen := len(parts)
 
 	for n := maxLen; n > 0; n-- {
 		suffix := strings.Join(parts[len(parts)-n:], ".")
-		fmt.Println("suffix: ", suffix)
-		if slice.Contain(DomainSuffixes, suffix) {
+		if domainSuffixSet[suffix] {
 			return suffix, nil
 		}
 	}
@@ -116,19 +99,8 @@ func GetDomainSuffixPlusOne(domain string) (string, error) {
 		return "", errors.New("domain is invalid")
 	}
 
-	parts := strutil.SplitAndTrim(domain, fmt.Sprintf(".%s", domainSuffix), ".")
-	if len(parts) == 0 {
-		return "", errors.New("domain is invalid")
-	}
-
-	domainPrefix := parts[0]
-
-	if strings.Contains(domainPrefix, ".") {
-		domainPrefixParts := strutil.SplitAndTrim(domainPrefix, ".")
-		return fmt.Sprintf("%s.%s", domainPrefixParts[len(domainPrefixParts)-1], domainSuffix), nil
-	} else {
-		return fmt.Sprintf("%s.%s", domainPrefix, domainSuffix), nil
-	}
+	prefix := strings.TrimSuffix(domain, "."+domainSuffix)
+	return prefix[strings.LastIndexByte(prefix, '.')+1:] + "." + domainSuffix, nil
 }
 
 func GetTld(domain string) (tld string, suffix string, err error) {

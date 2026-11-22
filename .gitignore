@@ -19,3 +19,13 @@
 
 # Go workspace file
 go.work
+
+# Local build output and installation data
+/dist/
+/deploy/backend/typonamer
+/deploy/backend/logs/
+/deploy/frontend/*
+!/deploy/frontend/.gitkeep
+/deploy/redis/redisdata/*
+!/deploy/redis/redisdata/.gitkeep
+/deploy/.env
