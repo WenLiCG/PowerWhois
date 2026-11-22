@@ -1,5 +1,11 @@
 # PowerWhois 程序员交接文档
 
+## 审查修复（2026-11-22，待独立验证，未合并）
+
+基于 `main@6662f8a`，分支 `pw-cli-impl-20261122` 只在本地提交；作者机器没有 GitHub 凭据，**尚未推送、未创建拉取请求、未合并**。本地 gofmt、go vet、go test -race、前端 lint/test/build 与 Caddy 配置校验通过；本机没有 Redis，6 个 Redis 集成测试被跳过，需看 CI 日志；Compose 未用 Docker 实际校验和启动。完整说明、验证结果、行为变化与合并前检查见 [docs/handoff/2026-11-22-review-fixes.md](docs/handoff/2026-11-22-review-fixes.md)。
+
+要点：后端从右向左解析 `X-Forwarded-For`，只信任可信代理追加的条目，伪造条目无法绕过限流，IPv6 按 /64 限流；Caddy 与后端信任私有代理网段，登录与连接限流按真实客户端计算；匿名访客按公网 IP 限流并使用独立的一半网页并发；查询超时从取得上游名额后开始计时；上游 429 或 WHOIS 限流提示会暂停该上游并重试；批量“重查错误域名”只重查 `Error` 行；批量操作不再阻塞 WebSocket 读循环；新增待核对注册列表、退出登录撤销全部令牌、登录失败改为 401、`/api/v1/check` 集成接口、`/healthz` 与容器标准输出日志。
+
 ## 当前交接（2026-11-22）
 
 本期交付 PowerWhois 的域名查询、批量任务、注册及部署修复。交接分支为 `codex/powerwhois-review-fixes`，基于 GitHub `main@6f7dac40cf2c94d24afa492da0baaeccfbc1d006`。已验收的应用与部署包对应提交 `6551edc7f22ead74081721c9293ecaf4f8a4ae93`。交接文档在该版本之后提交。

@@ -14,9 +14,13 @@ import (
 	"time"
 
 	"typonamer/config"
+	"typonamer/constant"
 	"typonamer/log"
+	"typonamer/lookup/lookuper"
+	"typonamer/lookup/network"
 	"typonamer/register"
 	"typonamer/scheduler"
+	"typonamer/utils"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
@@ -224,4 +228,50 @@ func ReconcileRegistration(client *redis.Client) fiber.Handler {
 		c.Set("Cache-Control", "no-store")
 		return c.JSON(info)
 	}
+}
+
+// PendingRegistrations lists operations that still need administrator review.
+func PendingRegistrations(client *redis.Client) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if client == nil {
+			return fiber.ErrServiceUnavailable
+		}
+		ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+		defer cancel()
+		items, err := register.Pending(ctx, client)
+		if err != nil {
+			log.Error("Could not list pending registrations: ", err)
+			return fiber.ErrInternalServerError
+		}
+		c.Set("Cache-Control", "no-store")
+		return c.JSON(items)
+	}
+}
+
+// CheckDomain is the integration API: one domain per request, authenticated
+// by an API key from POWERWHOIS_API_KEYS. It shares the administrator's
+// lookup modes and the configured web concurrency.
+func CheckDomain(c *fiber.Ctx) error {
+	cfg := config.GetConfig()
+	mode := c.Query("queryType", constant.WhoisQuery)
+	domain, err := utils.TrimAndGetMainDomain(c.Query("domain"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid domain")
+	}
+	if !lookuper.ValidMode(mode, true, cfg) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid queryType")
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 2*time.Minute)
+	defer cancel()
+	release, err := network.Acquire(ctx, "web:api", cfg.WebCheckConcurrencyLimit)
+	if err != nil {
+		return fiber.ErrServiceUnavailable
+	}
+	defer release()
+	result := lookuper.Query(ctx, domain, mode, true, cfg)
+	if c.Query("raw") != "1" {
+		result.RawResponse = ""
+	}
+	c.Set("Cache-Control", "no-store")
+	return c.JSON(result)
 }

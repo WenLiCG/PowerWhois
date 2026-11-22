@@ -2,6 +2,7 @@ package rdaplib
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -76,21 +77,22 @@ func RDAPQuery(ctx context.Context, domain string, servers []*url.URL, useProxy 
 	}
 
 	lastErr := lookuperror.ErrorNotSupportedTld
+	timeout := time.Duration(cfg.WhoisTimeout) * time.Second
 	for _, server := range servers {
-		request := (&rdap.Request{Type: rdap.DomainRequest, Query: domain, Server: server}).URL()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, request.String(), nil)
-		if err != nil {
-			continue
+		slotKey := "rdap:" + server.Hostname()
+		if useProxy {
+			slotKey += "|proxy"
 		}
-		req.Header.Set("Accept", "application/rdap+json, application/json")
-		release, err := network.Acquire(ctx, "rdap:"+server.Hostname(), 4)
-		if err != nil {
-			return info, err
-		}
-		raw, status, err := network.ReadResponse(client, req)
-		release()
+		raw, status, header, err := fetch(ctx, client, slotKey, domain, server, timeout)
 		if ctx.Err() != nil {
 			return info, ctx.Err()
+		}
+		if errors.Is(err, errBadRequest) {
+			continue
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			lastErr = lookuperror.ErrorWhoisTimeout
+			continue
 		}
 		if err != nil {
 			lastErr = lookuperror.ErrorWhoisServerFailed
@@ -100,6 +102,9 @@ func RDAPQuery(ctx context.Context, domain string, servers []*url.URL, useProxy 
 			continue
 		}
 		parsed, err := parseResponse(info, raw, status)
+		if errors.Is(err, lookuperror.ErrorRateLimited) {
+			network.Cooldown(slotKey, network.RetryAfter(header, time.Now()))
+		}
 		switch err {
 		case nil, lookuperror.ErrorWhoisNotFound, lookuperror.ErrorRateLimited:
 			return parsed, err
@@ -108,6 +113,31 @@ func RDAPQuery(ctx context.Context, domain string, servers []*url.URL, useProxy 
 		}
 	}
 	return info, lastErr
+}
+
+var errBadRequest = errors.New("cannot build RDAP request")
+
+// fetch waits for a slot on the server, then applies the request timeout, so
+// time spent queuing behind other lookups is not reported as a timeout.
+func fetch(ctx context.Context, client *http.Client, slotKey, domain string, server *url.URL, timeout time.Duration) (string, int, http.Header, error) {
+	release, err := network.Acquire(ctx, slotKey, 4)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	defer release()
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	request := (&rdap.Request{Type: rdap.DomainRequest, Query: domain, Server: server}).URL()
+	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, request.String(), nil)
+	if err != nil {
+		return "", 0, nil, errBadRequest
+	}
+	req.Header.Set("Accept", "application/rdap+json, application/json")
+	raw, status, header, err := network.ReadResponseHeader(client, req)
+	if err != nil && callCtx.Err() != nil && ctx.Err() == nil {
+		return "", 0, nil, context.DeadlineExceeded
+	}
+	return raw, status, header, err
 }
 
 func parseResponse(info lookupinfo.DomainInfo, raw string, status int) (lookupinfo.DomainInfo, error) {

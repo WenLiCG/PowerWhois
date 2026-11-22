@@ -63,6 +63,12 @@ func run(parent context.Context) error {
 		return err
 	}
 	defer client.Close()
+	if err := api.InitAuth(ctx, client); err != nil {
+		return fmt.Errorf("could not load administrator session state: %w", err)
+	}
+	if _, err := api.ParseTrustedProxies(os.Getenv("POWERWHOIS_TRUSTED_PROXIES")); err != nil {
+		return err
+	}
 	addr := os.Getenv("POWERWHOIS_LISTEN")
 	if addr == "" {
 		addr = "127.0.0.1:8080"
@@ -94,12 +100,30 @@ func run(parent context.Context) error {
 }
 
 func newApp(ctx context.Context, bulk *scheduler.BulkCheck, client *redis.Client) (*fiber.App, func(context.Context) error) {
+	// Client addresses come from api.ClientIP, which reads X-Forwarded-For from
+	// the right. Fiber's own c.IP() takes the leftmost entry, which a client controls.
+	prefixes, err := api.ParseTrustedProxies(os.Getenv("POWERWHOIS_TRUSTED_PROXIES"))
+	if err != nil {
+		log.Error(err, "; trusting loopback only")
+		prefixes, _ = api.ParseTrustedProxies("")
+	}
+	api.SetTrustedProxies(prefixes)
 	app := fiber.New(fiber.Config{
 		AppName: "PowerWhois", BodyLimit: 64 << 10,
 		StreamRequestBody: true, DisablePreParseMultipartForm: true,
 		ReadTimeout: 2 * time.Minute, WriteTimeout: 3 * time.Minute, IdleTimeout: 20 * time.Second,
-		ProxyHeader: fiber.HeaderXForwardedFor, EnableTrustedProxyCheck: true, EnableIPValidation: true,
-		TrustedProxies: strings.Fields(os.Getenv("POWERWHOIS_TRUSTED_PROXIES")),
+	})
+	// Health checks reach the backend directly; the Caddyfile does not route this path.
+	app.Get("/healthz", func(c *fiber.Ctx) error {
+		if client != nil {
+			ping, cancel := context.WithTimeout(c.UserContext(), 2*time.Second)
+			defer cancel()
+			if err := client.Ping(ping).Err(); err != nil {
+				return c.Status(fiber.StatusServiceUnavailable).SendString("redis unavailable")
+			}
+		}
+		c.Set("Cache-Control", "no-store")
+		return c.SendString("ok")
 	})
 	app.Use(recover.New())
 	app.Use(compress.New())
@@ -112,7 +136,7 @@ func newApp(ctx context.Context, bulk *scheduler.BulkCheck, client *redis.Client
 		app.Get("/api/tuning/monitor", monitor.New())
 	}
 	upgrade, drain := api.WebSocketHandler(ctx, bulk, client)
-	app.Get("/app/ws", limiter.New(limiter.Config{Max: 120, Expiration: time.Minute}), upgrade)
+	app.Get("/app/ws", limiter.New(limiter.Config{Max: 120, Expiration: time.Minute, KeyGenerator: api.LimitKey}), upgrade)
 	app.Route("/api", func(router fiber.Router) { api.ApiRoute(router, bulk, client) }, "api.")
 	return app, drain
 }

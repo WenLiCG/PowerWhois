@@ -78,7 +78,8 @@ async function onSubmit() {
             })
             .catch((error) => {
                 submitting.value = false;
-                if (error.response && error.response.status === 400) {
+                // 401 from this release, 400 from older backends.
+                if (error.response && [400, 401].includes(error.response.status)) {
                     $q.notify({
                         position: "top",
                         type: "negative",

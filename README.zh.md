@@ -22,7 +22,7 @@
 7. 支持自定义whois的API，可以把自己常用的注册商的API自己加进去查询域名的可用性
 8. 支持域名注册，并且自定义register的API，可以把自己常用的注册商的API自己加进去，方便注册域名
 9. 后台设置可以控制线程，失败重试等各种设置
-10. 支持API模式，你可以把程序作为一个API使用，比如接入你的WHMCS，[详见说明](https://github.com/WenLiCG/PowerWhois/blob/main/API%20documentation.md)
+10. 支持 API 模式。设置 `POWERWHOIS_API_KEYS` 后，可用 `GET /api/v1/check?domain=example.com` 单域名查询，便于接入 WHMCS 等系统。网页使用的 WebSocket 协议也有文档。[详见说明](https://github.com/WenLiCG/PowerWhois/blob/main/API%20documentation.md)
 
 ## 目录结构
 
@@ -54,8 +54,12 @@
 ## 操作语义
 
 - 网页允许匿名直连 WHOIS、RDAP、DNS 和 Mix。付费代理和自定义接口需要管理员身份。网页连接每次处理一批，默认查询并发 15，网页每批条数由服务端配置控制。
+- 匿名访客按公网 IP 限流：默认每分钟 500 个域名（设置项“匿名访客每分钟域名数”），每个 IP 最多 16 个 WebSocket 连接，并且只使用网页并发的一半。本机和内网地址不受这些限制。后端从右向左读取 `X-Forwarded-For`，在第一个非可信代理地址处停止，客户端伪造的条目不会被采用。IPv6 按 /64 限流。前面有 CDN 时，需在 Nginx 启用 `real_ip`，使 `$remote_addr` 为访客地址。不要把 Caddy 端口发布到本机回环以外：能从内网地址访问 Caddy 或后端的程序可以指定客户端地址。
+- 上游返回 429 或 WHOIS 限流提示时，该上游会暂停（遵守 `Retry-After`，最长 2 分钟），开启“超时重试”时会在暂停后重试。查询超时只计算与上游通信的时间，不包括排队时间。
+- 批量“重查错误域名”只重查查询失败的行，DNS 证据不足和注册局保留的结果保持不变。
+- “退出登录”会使所有浏览器中已签发的管理员令牌失效。
 - “未找到”来自注册信息查询。DNS 无委派显示“证据不足”，注册局保留会单独显示。购买前仍需由注册商确认。
-- 注册确认会生成操作编号。连接中断或上游返回不确定时，可以凭编号向注册商核对，再通过结果页面记录明确的成功或失败。留存记录由 Redis 持久化。
+- 注册确认会生成操作编号。连接中断或上游返回不确定时，可以凭编号向注册商核对，再通过结果页面或“管理 → 待核对注册”记录明确的成功或失败。刷新页面后仍可在“待核对注册”中找到这些操作。留存记录由 Redis 持久化。
 - 批量上传支持 UTF-8 文本，每行一个域名或 HTTP(S) URL。上限 100 MiB、100 万行。暂停和取消在 worker 结束后显示终态。CSV 按首次出现顺序导出已保存行。
 
 # 开发与打包
@@ -71,7 +75,7 @@ make -C src package GOARCH=amd64
 
 打包在已提交的源码检出中运行，产物写到 `dist/`，包含版本、校验文件和完整的 `deploy` 目录。CI 同时构建 arm64 包。`make -C src all` 可将本地构建写入 `deploy` 目录，用于开发验证。
 
-原生运行默认监听 `127.0.0.1:8080`，读取与程序同目录的 `config.yaml`。通过 `POWERWHOIS_LISTEN`、`POWERWHOIS_CONFIG` 覆盖，Redis 可用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB`、`REDIS_USERNAME`、`REDIS_PASSWORD`。前端使用跨源开发服务器时，设置 `POWERWHOIS_WEB_ORIGIN` 为具体的客户端 Origin。`POWERWHOIS_TRUSTED_PROXIES` 接受以空格分隔的可信代理地址或网段。
+原生运行默认监听 `127.0.0.1:8080`，读取与程序同目录的 `config.yaml`。通过 `POWERWHOIS_LISTEN`、`POWERWHOIS_CONFIG` 覆盖，Redis 可用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB`、`REDIS_USERNAME`、`REDIS_PASSWORD`。前端使用跨源开发服务器时，设置 `POWERWHOIS_WEB_ORIGIN` 为具体的客户端 Origin。`POWERWHOIS_TRUSTED_PROXIES` 接受以空格或逗号分隔的可信代理地址或网段，格式错误时拒绝启动；Compose 默认信任私有网段，未设置时只信任本机回环，适合同机 Nginx 之后的原生部署。`POWERWHOIS_API_KEYS` 设置集成 API 密钥（每个至少 24 个字符，逗号分隔，未设置时接口返回 404）。`POWERWHOIS_LOG_STDOUT=true` 让日志同时输出到标准输出（Compose 已开启）。健康检查地址为后端的 `/healthz`，不经 Caddy 对外暴露。
 
 ## 贡献
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,7 +57,9 @@ func ValidOperationID(id string) bool {
 	return err == nil && parsed != uuid.Nil && parsed.String() == id
 }
 
-func key(domain string) string { return "powerwhois:registration:" + domain }
+const keyPrefix = "powerwhois:registration:"
+
+func key(domain string) string { return keyPrefix + domain }
 
 var claim = redis.NewScript(`
 local result = redis.call('HGET', KEYS[1], ARGV[1])
@@ -199,6 +202,55 @@ func Reconcile(ctx context.Context, store *redis.Client, domain, operationID, ou
 	}
 	log.Infof("Registration operation %s for %s reconciled: %s", operationID, name, outcome)
 	return entry.RegisterInfo, nil
+}
+
+// PendingRegistration is an operation that still blocks new submissions for
+// its domain: either still submitting or waiting for administrator review.
+type PendingRegistration struct {
+	RegisterInfo
+	StartedAt int64 `json:"startedAt"`
+}
+
+const maxPending = 500
+
+// Pending lists operations that hold a domain's registration lock, oldest
+// first, so an administrator can reconcile them after a page reload.
+func Pending(ctx context.Context, store *redis.Client) ([]PendingRegistration, error) {
+	if store == nil {
+		return nil, errors.New("registration store unavailable")
+	}
+	items := []PendingRegistration{}
+	iter := store.Scan(ctx, 0, keyPrefix+"*", 200).Iterator()
+	for iter.Next(ctx) && len(items) < maxPending {
+		hash := iter.Val()
+		operation, err := store.HGet(ctx, hash, "_pending").Result()
+		if errors.Is(err, redis.Nil) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		raw, err := store.HGet(ctx, hash, operation).Bytes()
+		if errors.Is(err, redis.Nil) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var entry record
+		if json.Unmarshal(raw, &entry) != nil {
+			entry = record{RegisterInfo: RegisterInfo{
+				OperationID: operation, DomainName: strings.TrimPrefix(hash, keyPrefix),
+				RegisterStatus: constant.RegisterStatusUnknown, RawResponse: "注册记录不可读，请先核对注册商",
+			}}
+		}
+		items = append(items, PendingRegistration{RegisterInfo: entry.RegisterInfo, StartedAt: entry.Started})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].StartedAt < items[j].StartedAt })
+	return items, nil
 }
 
 func FindProvider(cfg config.Config, name string) (config.RegisterApi, error) {

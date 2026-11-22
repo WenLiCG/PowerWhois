@@ -30,13 +30,23 @@ type delegation struct {
 var cacheMu sync.Mutex
 var tldCache = map[string]delegation{}
 
-func NsCheck(ctx context.Context, domain, tld string) (result lookupinfo.DomainInfo, resultErr error) {
+// NsCheck walks the delegation chain for domain. The timeout starts once a
+// slot for the TLD is held, so queuing behind other lookups does not count.
+func NsCheck(parent context.Context, domain, tld string, timeout time.Duration) (result lookupinfo.DomainInfo, resultErr error) {
 	result = lookupinfo.DomainInfo{LookupType: constant.LookupTypeDNS, DomainName: domain}
-	release, err := network.Acquire(ctx, "dns:"+tld, 4)
+	release, err := network.Acquire(parent, "dns:"+tld, 4)
 	if err != nil {
 		return result, err
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	defer func() {
+		// Report an interrupted request as such, not as a DNS timeout.
+		if parent.Err() != nil && resultErr != nil {
+			resultErr = parent.Err()
+		}
+	}()
 
 	var trace strings.Builder
 	fmt.Fprintf(&trace, "DNS NS trace for %s\n", domain)

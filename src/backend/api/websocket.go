@@ -53,26 +53,48 @@ type webSession struct {
 	bulk  *scheduler.BulkCheck
 	redis *redis.Client
 
+	ip          string
 	wg          sync.WaitGroup
 	writer      sync.Mutex
 	adminUntil  atomic.Int64
+	adminGen    atomic.Int64
 	checking    atomic.Bool
 	registering atomic.Bool
+	bulkBusy    atomic.Bool
 	nextAuth    time.Time
 }
+
+// clientIPKey carries the proxy-aware client address from the upgrade request into the session.
+const clientIPKey = "powerwhoisClientIP"
+
+// publicBudget limits anonymous web lookups per client address across all sessions.
+var publicBudget domainBudget
 
 func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client *redis.Client) (fiber.Handler, func(context.Context) error) {
 	var sessions sync.WaitGroup
 	var lifecycle sync.Mutex
+	var perIP connectionCounter
 	stopping := false
 	allowedOrigin := os.Getenv("POWERWHOIS_WEB_ORIGIN")
 	connections := make(chan struct{}, 64)
+	busy := func(conn *websocket.Conn) {
+		conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "server busy"), time.Now().Add(time.Second))
+	}
 	upgrade := websocket.New(func(conn *websocket.Conn) {
+		ip, _ := conn.Locals(clientIPKey).(string)
+		if limitedIP(ip) {
+			key := limitKey(ip)
+			if !perIP.acquire(key, connectionsPerIP) {
+				busy(conn)
+				return
+			}
+			defer perIP.release(key)
+		}
 		select {
 		case connections <- struct{}{}:
 			defer func() { <-connections }()
 		default:
-			conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "server busy"), time.Now().Add(time.Second))
+			busy(conn)
 			return
 		}
 		lifecycle.Lock()
@@ -85,7 +107,7 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 		defer sessions.Done()
 
 		ctx, cancel := context.WithCancel(parent)
-		s := &webSession{ws: conn, ctx: ctx, bulk: bulk, redis: client}
+		s := &webSession{ws: conn, ctx: ctx, bulk: bulk, redis: client, ip: ip}
 		closed := make(chan struct{})
 		closeOnStop := context.AfterFunc(ctx, func() { conn.Close(); close(closed) })
 		defer func() {
@@ -121,6 +143,7 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 					return fiber.ErrForbidden
 				}
 			}
+			c.Locals(clientIPKey, ClientIP(c))
 			return upgrade(c)
 		}, func(ctx context.Context) error {
 			lifecycle.Lock()
@@ -151,8 +174,10 @@ func (s *webSession) send(event string, data any) bool {
 	return true
 }
 
+// isAdmin also checks the session generation, so logging out in any browser
+// ends administrator access on already-open connections.
 func (s *webSession) isAdmin() bool {
-	return time.Now().Unix() < s.adminUntil.Load()
+	return time.Now().Unix() < s.adminUntil.Load() && s.adminGen.Load() == authGeneration.Load()
 }
 
 func (s *webSession) adminContext() (context.Context, context.CancelFunc) {
@@ -178,11 +203,12 @@ func (s *webSession) handle(message MessageObject) {
 			s.send("adminAuthResult", false)
 			return
 		}
-		expiry, err := tokenExpiry(raw)
+		token, err := parseAdminToken(raw)
 		if err != nil {
 			s.adminUntil.Store(0)
 		} else {
-			s.adminUntil.Store(expiry.Unix())
+			s.adminGen.Store(token.generation)
+			s.adminUntil.Store(token.expiry.Unix())
 		}
 		s.send("adminAuthResult", err == nil)
 	case constant.WebsocketRequestEventWebCheck:
@@ -194,7 +220,15 @@ func (s *webSession) handle(message MessageObject) {
 	case constant.WebsocketRequestEventBulkCheckStart, constant.WebsocketRequestEventBulkCheckPause,
 		constant.WebsocketRequestEventBulkCheckResume, constant.WebsocketRequestEventBulkCheckCancel,
 		constant.WebsocketRequestEventBulkCheckClear, constant.WebsocketRequestEventBulkRecheckErrorDomains:
-		s.bulkAction(message)
+		// Bulk actions can wait for the task lock, so keep the read loop free to answer pings.
+		if !s.bulkBusy.CompareAndSwap(false, true) {
+			s.send(constant.WebsocketResponseBulkCheckErrorEvent, "上一个批量操作仍在处理，请稍后再试")
+			return
+		}
+		s.wg.Go(func() {
+			defer s.bulkBusy.Store(false)
+			s.bulkAction(message)
+		})
 	}
 }
 
@@ -214,7 +248,7 @@ func (s *webSession) bulkStatus() {
 			if expiry == 0 {
 				continue
 			}
-			if time.Now().Unix() >= expiry {
+			if time.Now().Unix() >= expiry || s.adminGen.Load() != authGeneration.Load() {
 				if s.adminUntil.CompareAndSwap(expiry, 0) {
 					s.send("adminAuthResult", false)
 				}
@@ -291,6 +325,14 @@ func (s *webSession) webCheck(data json.RawMessage) {
 		s.send(errEvent, "没有有效域名")
 		return
 	}
+	if s.checking.Load() {
+		s.send(errEvent, "当前连接已有查询正在运行")
+		return
+	}
+	if !admin && limitedIP(s.ip) && !publicBudget.take(limitKey(s.ip), len(domains), cfg.PublicDomainsPerMinute, time.Now()) {
+		s.send(errEvent, "匿名查询过于频繁，请稍后再试")
+		return
+	}
 	s.startCheck(cfg, admin, req.QueryType, domains, errEvent, func() {
 		s.send(constant.WebsocketResponseEventWebCheckDomains, domains)
 	})
@@ -326,11 +368,16 @@ func (s *webSession) startCheck(cfg config.Config, admin bool, mode string, doma
 	if admin {
 		ctx, cancel = s.adminContext()
 	}
+	// Anonymous sessions share half of the web budget, so they cannot crowd out the administrator.
+	pool, limit := "web:admin", cfg.WebCheckConcurrencyLimit
+	if !admin {
+		pool, limit = "web:public", max(1, cfg.WebCheckConcurrencyLimit/2)
+	}
 	announce()
 	s.wg.Go(func() {
 		defer cancel()
-		runDomains(ctx, domains, cfg.WebCheckConcurrencyLimit, func(domain string) {
-			release, err := network.Acquire(ctx, "web", cfg.WebCheckConcurrencyLimit)
+		runDomains(ctx, domains, limit, func(domain string) {
+			release, err := network.Acquire(ctx, pool, limit)
 			if err != nil {
 				return
 			}

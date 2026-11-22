@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"typonamer/config"
 	"typonamer/constant"
@@ -33,11 +35,20 @@ func WhoisQuery(ctx context.Context, domain, tld string, useProxy bool, cfg conf
 		return info, lookuperror.ErrorNoParseRuleForTld
 	}
 
-	release, err := network.Acquire(ctx, "whois:"+server, 3)
+	// Direct and proxied traffic leave from different addresses, so registries
+	// limit them separately.
+	slotKey := "whois:" + server
+	if useProxy {
+		slotKey += "|proxy"
+	}
+	release, err := network.Acquire(ctx, slotKey, 3)
 	if err != nil {
 		return info, err
 	}
 	defer release()
+	// The timeout covers the exchange with the registry, not time spent queuing.
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
+	defer cancel()
 	baseDialer := &net.Dialer{}
 	dial := baseDialer.DialContext
 	if useProxy {
@@ -87,7 +98,22 @@ func WhoisQuery(ctx context.Context, domain, tld string, useProxy bool, cfg conf
 	}
 	info, err = ParseWhoisResponse(string(raw), domain, matcher)
 	info.ViaProxy = useProxy
+	if errors.Is(err, lookuperror.ErrorParseWhoisResponse) && RateLimitedResponse(string(raw)) {
+		network.Cooldown(slotKey, rateLimitCooldown)
+		return info, lookuperror.ErrorRateLimited
+	}
 	return info, err
+}
+
+const rateLimitCooldown = 30 * time.Second
+
+var rateLimitText = regexp.MustCompile(`(?i)(rate.?limit|limit exceeded|exceeded (the|your)? ?(query|request|maximum)|too many (requests|queries|connections)|query limit|quota exceeded|please (try|query) again later|access denied.{0,40}(limit|later))`)
+
+// RateLimitedResponse recognises common registry throttling replies. It is only
+// consulted when no registration data could be parsed, so terms-of-use text in
+// ordinary records cannot turn a registered domain into a rate-limit error.
+func RateLimitedResponse(raw string) bool {
+	return rateLimitText.MatchString(raw)
 }
 
 func transportError(ctx context.Context, err error, viaProxy bool) error {

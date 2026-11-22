@@ -7,7 +7,8 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./frontend:/typonamer:ro
     depends_on:
-      - typonamer
+      typonamer:
+        condition: service_healthy
     restart: unless-stopped
     logging:
       options:
@@ -27,9 +28,20 @@ services:
       POWERWHOIS_LISTEN: "0.0.0.0:8080"
       POWERWHOIS_ADMIN_PASSWORD: "${POWERWHOIS_ADMIN_PASSWORD:?set POWERWHOIS_ADMIN_PASSWORD}"
       POWERWHOIS_JWT_SECRET: "${POWERWHOIS_JWT_SECRET:?set POWERWHOIS_JWT_SECRET}"
+      # Only Caddy reaches the backend, over the private Compose network.
+      POWERWHOIS_TRUSTED_PROXIES: "${POWERWHOIS_TRUSTED_PROXIES:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7}"
+      # Optional integration API keys (at least 24 characters, comma separated).
+      POWERWHOIS_API_KEYS: "${POWERWHOIS_API_KEYS:-}"
+      POWERWHOIS_LOG_STDOUT: "true"
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 40s
+      retries: 5
     stop_grace_period: 20s
     restart: unless-stopped
     logging:

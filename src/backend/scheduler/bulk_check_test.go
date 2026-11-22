@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,6 +117,66 @@ func TestCommitIsAtomicAndRecoveryCanFinishWithNoPending(t *testing.T) {
 	var output bytes.Buffer
 	if err := recovered.Export(ctx, &output); err == nil || output.Len() != 0 {
 		t.Fatal("export accepted an unreadable stored row")
+	}
+}
+
+func TestRecheckRequeuesOnlyErrors(t *testing.T) {
+	client := testredis.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	var mu sync.Mutex
+	calls := map[string]int{}
+	b := &BulkCheck{redis: client, query: func(_ context.Context, name, _ string, _ bool, _ config.Config) lookupinfo.QueryResult {
+		mu.Lock()
+		calls[name]++
+		attempt := calls[name]
+		mu.Unlock()
+		switch {
+		case name == "unknown.com":
+			return lookupinfo.QueryResult{Domain: name, RegisterStatus: constant.DomainRegisterStatusUnknown, LookupType: constant.LookupTypeDNS}
+		case name == "reserved.com":
+			return lookupinfo.QueryResult{Domain: name, RegisterStatus: constant.DomainRegisterStatusReserved}
+		case attempt == 1:
+			return lookupinfo.QueryResult{Domain: name, RegisterStatus: constant.DomainRegisterStatusError}
+		default:
+			return lookupinfo.QueryResult{Domain: name, RegisterStatus: constant.DomainRegisterStatusTaken}
+		}
+	}}
+	defer b.Shutdown(ctx)
+	if err := b.Upload(ctx, strings.NewReader("failed.com\nunknown.com\nreserved.com\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Start(ctx, constant.DnsQuery); err != nil {
+		t.Fatal(err)
+	}
+	waitBulk(t, ctx, b, func(in BulkCheckStatusInfo) bool {
+		return in.Status == constant.BulkCheckStatusDone && in.ErrorDomains == 3
+	})
+	if err := b.Recheck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	done := waitBulk(t, ctx, b, func(in BulkCheckStatusInfo) bool {
+		return in.Status == constant.BulkCheckStatusDone && in.TakenDomains == 1
+	})
+	if done.ErrorDomains != 2 || done.RemainDomains != 0 {
+		t.Fatalf("unexpected counts after recheck: %+v", done)
+	}
+	mu.Lock()
+	if calls["failed.com"] != 2 || calls["unknown.com"] != 1 || calls["reserved.com"] != 1 {
+		t.Fatalf("recheck queried the wrong rows: %v", calls)
+	}
+	mu.Unlock()
+	if client.Exists(ctx, keptKey).Val() != 0 {
+		t.Fatal("kept rows were not returned to the error list")
+	}
+	var output bytes.Buffer
+	if err := b.Export(ctx, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"failed.com,", "unknown.com,", "reserved.com,"} {
+		if strings.Count(output.String(), want) != 1 {
+			t.Fatalf("export should list %q once: %s", want, output.String())
+		}
 	}
 }
 

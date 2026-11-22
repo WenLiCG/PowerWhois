@@ -1,10 +1,26 @@
 {
 	admin off
 	auto_https off
+	servers {
+		# Nginx on the host reaches Caddy from a private Docker address. Trusting
+		# private ranges keeps the client address that Nginx put in X-Forwarded-For,
+		# so per-IP limits in the backend apply to real clients.
+		trusted_proxies static private_ranges
+	}
 }
 
 http://:8080 {
 	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Report-only first: check the browser console on a real deployment, then
+		# rename this header to Content-Security-Policy to enforce it.
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+	}
 
 	handle /api/admin/bulkcheckupload {
 		request_body {
