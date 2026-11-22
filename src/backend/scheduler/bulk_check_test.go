@@ -77,7 +77,7 @@ func TestCommitIsAtomicAndRecoveryCanFinishWithNoPending(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	b := &BulkCheck{redis: client}
-	result := lookupinfo.QueryResult{Domain: "example.com", RegisterStatus: constant.DomainRegisterStatusTaken}
+	result := lookupinfo.QueryResult{Domain: "example.com", RegisterStatus: constant.DomainRegisterStatusTaken, RawResponse: "large response fixture"}
 	if err := client.HSet(ctx, pendingKey, result.Domain, "{\"Domain\":\"example.com\",\"Order\":0}").Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +97,9 @@ func TestCommitIsAtomicAndRecoveryCanFinishWithNoPending(t *testing.T) {
 	}
 	if client.LLen(ctx, takenKey).Val() != 1 || client.HLen(ctx, pendingKey).Val() != 0 {
 		t.Fatal("retried commit was not idempotent")
+	}
+	if strings.Contains(client.LIndex(ctx, takenKey, 0).Val(), result.RawResponse) {
+		t.Fatal("bulk storage retained the raw response body")
 	}
 	if err := client.MSet(ctx, statusKey, constant.BulkCheckStatusRunning, modeKey, constant.WhoisQuery, totalKey, "1").Err(); err != nil {
 		t.Fatal(err)

@@ -37,8 +37,17 @@ func (b *BulkCheck) Export(ctx context.Context, output io.Writer) error {
 		order int
 		data  lookupinfo.QueryCsvResult
 	}
-	var rows []row
-	for _, key := range []string{takenKey, freeKey, errorKey} {
+	keys := []string{takenKey, freeKey, errorKey}
+	var count int64
+	for _, key := range keys {
+		n, err := b.redis.LLen(ctx, key).Result()
+		if err != nil {
+			return err
+		}
+		count = min(maxBulkDomains, count+n)
+	}
+	rows := make([]row, 0, int(count))
+	for _, key := range keys {
 		for start := int64(0); ; start += pageSize {
 			items, err := b.redis.LRange(ctx, key, start, start+pageSize-1).Result()
 			if err != nil {

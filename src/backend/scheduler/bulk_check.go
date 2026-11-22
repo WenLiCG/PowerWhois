@@ -579,6 +579,8 @@ func (b *BulkCheck) commit(ctx context.Context, result lookupinfo.QueryResult) e
 	case constant.DomainRegisterStatusFree:
 		key = freeKey
 	}
+	// The bulk CSV uses only structured fields. Keep full responses on the interactive path.
+	result.RawResponse = ""
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return err
