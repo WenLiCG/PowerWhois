@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { test } from "node:test";
 import { pendingRowKey, withoutPendingRow } from "../src/utils/pendingRegistrations.js";
 
@@ -18,6 +19,13 @@ test("reconciling one domain keeps the batch's other pending domains", () => {
             ["example.com", "4ad0f7c1-8a37-4c1e-9d1b-3f6b5d0b8e21"]
         ]
     );
+});
+
+test("the pending page deletes one domain of a batch, not the whole operation", () => {
+    const source = fs.readFileSync(new URL("../src/components/PendingRegistrations.vue", import.meta.url), "utf8");
+    assert.match(source, /:row-key="pendingRowKey"/);
+    assert.match(source, /withoutPendingRow\(rows\.value, row\)/);
+    assert.doesNotMatch(source, /item\.operationId\s*!==\s*row\.operationId/);
 });
 
 test("row keys are unique per domain and operation", () => {

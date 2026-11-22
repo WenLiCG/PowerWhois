@@ -1,5 +1,7 @@
 # PowerWhois review fixes — handoff (2026-11-22)
 
+独立验证补记见第 9 节。第 1–8 节保留作者在源候选 `de0fad6` 上的原文，不把作者自述改成验证结论。
+
 ## 1. Status — read this first
 
 | Item | State |
@@ -315,3 +317,65 @@ redis-cli EVAL "local r = redis.call('LRANGE', KEYS[1], 0, -1) for _, v in ipair
 **3. Rotate `POWERWHOIS_JWT_SECRET` when rolling back.** Older releases ignore the `gen` claim and `powerwhois:auth:generation`. Every unexpired token signed with the current secret would become valid again, including tokens revoked by logout. A new secret invalidates them all; administrators then sign in again.
 
 **4. Other data stays compatible.** The bulk keys are unchanged. Registration records written by this release, including the new `failed` "此域名未提交" (domain not submitted) records, use the existing format.
+
+## 9. Independent verification (Cursor, 2026-11-22)
+
+This section was written by the handoff reviewer, not by the author of `de0fad6`. No product logic was rewritten. The two commits above were applied with `git am` onto `main` `6662f8ae55447140152119a90b0cf9399159bb21` (confirmed with `git fetch origin main` immediately before apply; local `main` and `origin/main` were that commit). Author remains WenLiCG; both messages keep `Co-Authored-By: Claude Opus 5.5`. Committer is Cursor Agent, so the SHAs differ from the source candidate:
+
+| Source candidate | Applied commit | Tree |
+|---|---|---|
+| `b0932238c7c358dd9c52d4e4767986aaafbd012f` | `a972b8974d74b92ed852160196d22faa88e2dd94` | `dee5cb71dc63032201f57639a1139a1a73be6dd0` |
+| `de0fad6913136724e963e6bf135f1abd42f47ea2` | `ef816e382e5ccdaa881f40bc6f931fe252d2701e` | `b3bfc248b5862a4fdfe85443572e5350021e1470` |
+
+`git apply --check` succeeded before `git am`. The verification files added with this section have parent `ef816e382e5ccdaa881f40bc6f931fe252d2701e`. The pull request body records the exact head; this file does not predict that SHA.
+
+Role: independent verification and release preparation. Not merged. Not deployed. No production configuration, domain purchase, or external message.
+
+The previous probes (`independent_api_test.go`, `pending-identity.mjs`) were not scored. They dial an administrator with no credential, fill upstream slots without the anonymous marker, and match a filter expression that moved to `pendingRegistrations.js`. Those mismatches are not a pass or a product failure. The checks below use the ticket, `WithPublic`, and `withoutPendingRow`.
+
+### F1–F4 and the related regressions
+
+| Item | Result |
+|---|---|
+| F1 public saturation | Pass. Four public addresses, 16 connections each, and a separate direct loopback source with no `X-Forwarded-For`, each filled 64 public sockets. The 65th anonymous socket was refused. HTTP login still returned a token. All 8 ticket connections received `adminAuthResult: true` and answered ping. A 9th ticket was not admitted. |
+| Ticket reuse, expiry, logout | Pass as refusal of administrator admission. Reuse, a real 31-second wait past the 30-second TTL, and logout did not produce `adminAuthResult: true`. With room in the public pool the socket stays open as an ordinary connection; it does not enter the reserved pool. `expiresIn` was 30. |
+| Frontend reconnect | Pass in Chrome against the isolated Compose stack on `127.0.0.1:8080`. Anonymous load opened one socket with no ticket. After login the page reloaded, `POST /api/admin/ws-ticket` ran, the plain socket closed, and exactly one ticket socket remained. Restarting the backend container closed that socket; the page requested a new ticket and opened one ticket socket. |
+| F2 logout vs registration | Pass against a local mock registrar only. Logout returned 204 while the first request was blocked. That request then completed, its success was stored in Redis, and its `Idempotency-Key` was the operation id plus domain. `example.net` was not requested and was not claimed. |
+| F3 upstream share | Pass for the executed paths. Anonymous `lookuper.Query` to a local provider stopped at 3 of 4 while an API-key request took the remaining slot; the provider never saw a 5th concurrent call. The WebSocket path marked `anonymous.com` public and `admin.com` not public. WHOIS, RDAP and DNS pass that same context into `Acquire` before dialing (`whois_query.go`, `rdap_query.go` `fetch`, `dnsresolver.go` `NsCheck`); this run did not open a registry connection to prove those three dials. Bulk calls `lookuper.Query` without `WithPublic` (`bulk_check.go`). Public waiters did not block the reserved slot, a cancelled waiter did not leak a slot, and a race run stayed within the limit. |
+| F4 pending rows | Pass. The helper keeps the other domain. The built page, in Chrome, listed `example.com` and `example.net` under one operation id; recording failure for `example.com` left `example.net` on screen and still `outcome_unknown` in Redis. `example.com` became `failed` and lost its pending field. No registrar was contacted. |
+| Right-to-left XFF and IPv6 /64 | Pass in the existing unit tests (`TestResolveClientIPResistsForgedForwardedFor`, `TestLimitKeyGroupsIPv6By64`, `TestLoginLimiterUsesForwardedClientBehindTrustedProxy`). No live IPv6 client was connected. |
+| API key limit | Pass. A key in the query string without the header was 401. Five invalid keys were 401. 600 valid-key requests with an invalid domain were 400. Request 601 was 429. A further invalid key stayed 401. |
+| Idempotency and funds | The existing registration CAS test passed, and the F2 mock observed a single idempotency key. No real registration or payment. |
+
+### Commands and environment
+
+Linux amd64, UTC. Go 1.27.4 was the official linux-amd64 tarball. Test Redis was Ubuntu `redis-server` 7.0.15, used only through `testredis` Unix sockets; no system Redis was left running. Frontend commands used the environment Node v22.23.4 and Yarn 1.22.22. The documented CI Node is 22.23.5; this Node is still in the package's `^22` range. Caddy was the official v2.11.9 linux-amd64 binary. Docker was Ubuntu `docker.io` 29.1.3 and Compose 2.40.3, installed for this environment. The first dockerd had been started without a bridge; after a normal restart, `iptables-legacy` still had `FORWARD` policy DROP and dropped bridge traffic that nftables had accepted. Setting that legacy policy to ACCEPT was an environment fix. Container-to-container TCP and `127.0.0.1` published ports then worked. That change is not in the repository.
+
+| Check | When (UTC) | Exit | Result |
+|---|---|---|---|
+| `gofmt -l src/backend` on the applied candidate, before the extra tests | 2026-11-22 15:39:22–15:40:21 | 0 | no files |
+| `go vet ./...`, `go build ./...` | same window | 0, 0 | no diagnostics |
+| `go test -race -count=1 -v ./...` on the applied candidate | same window | 0 | 42 top-level PASS, 0 FAIL, 0 SKIP, 0 `DATA RACE` |
+| Adapted `TestIndependentVerify*` with `-race -count=1 -v` | log mtime 2026-11-22 15:46:09 | 0 | all new tests PASS, including the 31-second ticket expiry |
+| `go test -race -count=1 ./...` after those tests were added | 15:46:24–15:47:02 | 0 | 11 packages `ok`, 0 SKIP, 0 `DATA RACE`. This run had no `-v`, so it did not reprint the PASS count |
+| `yarn install --frozen-lockfile`, `yarn lint`, `yarn test`, `yarn build` | 15:46:26–15:46:38 | 0 | lint empty; tests 5 pass, 0 fail, 0 skipped. Node printed `MODULE_TYPELESS_PACKAGE_JSON` while loading two files; the test runner still exited 0 |
+| `caddy validate --config deploy/caddy/Caddyfile` | 15:39:24 | 0 | `Valid configuration`, Caddy v2.11.9 |
+| `docker compose --env-file … config` in a temporary copy of `deploy` | after image pull | 0 | rendered config binds `127.0.0.1:8080`, waits on `service_healthy`, uses `redis:7.4.12-alpine` and `caddy:2.11.9-alpine` |
+| `docker compose -p pwverify up -d --build` | immediately after | 0 | redis healthy, typonamer healthy, caddy up. `http://127.0.0.1:8080/` returned the SPA. Inside the backend container, `/healthz` returned `ok`. Through Caddy, `/healthz` is the SPA HTML because the Caddyfile does not route it |
+| Browser flow on that stack | after health | — | login 200 and ticket `expiresIn` 30 through Caddy; Chrome results in the table above. Stack then removed with `docker compose down -v`. Temporary passwords were not printed and the env file was deleted |
+
+No test was skipped. No command in this table was retried after a product failure. The Docker network setup above was an environment retry before the stack was considered. `docker compose config` was not used as a substitute for the running stack.
+
+### Compatibility, rollback, and what remains
+
+This verification commit does not change runtime configuration. The patch's compatibility notes in sections 4 and 8 still apply: do not delete `bulkCheckErrorResult:kept`; export or finish a requeue first; rotate `POWERWHOIS_JWT_SECRET` on rollback so revoked tokens cannot become valid again; the API outer pool is its own `web:api` budget of `WebCheckConcurrencyLimit`, then shares the real upstream slots.
+
+Not done here, and not claimed:
+
+- Merge, deploy, or a production login.
+- A browser session that itself holds 64 anonymous sockets. The saturation cases ran as Go WebSocket clients.
+- A live IPv6 client, or a WHOIS/RDAP/DNS dial that proves the public marker inside those three functions. The marker was proved at `lookuper.Query` and on the WebSocket call into it.
+- The follow-ups already listed in section 5, including enforcing CSP.
+- GitHub `Verify PowerWhois` at the time this file was written. The pull request is where that check is recorded after it runs.
+
+Next owner: the parent coordinator compares the pull request head with this history and reads the GitHub check before any merge. This verification does not merge the pull request.

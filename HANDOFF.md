@@ -1,5 +1,16 @@
 # PowerWhois 程序员交接文档
 
+## 独立验证补记（2026-11-22，Cursor，不是补丁作者）
+
+下面「审查修复」一节是作者在本地候选上的自述，原文保留。补丁已用 `git am` 应用到远端 `main` `6662f8ae55447140152119a90b0cf9399159bb21`，作者身份仍是 WenLiCG，提交说明保留 `Co-Authored-By: Claude Opus 5.5`。源提交与本仓库提交不是同一个 SHA：
+
+| 源候选 | 本仓库提交 | tree |
+|---|---|---|
+| `b0932238c7c358dd9c52d4e4767986aaafbd012f` | `a972b8974d74b92ed852160196d22faa88e2dd94` | `dee5cb71dc63032201f57639a1139a1a73be6dd0` |
+| `de0fad6913136724e963e6bf135f1abd42f47ea2` | `ef816e382e5ccdaa881f40bc6f931fe252d2701e` | `b3bfc248b5862a4fdfe85443572e5350021e1470` |
+
+独立验证结论、命令、时间和未测项写在 [docs/handoff/2026-11-22-review-fixes.md](docs/handoff/2026-11-22-review-fixes.md) 第 9 节。验证记录这次提交的父提交是 `ef816e38`；精确 PR head 写在拉取请求正文，不在这里预写。未合并，未部署。
+
 ## 审查修复（2026-11-22，待独立验证，未合并）
 
 基于 `main@6662f8a`，分支 `pw-cli-impl-20261122` 只在本地提交：第一个候选 `b093223` 经独立验证为 NO-GO（F1–F4），其后的一个提交修复了这些问题，是新的候选。**新候选尚未独立验证，未推送、未创建拉取请求、未合并。** 本地在隔离 Redis 下：gofmt 无输出，go vet 退出码 0，`go test -race -count=1 -v ./...` 退出码 0（42 个顶层测试通过，0 失败，0 跳过，无数据竞争）；前端 lint、test（4/4）、build 退出码均为 0。Compose 未用 Docker 实际校验和启动，新票据连接流程未在真实浏览器中验证。完整说明、验证结果、行为变化、回滚步骤与合并前检查见 [docs/handoff/2026-11-22-review-fixes.md](docs/handoff/2026-11-22-review-fixes.md)。
