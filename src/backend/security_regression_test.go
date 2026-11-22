@@ -108,8 +108,8 @@ func TestFailedLoginLogOmitsSubmittedPassword(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != fiber.StatusBadRequest {
-		t.Fatalf("status=%d, want 400", resp.StatusCode)
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", resp.StatusCode)
 	}
 
 	log.Sync()

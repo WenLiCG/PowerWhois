@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,7 +57,9 @@ func ValidOperationID(id string) bool {
 	return err == nil && parsed != uuid.Nil && parsed.String() == id
 }
 
-func key(domain string) string { return "powerwhois:registration:" + domain }
+const keyPrefix = "powerwhois:registration:"
+
+func key(domain string) string { return keyPrefix + domain }
 
 var claim = redis.NewScript(`
 local result = redis.call('HGET', KEYS[1], ARGV[1])
@@ -82,7 +85,15 @@ if ARGV[5] == 'success' then redis.call('HSET', KEYS[1], '_recent', ARGV[1]) end
 return 1
 `)
 
-func Register(ctx context.Context, store *redis.Client, domain, operationID string, provider config.RegisterApi) RegisterInfo {
+// notSubmitted explains a domain skipped because the administrator session ended.
+const notSubmitted = "管理员会话已结束，此域名未提交"
+
+// Register submits one domain. mayStart, when not nil, is consulted before the
+// domain is claimed and again immediately before the request is sent; if it
+// returns false nothing is sent. Once a request has been sent, its outcome is
+// collected and stored even if the caller's context ends.
+func Register(ctx context.Context, store *redis.Client, domain, operationID string, provider config.RegisterApi, mayStart func() bool) RegisterInfo {
+	allowed := func() bool { return mayStart == nil || mayStart() }
 	info := RegisterInfo{DomainName: domain, RegisterType: provider.ApiName, OperationID: operationID, RegisterStatus: constant.RegisterStatusError}
 	name, err := CanonicalTarget(domain)
 	if err != nil || !ValidOperationID(operationID) || store == nil {
@@ -101,6 +112,11 @@ func Register(ctx context.Context, store *redis.Client, domain, operationID stri
 		return info
 	}
 	defer release()
+	if !allowed() {
+		// Not claimed and not sent, so there is nothing to record or reconcile.
+		info.RawResponse = notSubmitted
+		return info
+	}
 
 	entry := record{RegisterInfo: info, Started: time.Now().Unix()}
 	entry.RegisterStatus = submitting
@@ -123,9 +139,13 @@ func Register(ctx context.Context, store *redis.Client, domain, operationID stri
 		return entry.RegisterInfo
 	}
 
-	if ctx.Err() != nil {
+	switch {
+	case ctx.Err() != nil:
 		entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusFailed, "注册在首次提交前中断"
-	} else {
+	case !allowed():
+		// Claimed but never sent: record a definite failure, which releases the domain.
+		entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusFailed, notSubmitted
+	default:
 		// Once accepted, collect and save the outcome even if the browser disconnects.
 		callCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
 		req, _ := http.NewRequestWithContext(callCtx, http.MethodGet, address, nil)
@@ -199,6 +219,55 @@ func Reconcile(ctx context.Context, store *redis.Client, domain, operationID, ou
 	}
 	log.Infof("Registration operation %s for %s reconciled: %s", operationID, name, outcome)
 	return entry.RegisterInfo, nil
+}
+
+// PendingRegistration is an operation that still blocks new submissions for
+// its domain: either still submitting or waiting for administrator review.
+type PendingRegistration struct {
+	RegisterInfo
+	StartedAt int64 `json:"startedAt"`
+}
+
+const maxPending = 500
+
+// Pending lists operations that hold a domain's registration lock, oldest
+// first, so an administrator can reconcile them after a page reload.
+func Pending(ctx context.Context, store *redis.Client) ([]PendingRegistration, error) {
+	if store == nil {
+		return nil, errors.New("registration store unavailable")
+	}
+	items := []PendingRegistration{}
+	iter := store.Scan(ctx, 0, keyPrefix+"*", 200).Iterator()
+	for iter.Next(ctx) && len(items) < maxPending {
+		hash := iter.Val()
+		operation, err := store.HGet(ctx, hash, "_pending").Result()
+		if errors.Is(err, redis.Nil) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		raw, err := store.HGet(ctx, hash, operation).Bytes()
+		if errors.Is(err, redis.Nil) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var entry record
+		if json.Unmarshal(raw, &entry) != nil {
+			entry = record{RegisterInfo: RegisterInfo{
+				OperationID: operation, DomainName: strings.TrimPrefix(hash, keyPrefix),
+				RegisterStatus: constant.RegisterStatusUnknown, RawResponse: "注册记录不可读，请先核对注册商",
+			}}
+		}
+		items = append(items, PendingRegistration{RegisterInfo: entry.RegisterInfo, StartedAt: entry.Started})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].StartedAt < items[j].StartedAt })
+	return items, nil
 }
 
 func FindProvider(cfg config.Config, name string) (config.RegisterApi, error) {

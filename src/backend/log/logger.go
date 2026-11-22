@@ -77,7 +77,8 @@ func init() {
 
 	// 创建同步器
 	var syncer zapcore.WriteSyncer
-	if appDev != "" && strings.ToLower(appDev) == "true" {
+	// Containers set POWERWHOIS_LOG_STDOUT so `docker compose logs` shows the application log.
+	if strings.EqualFold(appDev, "true") || strings.EqualFold(os.Getenv("POWERWHOIS_LOG_STDOUT"), "true") {
 		// 创建控制台输出
 		consoleSyncer := zapcore.AddSync(os.Stdout)
 

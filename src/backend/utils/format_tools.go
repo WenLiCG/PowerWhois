@@ -30,14 +30,18 @@ func GetDomainHumanStatus(domainStatus []string) string {
 		lowerDomainStatus := slice.Map(domainStatus, LowerString)
 		noSpaceDomainStatus := slice.Map(lowerDomainStatus, RemoveWhiteSpace)
 
-		// check if the domain status contains any of the following strings
-		if slice.Contain(noSpaceDomainStatus, "registrarhold") {
-			return constant.DomainStatusExpired
-		} else if slice.Contain(noSpaceDomainStatus, "pendingdelete") {
+		// Report the status closest to the domain becoming available first.
+		switch {
+		case slice.Contain(noSpaceDomainStatus, "pendingdelete"):
 			return constant.DomainStatusPendingDelete
-		} else if slice.Contain(noSpaceDomainStatus, "redemptionperiod") {
+		case slice.Contain(noSpaceDomainStatus, "redemptionperiod"):
 			return constant.DomainStatusRedemptionPeriod
-		} else {
+		case slice.Contain(noSpaceDomainStatus, "registrarhold"):
+			// Registrars commonly apply this hold after a missed renewal.
+			return constant.DomainStatusExpired
+		case slice.Contain(noSpaceDomainStatus, "serverhold") || slice.Contain(noSpaceDomainStatus, "clienthold"):
+			return constant.DomainStatusHold
+		default:
 			return constant.DomainStatusActive
 		}
 	} else {
@@ -56,8 +60,10 @@ func GetDomainHumanError(err error) string {
 			return "查询中断"
 		case errors.Is(err, lookuperror.ErrorRateLimited):
 			return "上游请求过多，请稍后再查"
-		case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, lookuperror.ErrorWhoisTimeout):
+		case errors.Is(err, lookuperror.ErrorWhoisTimeout):
 			return "Whois查询超时"
+		case errors.Is(err, context.DeadlineExceeded):
+			return "查询超时"
 		case errors.Is(err, lookuperror.ErrorNotSupportedTld):
 			return "后缀不支持"
 		case errors.Is(err, lookuperror.ErrorWhoisServerFailed):

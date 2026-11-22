@@ -22,7 +22,7 @@ English | [中文](./README.zh.md)
 7. Supports custom WHOIS APIs, allowing you to add your commonly used registrar APIs to check domain availability.
 8. Supports domain registration and custom register APIs, allowing you to add your commonly used registrar APIs for convenient domain registration.
 9. Backend settings can control threads, failed retries, and various other settings.
-10. Supports API mode. You can use the program as an API, for example, integrate it with your WHMCS. [See documentation](https://github.com/WenLiCG/PowerWhois/blob/main/API%20documentation.md)
+10. Supports API mode. Set `POWERWHOIS_API_KEYS` to enable `GET /api/v1/check?domain=example.com` for single-domain checks, for example from WHMCS. The browser's WebSocket protocol is documented too. [See documentation](https://github.com/WenLiCG/PowerWhois/blob/main/API%20documentation.md)
 
 ## Directory Structure
 
@@ -49,7 +49,13 @@ On a fresh install, set `POWERWHOIS_ADMIN_PASSWORD` and `POWERWHOIS_JWT_SECRET` 
 
 Run `docker compose up -d --build` from `deploy`. For upgrades, back up the running release, configuration and Redis data first. Replace the executable and SPA as a pair, and retain the existing runtime configuration and Redis data. Each installation uses one process for its legacy single bulk task. Verify migration separately if you used the unreleased multi-job branch.
 
-Anonymous sessions can use direct WHOIS, RDAP, DNS and Mixed mode. Paid proxy and custom provider access requires an administrator. DNS without delegation is reported as unknown. A registrar confirms whether the domain can be purchased. Registrations with an uncertain outcome remain pending for review by operation ID.
+Anonymous sessions can use direct WHOIS, RDAP, DNS and Mixed mode. Paid proxy and custom provider access requires an administrator. DNS without delegation is reported as unknown. A registrar confirms whether the domain can be purchased. Registrations with an uncertain outcome remain pending for review by operation ID, listed under **Manage → 待核对注册**.
+
+Anonymous visitors are limited per public IP: 500 domains per minute by default (setting `publicDomainsPerMinute`), 16 WebSocket connections, and half of the web lookup concurrency. Loopback and private addresses are exempt, so the backend must see real client addresses. It reads `X-Forwarded-For` from the right and stops at the first address that is not a trusted proxy, so entries a client forges are ignored. `POWERWHOIS_TRUSTED_PROXIES` lists the trusted proxies: Compose trusts private ranges (only Caddy reaches the backend), and when unset only loopback is trusted, which suits a native install behind Nginx on the same host. IPv6 clients are limited per /64. Behind a CDN, configure Nginx's `real_ip` module so `$remote_addr` is the visitor rather than the CDN edge. Do not publish Caddy's port beyond loopback: anything that can reach Caddy or the backend from a private address can set the client address. When an upstream answers 429 or a WHOIS throttling message, PowerWhois pauses that upstream (honouring `Retry-After`, at most two minutes). Lookup timeouts count only the exchange with the upstream, not queuing. Within each WHOIS, RDAP or DNS upstream, anonymous lookups may hold only part of the shared slots (2 of 3, or 3 of 4), so administrators, bulk jobs and API clients always have capacity without raising the load on the registry.
+
+Anonymous visitors share 64 WebSocket connections. A signed-in administrator's browser first requests a one-time ticket over HTTPS and connects with it into 8 reserved connections, so a flood of anonymous connections cannot lock the administrator out. Logging out revokes administrator tokens in every browser, closes reserved connections, and stops a running registration batch from submitting domains it has not sent yet; requests already sent still have their outcomes collected and stored.
+
+Other environment variables: `POWERWHOIS_API_KEYS` (comma-separated keys of at least 24 characters; the integration API answers 404 when unset), `POWERWHOIS_LOG_STDOUT=true` (also log to stdout; set in Compose). The backend serves `/healthz` for health checks; Caddy does not expose it.
 
 # Development
 

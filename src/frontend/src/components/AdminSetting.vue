@@ -454,6 +454,32 @@
                         </q-item-section>
                     </q-item>
                 </q-card-section>
+
+                <q-card-section class="row q-pa-sm">
+                    <q-item class="col-4 q-pa-sm">
+                        <q-item-section class="text-right">匿名访客每分钟域名数</q-item-section>
+                    </q-item>
+                    <q-item class="col-8 q-pa-sm">
+                        <q-item-section>
+                            <q-input
+                                type="number"
+                                outlined
+                                dense
+                                round
+                                item-aligned
+                                suffix="个/IP"
+                                hint="按访客公网 IP 计算；本机和内网地址不受限制"
+                                v-model.number="settings.publicDomainsPerMinute"
+                                :rules="[
+                                    $rules.required('请设置匿名访客每分钟域名数'),
+                                    $rules.numeric('匿名访客每分钟域名数必须为数字'),
+                                    $rules.minValue(1, '匿名访客每分钟域名数最少为1'),
+                                    $rules.maxValue(100000, '匿名访客每分钟域名数最多为100000')
+                                ]"
+                            />
+                        </q-item-section>
+                    </q-item>
+                </q-card-section>
             </q-card>
 
             <!-- Typo查询参数 -->

@@ -54,6 +54,9 @@ type Config struct {
 	WebCheckConcurrencyLimit int `json:"webCheckConcurrencyLimit" yaml:"WebCheckConcurrencyLimit"`
 	WebCheckDomainLimit      int `json:"webCheckDomainLimit" yaml:"WebCheckDomainLimit"`
 
+	// PublicDomainsPerMinute limits anonymous web lookups per client IP.
+	PublicDomainsPerMinute int `json:"publicDomainsPerMinute" yaml:"PublicDomainsPerMinute"`
+
 	TypoDefaultCcTlds      []CcTld  `json:"typoDefaultCcTlds" yaml:"TypoDefaultCcTlds"`
 	TypoCustomizedReplaces []string `json:"typoCustomizedReplaces" yaml:"TypoCustomizedReplaces"`
 
@@ -86,6 +89,7 @@ var defaults = Config{
 	LogLevel: "Info", AuthUsername: "admin", AuthExpireDays: 1,
 	WhoisTimeout: 6, DnsTimeout: 5, RetryInterval: 3, RetryMax: 2,
 	BulkCheckConcurrencyLimit: 15, WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500,
+	PublicDomainsPerMinute: 500,
 }
 
 func Load(path string) error {
@@ -195,6 +199,10 @@ func UpdateConfig(next Config) (Config, error) {
 var ErrWriteConfig = errors.New("could not save configuration")
 
 func normalize(c *Config) {
+	if c.PublicDomainsPerMinute == 0 {
+		// Older configuration files and clients do not send this field.
+		c.PublicDomainsPerMinute = defaults.PublicDomainsPerMinute
+	}
 	c.LogLevel = strings.TrimSpace(c.LogLevel)
 	c.AuthUsername = strings.TrimSpace(c.AuthUsername)
 	for _, list := range [][]string{c.GlobalProxyTlds, c.MixedProxyTlds, c.MixedDnsTlds} {
@@ -244,6 +252,9 @@ func validate(c Config) error {
 		c.WebCheckConcurrencyLimit < 1 || c.WebCheckConcurrencyLimit > 64 ||
 		c.BulkCheckConcurrencyLimit < 1 || c.BulkCheckConcurrencyLimit > 128 {
 		return errors.New("invalid domain limit or worker count")
+	}
+	if c.PublicDomainsPerMinute < 1 || c.PublicDomainsPerMinute > 100000 {
+		return errors.New("anonymous domains per minute must be 1–100000")
 	}
 	if len(c.TypoCustomizedReplaces) > 200 || len(c.TypoDefaultCcTlds) > 100 {
 		return errors.New("too many Typo options")

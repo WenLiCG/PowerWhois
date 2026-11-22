@@ -58,6 +58,8 @@ BulkCheckConcurrencyLimit: 15
 # ------ Web check settings ------
 WebCheckConcurrencyLimit: 15
 WebCheckDomainLimit: 800
+# Domains per minute for each anonymous public IP (1-100000). Loopback and private addresses are exempt.
+PublicDomainsPerMinute: 800
 
 # ------ Typo check settings ------
 TypoDefaultCcTlds:

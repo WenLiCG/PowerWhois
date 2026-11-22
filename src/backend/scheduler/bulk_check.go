@@ -35,10 +35,25 @@ const (
 	freeKey    = constant.BulkCheckFreeResultRedisKey
 	errorKey   = constant.BulkCheckErrorResultRedisKey
 	uploadKey  = rawKey + ":upload"
+	// keptKey holds Unknown and Reserved rows while Recheck requeues Error rows.
+	keptKey = errorKey + ":kept"
 )
 
 var ErrBulkState = errors.New("当前批量任务状态不允许此操作")
 var ErrUploadSize = errors.New("批量文件必须非空且至多 100 MiB")
+
+// lock waits for the task mutex until ctx ends, so callers such as the
+// WebSocket handler cannot block indefinitely behind a long upload or export.
+func (b *BulkCheck) lock(ctx context.Context) error {
+	for !b.mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ErrBulkState
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+	return nil
+}
 
 type BulkCheck struct {
 	redis *redis.Client
@@ -113,11 +128,12 @@ func (b *BulkCheck) Info(ctx context.Context) (BulkCheckStatusInfo, error) {
 	taken := p.LLen(ctx, takenKey)
 	free := p.LLen(ctx, freeKey)
 	failed := p.LLen(ctx, errorKey)
+	kept := p.LLen(ctx, keptKey)
 	_, err := p.Exec(ctx)
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return BulkCheckStatusInfo{}, err
 	}
-	for _, cmd := range []redis.Cmder{status, mode, total, pending, taken, free, failed} {
+	for _, cmd := range []redis.Cmder{status, mode, total, pending, taken, free, failed, kept} {
 		if err := cmd.Err(); err != nil && !errors.Is(err, redis.Nil) {
 			return BulkCheckStatusInfo{}, err
 		}
@@ -138,12 +154,14 @@ func (b *BulkCheck) Info(ctx context.Context) (BulkCheckStatusInfo, error) {
 	}
 	return BulkCheckStatusInfo{
 		Status: s, QueryType: mode.Val(), TotalDomains: n, RemainDomains: pending.Val(),
-		TakenDomains: taken.Val(), FreeDomains: free.Val(), ErrorDomains: failed.Val(), Error: failure, CanResume: canResume,
+		TakenDomains: taken.Val(), FreeDomains: free.Val(), ErrorDomains: failed.Val() + kept.Val(), Error: failure, CanResume: canResume,
 	}, nil
 }
 
 func (b *BulkCheck) Upload(ctx context.Context, input io.Reader) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	if b.active != nil || b.closing {
 		return ErrBulkState
@@ -199,7 +217,9 @@ return 1
 `)
 
 func (b *BulkCheck) Start(ctx context.Context, mode string) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	if b.active != nil || b.closing || !lookuper.ValidMode(mode, true, config.GetConfig()) {
 		return ErrBulkState
@@ -223,7 +243,9 @@ func (b *BulkCheck) Start(ctx context.Context, mode string) error {
 }
 
 func (b *BulkCheck) Resume(ctx context.Context) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	if b.active != nil || b.closing {
 		return ErrBulkState
@@ -252,8 +274,12 @@ func (b *BulkCheck) resume(ctx context.Context, stage string) error {
 	return nil
 }
 
+// Recheck requeues rows whose lookup failed. Unknown and Reserved rows are
+// answers from the registry or DNS, so they stay in place.
 func (b *BulkCheck) Recheck(ctx context.Context) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	if b.active != nil || b.closing {
 		return ErrBulkState
@@ -280,7 +306,9 @@ func (b *BulkCheck) Recheck(ctx context.Context) error {
 }
 
 func (b *BulkCheck) Stop(ctx context.Context, target string) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	s, err := b.status(ctx)
 	if err != nil {
@@ -301,12 +329,14 @@ func (b *BulkCheck) Stop(ctx context.Context, target string) error {
 }
 
 func (b *BulkCheck) Clear(ctx context.Context) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	if b.active != nil || b.closing {
 		return errors.New("请先暂停或取消并等待批量任务停止")
 	}
-	if err := b.redis.Del(ctx, statusKey, modeKey, uploadKey, rawKey, pendingKey, totalKey, takenKey, freeKey, errorKey).Err(); err != nil {
+	if err := b.redis.Del(ctx, statusKey, modeKey, uploadKey, rawKey, pendingKey, totalKey, takenKey, freeKey, errorKey, keptKey).Err(); err != nil {
 		return err
 	}
 	b.failure = ""
@@ -397,7 +427,7 @@ func (r *rawReader) Read(buf []byte) (int, error) {
 }
 
 func (b *BulkCheck) prepare(ctx context.Context) (int64, error) {
-	if err := b.redis.Del(ctx, pendingKey, totalKey, takenKey, freeKey, errorKey).Err(); err != nil {
+	if err := b.redis.Del(ctx, pendingKey, totalKey, takenKey, freeKey, errorKey, keptKey).Err(); err != nil {
 		return 0, err
 	}
 	rows := bufio.NewScanner(bufio.NewReaderSize(&rawReader{ctx: ctx, redis: b.redis}, 256<<10))
@@ -447,6 +477,9 @@ func (b *BulkCheck) prepare(ctx context.Context) (int64, error) {
 	return total, err
 }
 
+// moveErrors processes one page of the error list. Rows with an Error status
+// (or no status, from older releases) go back to pending. Unknown and Reserved
+// rows move to the kept list, which restoreKept returns once the page loop ends.
 var moveErrors = redis.NewScript(`
 local rows = redis.call('LRANGE', KEYS[1], 0, tonumber(ARGV[1])-1)
 for _, raw in ipairs(rows) do
@@ -457,10 +490,24 @@ for _, raw in ipairs(rows) do
 end
 for _, raw in ipairs(rows) do
 	local row = cjson.decode(raw)
-	redis.call('HSETNX', KEYS[2], row.domain, cjson.encode({Domain=row.domain,Order=row.order}))
+	if row.registerStatus == 'Unknown' or row.registerStatus == 'Reserved' then
+		redis.call('RPUSH', KEYS[3], raw)
+	else
+		redis.call('HSETNX', KEYS[2], row.domain, cjson.encode({Domain=row.domain,Order=row.order}))
+	end
 	redis.call('LPOP', KEYS[1])
 end
 return #rows
+`)
+
+// restoreKept returns kept rows to the error list. It runs after moveErrors
+// has emptied the error list and before any worker commits, so a rename is
+// safe. A restart during requeueing repeats both steps from Redis state.
+var restoreKept = redis.NewScript(`
+if redis.call('EXISTS', KEYS[2]) == 0 then return 0 end
+if redis.call('LLEN', KEYS[1]) ~= 0 then return redis.error_reply('error list is not empty') end
+redis.call('RENAME', KEYS[2], KEYS[1])
+return 1
 `)
 
 func (b *BulkCheck) run(ctx context.Context, stage, mode string) error {
@@ -475,13 +522,16 @@ func (b *BulkCheck) run(ctx context.Context, stage, mode string) error {
 		}
 	case statusRequeue:
 		for {
-			moved, err := moveErrors.Run(ctx, b.redis, []string{errorKey, pendingKey}, pageSize).Int()
+			moved, err := moveErrors.Run(ctx, b.redis, []string{errorKey, pendingKey, keptKey}, pageSize).Int()
 			if err != nil {
 				return err
 			}
 			if moved == 0 {
 				break
 			}
+		}
+		if err := restoreKept.Run(ctx, b.redis, []string{errorKey, keptKey}).Err(); err != nil {
+			return err
 		}
 	}
 	if err := ctx.Err(); err != nil {

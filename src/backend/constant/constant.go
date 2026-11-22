@@ -161,6 +161,9 @@ const (
 	// DomainStatusPendingDelete is the status when a domain is pending deletion.
 	DomainStatusPendingDelete = "PendingDelete"
 
+	// DomainStatusHold is the status when the registry or registrar has suspended the domain.
+	DomainStatusHold = "Hold"
+
 	// DomainStatusUnknown is the status when the domain status is unknown.
 	DomainStatusUnknown = "Unknown"
 )

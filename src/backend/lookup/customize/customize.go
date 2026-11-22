@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"typonamer/config"
 	"typonamer/constant"
@@ -15,23 +16,31 @@ import (
 	"github.com/duke-git/lancet/v2/strutil"
 )
 
-func CustomizeLookup(ctx context.Context, domain string, provider config.WhoisApi) (lookupinfo.DomainInfo, error) {
+// CustomizeLookup queries an administrator-configured provider. The timeout
+// starts once a slot for the provider is held.
+func CustomizeLookup(parent context.Context, domain string, provider config.WhoisApi, timeout time.Duration) (lookupinfo.DomainInfo, error) {
 	info := lookupinfo.DomainInfo{LookupType: provider.ApiName, DomainName: domain}
-	release, err := network.Acquire(ctx, "custom:"+provider.ApiName, provider.ConcurrencyLimit)
+	slotKey := "custom:" + provider.ApiName
+	release, err := network.Acquire(parent, slotKey, provider.ConcurrencyLimit)
 	if err != nil {
 		return info, err
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
 	address := strings.ReplaceAll(provider.ApiUrl, "{domain}", url.QueryEscape(domain))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return info, lookuperror.ErrorCustomizeApiServerResponse
 	}
-	body, code, err := network.ReadResponse(network.PrivateLookupClient, req)
+	body, code, header, err := network.ReadResponseHeader(network.PrivateLookupClient, req)
 	switch {
+	case parent.Err() != nil:
+		return info, parent.Err()
 	case ctx.Err() != nil:
 		return info, ctx.Err()
 	case code == http.StatusTooManyRequests:
+		network.Cooldown(slotKey, network.RetryAfter(header, time.Now()))
 		return info, lookuperror.ErrorRateLimited
 	case err != nil || code < 200 || code >= 300:
 		return info, lookuperror.ErrorCustomizeApiServerResponse

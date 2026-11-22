@@ -18,7 +18,9 @@ import (
 )
 
 func (b *BulkCheck) Export(ctx context.Context, output io.Writer) error {
-	b.mu.Lock()
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
 	defer b.mu.Unlock()
 	if b.active != nil {
 		return ErrBulkState
@@ -37,7 +39,8 @@ func (b *BulkCheck) Export(ctx context.Context, output io.Writer) error {
 		order int
 		data  lookupinfo.QueryCsvResult
 	}
-	keys := []string{takenKey, freeKey, errorKey}
+	// keptKey is non-empty only when a recheck was canceled while requeueing.
+	keys := []string{takenKey, freeKey, errorKey, keptKey}
 	var count int64
 	for _, key := range keys {
 		n, err := b.redis.LLen(ctx, key).Result()

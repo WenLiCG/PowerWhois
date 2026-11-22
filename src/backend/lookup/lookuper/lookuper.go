@@ -78,20 +78,23 @@ func Query(ctx context.Context, domain, mode string, allowPrivate bool, cfg conf
 		attempts += cfg.RetryMax
 	}
 	var info lookupinfo.DomainInfo
+	timeout := time.Duration(cfg.WhoisTimeout) * time.Second
 	for attempt := 0; attempt < attempts; attempt++ {
 		if ctx.Err() != nil {
 			return Result(domain, info, ctx.Err())
 		}
-		callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
+		// Each client applies the timeout after it holds an upstream slot.
 		switch {
 		case provider.ApiName != "":
-			info, err = customize.CustomizeLookup(callCtx, domain, provider)
+			info, err = customize.CustomizeLookup(ctx, domain, provider, timeout)
 		case len(servers) != 0:
-			info, err = rdaplib.RDAPQuery(callCtx, domain, servers, viaProxy, cfg)
+			info, err = rdaplib.RDAPQuery(ctx, domain, servers, viaProxy, cfg)
 		default:
-			info, err = whoislib.WhoisQuery(callCtx, domain, tld, viaProxy, cfg)
+			info, err = whoislib.WhoisQuery(ctx, domain, tld, viaProxy, cfg)
 		}
-		cancel()
+		if ctx.Err() != nil {
+			return Result(domain, info, ctx.Err())
+		}
 		if errors.Is(err, lookuperror.ErrorNotSupportedTld) || errors.Is(err, lookuperror.ErrorNoParseRuleForTld) {
 			if mode == constant.MixedQuery {
 				return dnsResult(ctx, domain, tld, cfg.DnsTimeout)
@@ -100,8 +103,9 @@ func Query(ctx context.Context, domain, mode string, allowPrivate bool, cfg conf
 				err = bootErr
 			}
 		}
+		// A rate-limited upstream is paused by the client; the next attempt waits for it.
 		retryable := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, lookuperror.ErrorWhoisTimeout) ||
-			errors.Is(err, lookuperror.ErrorConnectToProxy)
+			errors.Is(err, lookuperror.ErrorConnectToProxy) || errors.Is(err, lookuperror.ErrorRateLimited)
 		if !retryable || attempt+1 == attempts {
 			break
 		}
@@ -115,9 +119,7 @@ func Query(ctx context.Context, domain, mode string, allowPrivate bool, cfg conf
 }
 
 func dnsResult(ctx context.Context, domain, tld string, timeout int) lookupinfo.QueryResult {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
-	info, err := dnslib.NsCheck(ctx, domain, tld)
+	info, err := dnslib.NsCheck(ctx, domain, tld, time.Duration(timeout)*time.Second)
 	return Result(domain, info, err)
 }
 

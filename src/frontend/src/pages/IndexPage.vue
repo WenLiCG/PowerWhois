@@ -25,6 +25,9 @@
                                 <q-item clickable @click="tab = 'setting'">
                                     <q-item-section>设置</q-item-section>
                                 </q-item>
+                                <q-item clickable @click="tab = 'registrations'">
+                                    <q-item-section>待核对注册</q-item-section>
+                                </q-item>
                                 <q-item clickable @click="logout">
                                     <q-item-section>退出登录</q-item-section>
                                 </q-item>
@@ -53,6 +56,10 @@
                         <q-tab-panel name="setting" v-if="tokenStore.token">
                             <AdminSetting></AdminSetting>
                         </q-tab-panel>
+
+                        <q-tab-panel name="registrations" v-if="tokenStore.token">
+                            <PendingRegistrations></PendingRegistrations>
+                        </q-tab-panel>
                     </q-tab-panels>
                 </div>
             </q-page>
@@ -74,6 +81,7 @@ import BulkCheck from "src/components/BulkCheck.vue";
 import TypoCheck from "src/components/TypoCheck.vue";
 import AdminLogin from "src/components/AdminLogin.vue";
 import AdminSetting from "src/components/AdminSetting.vue";
+import PendingRegistrations from "src/components/PendingRegistrations.vue";
 
 defineOptions({
     name: "IndexPage"
@@ -88,8 +96,12 @@ function loginedUpdate() {
     location.reload();
 }
 
+// Revoke every administrator token on the server, then clear this browser.
+// The local token is cleared even when the request fails.
 function logout() {
-    removeToken();
+    api.post("/admin/logout")
+        .catch(() => console.warn("Server did not confirm logout; other sessions may remain valid"))
+        .finally(() => removeToken());
 }
 
 watch(() => tokenStore.token, (token, previous) => {

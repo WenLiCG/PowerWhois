@@ -53,8 +53,84 @@ POST /api/login
     "token": "JWT令牌" // string: JWT令牌字符串
   }
   ```
-- 请求无效 (400)：用户名或密码不正确
+- 请求格式无效 (400)：请求体不是有效 JSON
+- 认证失败 (401)：用户名或密码不正确（2026-11-22 之前的版本返回 400）
+- 尝试过多 (429)：同一客户端地址每分钟失败超过 10 次
 - 服务器错误 (500)：令牌生成失败
+
+#### 退出登录
+
+```
+POST /api/admin/logout
+```
+
+需要 `Authorization: Bearer {JWT 令牌}`。使所有已签发的管理员令牌失效（包括其他浏览器与已打开的 WebSocket 管理员会话），之后需重新登录。
+
+- 成功 (204)
+- 未认证 (401)
+- 无法写入 Redis (503)：令牌未被撤销
+
+退出后，进行中的注册批次不再提交尚未发出的域名（这些域名返回 `error`，说明为“管理员会话已结束，此域名未提交”）；已经发给注册商的请求仍会收集结果并保存。
+
+#### 管理员 WebSocket 票据
+
+```
+POST /api/admin/ws-ticket
+```
+
+需要 `Authorization: Bearer {JWT 令牌}`。返回 `{"ticket": "...", "expiresIn": 30}`。用 `/app/ws?ticket={ticket}` 建立 WebSocket 连接时，连接进入管理员专用的 8 个连接名额，不占用匿名访客共用的 64 个名额，连接建立后立即收到 `adminAuthResult: true`，无需再发送 `adminAuth`。
+
+- 票据一次有效，30 秒过期，退出登录后作废；无效票据会按普通匿名连接处理。
+- 票据出现在 URL 中，可能被代理访问日志记录；它在使用或过期后即失效。
+- 管理员会话过期或被撤销时，服务器关闭这类连接，释放名额。
+- 未认证 (401)；未使用的票据过多 (503)。
+
+### 集成 API
+
+```
+GET /api/v1/check?domain=example.com&queryType=whoisQuery&raw=0
+```
+
+供 WHMCS 等系统单域名查询。服务端设置环境变量 `POWERWHOIS_API_KEYS`（逗号分隔，每个至少 24 个字符）后启用；未设置时返回 404。
+
+**请求头**：`X-API-Key: {密钥}`，或 `Authorization: Bearer {密钥}`。
+
+**参数**：
+
+- `domain`（必填）：域名或 HTTP(S) URL，按可注册域名规范化。
+- `queryType`（可选，默认 `whoisQuery`）：与管理员可用的查询类型相同，包括 `whoisQueryWithProxy` 和自定义查询接口名称。
+- `raw`（可选）：为 `1` 时返回原始响应 `rawResponse`。
+
+**并发**：集成 API 有自己的外层并发池 `web:api`，大小等于 `webCheckConcurrencyLimit`，与网页管理员池、匿名池分开计数，并不共享一个总数。真正的上游上限在内层：每个 WHOIS 服务器 3 个、每个 RDAP 服务器 4 个、每个 TLD 的 DNS 查询 4 个，由所有请求（网页、批量、API）共享。API 请求按管理员级别计算，可使用为匿名访客以外保留的名额。
+
+**响应**：
+
+- 成功 (200)：一个 [Web 检查结果](#web-检查结果-webcheckresult) 对象。判断可注册性请看 `registerStatus`：`Free` 表示注册查询未找到记录，最终以注册商为准。
+- 参数无效 (400)、密钥无效 (401)、每个密钥每分钟超过 600 次 (429)、服务繁忙 (503)。
+
+### 注册核对
+
+| 接口             | 方法 | 路径                                  | 描述                           | 需要认证 |
+| ---------------- | ---- | ------------------------------------- | ------------------------------ | -------- |
+| 待核对注册列表   | GET  | /api/admin/registrations              | 列出结果不确定或提交中断的操作 | 是       |
+| 记录核对结果     | PUT  | /api/admin/registration/{operationId} | 写回人工核对后的成功或失败     | 是       |
+
+`GET /api/admin/registrations` 返回数组，按开始时间升序，最多 500 条：
+
+```json
+[
+  {
+    "operationId": "UUID",
+    "registerType": "注册接口名称",
+    "domainName": "example.com",
+    "registerStatus": "outcome_unknown", // 或 submitting：提交中或进程中断
+    "rawResponse": "说明",
+    "startedAt": 1763800000 // Unix 秒
+  }
+]
+```
+
+`submitting` 状态的操作需在开始 30 秒后才能写回结果。
 
 ### 配置相关
 
@@ -107,6 +183,7 @@ POST /api/login
   "bulkCheckConcurrencyLimit": 100, // int: 批量检查并发限制
   "webCheckConcurrencyLimit": 10, // int: 网页检查并发限制
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制
+  "publicDomainsPerMinute": 500, // int: 匿名访客每个公网 IP 每分钟可查询的域名数，1–100000，缺省或 0 时取 500
   "typoDefaultCcTlds": [
     // array: 默认顶级域名列表
     {
@@ -277,6 +354,7 @@ POST /api/login
   "bulkCheckConcurrencyLimit": 100, // int: 批量检查并发限制
   "webCheckConcurrencyLimit": 10, // int: 网页检查并发限制
   "webCheckDomainLimit": 500, // int: 网页查询域名数量限制
+  "publicDomainsPerMinute": 500, // int: 匿名访客每个公网 IP 每分钟可查询的域名数，1–100000，缺省或 0 时取 500
   "typoDefaultCcTlds": [
     // array: 默认顶级域名列表
     {
@@ -493,6 +571,8 @@ WebSocket 连接建立后，客户端和服务器可以使用消息事件进行�
 **响应**：通过`bulkCheckInfo`事件返回状态为`idle`的批量检查状态
 
 #### 重新检查错误域名
+
+只把状态为 `Error` 的行重新排队。`Unknown`（如 DNS 无委派）和 `Reserved` 是查询得到的结论，保持不变，不再次查询。
 
 **请求**：
 
@@ -727,10 +807,13 @@ typo 类型可以是：
 ### 域名状态
 
 - `Active`: 激活状态
-- `Expired`: 已过期
+- `Expired`: 已过期（`registrarHold`）
+- `Hold`: 被注册局或注册商暂停解析（`serverHold`、`clientHold`）
 - `RedemptionPeriod`: 赎回期
 - `PendingDelete`: 待删除
 - `Unknown`: 未知状态
+
+同时出现多个状态时按 `PendingDelete`、`RedemptionPeriod`、`Expired`、`Hold`、`Active` 的顺序取第一个。
 
 ### 注册操作状态
 
