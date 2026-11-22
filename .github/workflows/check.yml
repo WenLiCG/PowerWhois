@@ -31,9 +31,11 @@ jobs:
         run: |
           go vet ./...
           go test -race ./...
-          # The scanner supports Go 1.26 source analysis. Release binaries are scanned below.
-          GOTOOLCHAIN=go1.26.11 go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
-          GOTOOLCHAIN=go1.26.11 govulncheck ./...
+      - name: Scan Go source
+        working-directory: src/backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          govulncheck ./...
       - name: Test and build frontend
         working-directory: src/frontend
         run: |
