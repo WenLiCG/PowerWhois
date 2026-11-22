@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -75,10 +76,29 @@ func Login(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"username": cfg.AuthUsername, "token": token})
 }
 
+// submissionGate orders logout against registrar submissions. A registration
+// takes the read lock only while it checks that the session is still valid,
+// immediately before it sends a request. Logout holds the write lock while it
+// changes the generation, so once logout has returned, no domain that had not
+// yet passed that check can be submitted. Requests that passed it earlier are
+// already on their way to the registrar; their outcomes are still collected
+// and stored.
+var submissionGate sync.RWMutex
+
+// sessionStillValid reports, under the submission gate, whether check passes.
+func sessionStillValid(check func() bool) bool {
+	submissionGate.RLock()
+	defer submissionGate.RUnlock()
+	return check()
+}
+
 // Logout revokes all administrator tokens, including those in other browsers.
 func Logout(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(c.UserContext(), 3*time.Second)
 	defer cancel()
+	submissionGate.Lock()
+	defer submissionGate.Unlock()
+	defer dropTickets()
 	if client := authStore.Load(); client != nil {
 		next, err := client.Incr(ctx, authGenerationKey).Result()
 		if err != nil {

@@ -85,7 +85,15 @@ if ARGV[5] == 'success' then redis.call('HSET', KEYS[1], '_recent', ARGV[1]) end
 return 1
 `)
 
-func Register(ctx context.Context, store *redis.Client, domain, operationID string, provider config.RegisterApi) RegisterInfo {
+// notSubmitted explains a domain skipped because the administrator session ended.
+const notSubmitted = "管理员会话已结束，此域名未提交"
+
+// Register submits one domain. mayStart, when not nil, is consulted before the
+// domain is claimed and again immediately before the request is sent; if it
+// returns false nothing is sent. Once a request has been sent, its outcome is
+// collected and stored even if the caller's context ends.
+func Register(ctx context.Context, store *redis.Client, domain, operationID string, provider config.RegisterApi, mayStart func() bool) RegisterInfo {
+	allowed := func() bool { return mayStart == nil || mayStart() }
 	info := RegisterInfo{DomainName: domain, RegisterType: provider.ApiName, OperationID: operationID, RegisterStatus: constant.RegisterStatusError}
 	name, err := CanonicalTarget(domain)
 	if err != nil || !ValidOperationID(operationID) || store == nil {
@@ -104,6 +112,11 @@ func Register(ctx context.Context, store *redis.Client, domain, operationID stri
 		return info
 	}
 	defer release()
+	if !allowed() {
+		// Not claimed and not sent, so there is nothing to record or reconcile.
+		info.RawResponse = notSubmitted
+		return info
+	}
 
 	entry := record{RegisterInfo: info, Started: time.Now().Unix()}
 	entry.RegisterStatus = submitting
@@ -126,9 +139,13 @@ func Register(ctx context.Context, store *redis.Client, domain, operationID stri
 		return entry.RegisterInfo
 	}
 
-	if ctx.Err() != nil {
+	switch {
+	case ctx.Err() != nil:
 		entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusFailed, "注册在首次提交前中断"
-	} else {
+	case !allowed():
+		// Claimed but never sent: record a definite failure, which releases the domain.
+		entry.RegisterStatus, entry.RawResponse = constant.RegisterStatusFailed, notSubmitted
+	default:
 		// Once accepted, collect and save the outcome even if the browser disconnects.
 		callCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
 		req, _ := http.NewRequestWithContext(callCtx, http.MethodGet, address, nil)

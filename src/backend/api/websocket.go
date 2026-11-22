@@ -54,6 +54,7 @@ type webSession struct {
 	redis *redis.Client
 
 	ip          string
+	reserved    bool // admitted with a ticket into the administrator pool
 	wg          sync.WaitGroup
 	writer      sync.Mutex
 	adminUntil  atomic.Int64
@@ -67,8 +68,14 @@ type webSession struct {
 // clientIPKey carries the proxy-aware client address from the upgrade request into the session.
 const clientIPKey = "powerwhoisClientIP"
 
+// admittedKey carries the administrator session granted by a redeemed ticket.
+const admittedKey = "powerwhoisAdmitted"
+
 // publicBudget limits anonymous web lookups per client address across all sessions.
 var publicBudget domainBudget
+
+// lookupQuery is lookuper.Query; tests replace it to observe lookup contexts.
+var lookupQuery = lookuper.Query
 
 func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client *redis.Client) (fiber.Handler, func(context.Context) error) {
 	var sessions sync.WaitGroup
@@ -76,26 +83,40 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 	var perIP connectionCounter
 	stopping := false
 	allowedOrigin := os.Getenv("POWERWHOIS_WEB_ORIGIN")
-	connections := make(chan struct{}, 64)
+	connections := make(chan struct{}, publicConnections)
+	reserved := make(chan struct{}, adminConnections)
 	busy := func(conn *websocket.Conn) {
 		conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "server busy"), time.Now().Add(time.Second))
 	}
 	upgrade := websocket.New(func(conn *websocket.Conn) {
 		ip, _ := conn.Locals(clientIPKey).(string)
-		if limitedIP(ip) {
-			key := limitKey(ip)
-			if !perIP.acquire(key, connectionsPerIP) {
+		admitted, isReserved := conn.Locals(admittedKey).(adminToken)
+		if isReserved {
+			// Ticket-admitted administrators use their own pool and skip the
+			// per-address cap, so anonymous traffic cannot lock them out.
+			select {
+			case reserved <- struct{}{}:
+				defer func() { <-reserved }()
+			default:
 				busy(conn)
 				return
 			}
-			defer perIP.release(key)
-		}
-		select {
-		case connections <- struct{}{}:
-			defer func() { <-connections }()
-		default:
-			busy(conn)
-			return
+		} else {
+			if limitedIP(ip) {
+				key := limitKey(ip)
+				if !perIP.acquire(key, connectionsPerIP) {
+					busy(conn)
+					return
+				}
+				defer perIP.release(key)
+			}
+			select {
+			case connections <- struct{}{}:
+				defer func() { <-connections }()
+			default:
+				busy(conn)
+				return
+			}
 		}
 		lifecycle.Lock()
 		if stopping || parent.Err() != nil {
@@ -107,9 +128,13 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 		defer sessions.Done()
 
 		ctx, cancel := context.WithCancel(parent)
-		s := &webSession{ws: conn, ctx: ctx, bulk: bulk, redis: client, ip: ip}
+		s := &webSession{ws: conn, ctx: ctx, bulk: bulk, redis: client, ip: ip, reserved: isReserved}
+		if isReserved {
+			s.adminGen.Store(admitted.generation)
+			s.adminUntil.Store(admitted.expiry.Unix())
+		}
 		closed := make(chan struct{})
-		closeOnStop := context.AfterFunc(ctx, func() { conn.Close(); close(closed) })
+		closeOnStop := context.AfterFunc(ctx, func() { closeConn(conn, websocket.CloseGoingAway, "server stopping"); close(closed) })
 		defer func() {
 			if !closeOnStop() {
 				<-closed
@@ -119,6 +144,9 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 		}()
 
 		conn.SetReadLimit(1 << 20)
+		if isReserved {
+			s.send("adminAuthResult", true)
+		}
 		s.wg.Go(s.bulkStatus)
 		for {
 			conn.SetReadDeadline(time.Now().Add(75 * time.Second))
@@ -144,6 +172,11 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 				}
 			}
 			c.Locals(clientIPKey, ClientIP(c))
+			// An invalid or used ticket falls back to an ordinary connection,
+			// which can still authenticate with an adminAuth message.
+			if token, ok := redeemTicket(c.Query("ticket")); ok {
+				c.Locals(admittedKey, token)
+			}
 			return upgrade(c)
 		}, func(ctx context.Context) error {
 			lifecycle.Lock()
@@ -160,6 +193,15 @@ func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client 
 		}
 }
 
+// closeConn ends a session from any goroutine. Close on a hijacked fasthttp
+// connection is a no-op (the socket closes when the handler returns), so the
+// read deadline is also expired to unblock the read loop and end the handler.
+func closeConn(conn *websocket.Conn, code int, text string) {
+	conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(time.Second))
+	conn.SetReadDeadline(time.Now())
+	conn.Close()
+}
+
 func (s *webSession) send(event string, data any) bool {
 	if s.ctx.Err() != nil {
 		return false
@@ -168,7 +210,7 @@ func (s *webSession) send(event string, data any) bool {
 	defer s.writer.Unlock()
 	s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := s.ws.WriteJSON(fiber.Map{"event": event, "data": data}); err != nil {
-		s.ws.Close()
+		closeConn(s.ws, websocket.CloseGoingAway, "write failed")
 		return false
 	}
 	return true
@@ -190,7 +232,7 @@ func (s *webSession) handle(message MessageObject) {
 		s.writer.Lock()
 		s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := s.ws.WriteJSON(fiber.Map{"event": constant.WebsocketResponseEventPong}); err != nil {
-			s.ws.Close()
+			closeConn(s.ws, websocket.CloseGoingAway, "write failed")
 		}
 		s.writer.Unlock()
 	case constant.WebsocketRequestEventAdminAuth:
@@ -232,10 +274,10 @@ func (s *webSession) handle(message MessageObject) {
 	}
 }
 
+// bulkStatus runs once a second. It ends administrator access when the token
+// expires or is revoked (closing connections in the reserved pool, so their
+// slots return to administrators) and pushes bulk task status to administrators.
 func (s *webSession) bulkStatus() {
-	if s.bulk == nil {
-		return
-	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	hadError := false
@@ -246,12 +288,23 @@ func (s *webSession) bulkStatus() {
 		case <-ticker.C:
 			expiry := s.adminUntil.Load()
 			if expiry == 0 {
+				if s.reserved {
+					closeConn(s.ws, websocket.ClosePolicyViolation, "session ended")
+					return
+				}
 				continue
 			}
 			if time.Now().Unix() >= expiry || s.adminGen.Load() != authGeneration.Load() {
 				if s.adminUntil.CompareAndSwap(expiry, 0) {
 					s.send("adminAuthResult", false)
 				}
+				if s.reserved {
+					closeConn(s.ws, websocket.ClosePolicyViolation, "session ended")
+					return
+				}
+				continue
+			}
+			if s.bulk == nil {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(s.ctx, 2*time.Second)
@@ -373,6 +426,12 @@ func (s *webSession) startCheck(cfg config.Config, admin bool, mode string, doma
 	if !admin {
 		pool, limit = "web:public", max(1, cfg.WebCheckConcurrencyLimit/2)
 	}
+	// Inside each upstream (WHOIS, RDAP and DNS servers), anonymous lookups may
+	// hold only network.PublicLimit of the shared slots; see network.Acquire.
+	lookupCtx := ctx
+	if !admin {
+		lookupCtx = network.WithPublic(ctx)
+	}
 	announce()
 	s.wg.Go(func() {
 		defer cancel()
@@ -382,7 +441,7 @@ func (s *webSession) startCheck(cfg config.Config, admin bool, mode string, doma
 				return
 			}
 			defer release()
-			result := lookuper.Query(ctx, domain, mode, admin, cfg)
+			result := lookupQuery(lookupCtx, domain, mode, admin, cfg)
 			if ctx.Err() == nil {
 				s.send(constant.WebsocketResponseEventWebCheckResult, result)
 			}
@@ -426,8 +485,10 @@ func (s *webSession) register(data json.RawMessage) {
 	ctx, cancel := s.adminContext()
 	s.wg.Go(func() {
 		defer cancel()
+		// After logout or token expiry, domains not yet sent are skipped; see submissionGate.
+		mayStart := func() bool { return sessionStillValid(s.isAdmin) }
 		runDomains(ctx, domains, provider.ConcurrencyLimit, func(domain string) {
-			info := register.Register(ctx, s.redis, domain, req.OperationID, provider)
+			info := register.Register(ctx, s.redis, domain, req.OperationID, provider, mayStart)
 			if s.isAdmin() {
 				s.send(constant.WebsocketResponseEventRegisterResult, info)
 			}

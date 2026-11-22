@@ -5,23 +5,75 @@
 | Item | State |
 |---|---|
 | Base | `main` at `6662f8ae55447140152119a90b0cf9399159bb21` |
-| Branch | `pw-cli-impl-20261122`, one commit on top of the base, **committed locally only** |
-| Push and pull request | **Not done.** The authoring machine had no GitHub credentials (`git push` could not authenticate; `gh` not logged in). Push the branch and open a PR against `main` from an authenticated machine |
-| Merge into `main` | **Not done.** Wait for independent verification of the PR head and a passing `Verify PowerWhois` check |
+| Branch | `pw-cli-impl-20261122`, **local only**: `b093223` (first candidate) plus one commit fixing verification findings F1–F4 (section 2a). The new commit is the candidate |
+| Independent verification | `b093223` was rejected (NO-GO) with findings F1–F4 and handoff corrections. **The new candidate has not been independently verified** |
+| Push and pull request | **Not done**, and not to be done until the new candidate is verified. The authoring machine has no GitHub credentials |
+| Merge into `main` | **Not done.** Requires independent verification of the new candidate and a passing `Verify PowerWhois` check |
 
-Local results on the committed tree (Linux, Go 1.27.4, Node 22.23.5, Yarn 1.22.22):
+Local results on the new candidate tree (Linux, Go 1.27.4, Node 22.23.5, Yarn 1.22.22; Redis 7.0.15 from the verifier's isolated, extracted Debian package via a scoped `PATH`, not installed). Every command's own exit code was recorded, not a pipeline's:
 
-| Check | Result |
+| Check | Exit code and result |
 |---|---|
-| `gofmt -l .` | Clean |
-| `go build ./...`, `go vet ./...` | Pass |
-| `go test -race -count=1 ./...` | Pass. **No `redis-server` on this machine, so six Redis tests skipped**: `TestBulkPauseResumeAndClear`, `TestCommitIsAtomicAndRecoveryCanFinishWithNoPending`, `TestRecheckRequeuesOnlyErrors` (new), `TestRegistrationRecordsOneRequestAndReconcilesAmbiguity`, `TestPendingListsOnlyUnresolvedOperations` (new), `TestBrowserProtocolAndBulkDownload`. CI installs Redis and runs them; check the CI log for `PASS`, not `SKIP` |
-| `yarn install --frozen-lockfile`, `yarn lint`, `yarn test`, `yarn build` | Pass. Node 24 fails the `engines` check; use Node 22 as CI does |
-| Caddyfile | `caddy validate` with Caddy v2.11.9 (built from the official module): valid |
-| Caddy forwarding | Checked against a header-echo upstream: from a trusted peer, Caddy keeps client-written `X-Forwarded-For` entries and appends the peer (`10.0.0.5, 203.0.113.7, 127.0.0.1`); from an untrusted peer it replaces the header. Security headers are served |
-| `docker-compose.yml` | YAML parses and the changed fields are as intended. **`docker compose config` and a container start were not run** (no Docker on this machine) |
+| `gofmt -l .` | 0, no files listed |
+| `go vet ./...` | 0, no output |
+| `go test -race -count=1 -v ./...` | **0**. 42 top-level tests PASS, 0 FAIL, **0 SKIP** (Redis present), 0 `DATA RACE` warnings |
+| `yarn lint` | 0 |
+| `yarn test` | 0, 4 tests, 4 pass, 0 skipped |
+| `yarn build` | 0 |
+| The verifier's probes (their overlay, unchanged) | 1 overall: `TestIndependentLogoutStopsUnsubmittedRegistrations` and `TestIndependentProxyAndAPIKeyBoundaries` PASS. Three still fail **by design**, because they encode assumptions the fixes change (section 2a lists each and the regression test that replaces it). `pending-identity.mjs` exits 1 because its regex no longer finds the filter, which moved to `src/utils/pendingRegistrations.js` |
+| Caddyfile | Unchanged since `b093223`; earlier `caddy validate` (v2.11.9) valid, and Caddy's `X-Forwarded-For` forwarding checked against an echo upstream |
+| `docker-compose.yml` | Unchanged since `b093223`. **`docker compose config` and a real container start have still not been run** (no Docker on the author's or the verifier's machine) |
+| Browser | **The new ticket flow in `websocketHandler.js` has not been exercised in a real browser.** The server side is covered by real WebSocket tests |
 
-Earlier, a separate controller run of `go vet` and `go test -race -count=1 ./...` also passed on the tree before the proxy-trust fix in 1.1.
+The first candidate `b093223` passed 35 top-level Go tests with zero skips on the verifier's machine; its four blockers are fixed below.
+
+## 2a. Fixes for the independent verification of `b093223`
+
+Each finding was reproduced on `b093223` with the verifier's probes before it was fixed. For each new regression test, the fix was temporarily removed and the test was confirmed to fail.
+
+### F1 — anonymous clients could fill every WebSocket slot before the administrator authenticated
+- Cause: authentication happened in a message after admission, and every connection competed for the same 64 slots. Four public addresses (16 each), or one exempt private client, locked the administrator out.
+- Fix (`api/admission.go`, new):
+  - `POST /api/admin/ws-ticket` (signed in) returns a one-time ticket, valid for 30 s.
+  - `/app/ws?ticket=…` redeems it during the upgrade and admits the connection into a separate pool of 8 reserved connections, with administrator access already granted (`adminAuthResult: true` is sent at once).
+  - Anonymous connections still share 64 slots with the per-address cap.
+  - HTTP is not limited by the WebSocket pools, so the ticket request works while those slots are full.
+  - Tickets are single-use, bound to the session generation, cleared by logout, capped at 256 outstanding, and 32 random bytes each. An invalid or used ticket falls back to an ordinary connection.
+  - When the session expires or is revoked, the server closes reserved connections so their slots return.
+- Frontend (`src/utils/websocketHandler.js`): when signed in, each connection first requests a fresh ticket. The module reconnects itself instead of using VueUse `autoReconnect`, which would reuse the spent ticket and could open two sockets. Without a token, or if the ticket request fails, it connects as before and still sends `adminAuth`.
+- **Found while fixing F1 (also present on `main`):** `Close()` on a hijacked fasthttp connection is a no-op until the handler returns (`fasthttp` `hijackConn.Close`; Fiber does not set `KeepHijackedConns`). So the shutdown hook and the write-error paths in `websocket.go` never closed anything; graceful shutdown waited for each idle client's next message. `closeConn` now also expires the read deadline, which ends the read loop.
+- Tests (`api/admission_test.go`):
+  - `TestTicketAdmitsAdministratorWhilePublicPoolIsFull` runs both of the verifier's scenarios over real connections: the 65th anonymous connection is refused, the ticketed administrator is admitted and answers ping, and a replayed ticket is refused.
+  - `TestTicketsRequireAValidSessionAndExpireOnLogout` covers four things: an anonymous ticket request gets 401; logout closes reserved connections, including one whose client never reads (only a server-side close frees that slot); all 8 slots are usable again afterwards; and the cap is 8.
+  - `TestShutdownClosesIdleSessions`: drain finishes with an idle session open.
+- **Replaced probe:** `TestIndependentAdminConnectionReservation` dials the administrator without any credential. Such a connection cannot be told apart from an anonymous one, so it stays in the public pool by design; the ticketed test above covers the same saturation scenarios.
+
+### F2 — a running registration batch kept submitting after logout
+- Cause: logout only changed the session generation; the batch's context depended on the WebSocket and the token's expiry time, and `Register` never checked revocation.
+- Fix:
+  - `register.Register` takes a `mayStart` check, consulted before the domain is claimed (nothing is recorded) and again immediately before the request is sent. If the claim was made, a definite `failed` record "管理员会话已结束，此域名未提交" (session ended, domain not submitted) is stored, which releases the domain.
+  - The WebSocket batch passes `sessionStillValid(s.isAdmin)`.
+  - `Logout` holds `submissionGate` (write lock) while changing the generation; the check takes the read lock. Once logout returns 204, no domain that had not passed the check can be sent.
+  - A request that passed the check just before logout may reach the registrar a moment later. That is the "already submitted" case: its outcome is collected and stored with `WithoutCancel`, as before.
+- Tests:
+  - `TestLogoutStopsUnsubmittedRegistrations` (real WebSocket, mock registrar, isolated Redis): the in-flight request finishes and its success is stored; the second domain never reaches the registrar and is never claimed.
+  - `register.TestRevokedSessionSubmitsNothing` covers both checkpoints and confirms the domain is not left locked.
+  - The verifier's own probe now passes.
+
+### F3 — the separate web pools did not reserve any real upstream capacity
+- Cause: `web:public` and `web:admin` were outer pools; inside them, everyone shared the same WHOIS (3), RDAP (4) and DNS (4) slots, which anonymous work could fill.
+- Fix (`network/limits.go`):
+  - Anonymous web checks run with `network.WithPublic(ctx)`. On every shared upstream key, `Acquire` lets public work hold at most `PublicLimit(limit)` slots: 2 of 3, 3 of 4, keeping `max(1, limit/4)` reserved.
+  - Privileged work (administrator web checks, Typo, bulk, API) may use every slot.
+  - The total per upstream is unchanged, so registry load is not multiplied. Cooldowns stay shared.
+- Tests:
+  - `TestAnonymousWorkCannotTakeReservedUpstreamSlots`: public work stops at its share, the administrator gets the reserved slots, the total never exceeds the limit, and freed public slots are reusable.
+  - `TestAnonymousLookupsUsePublicUpstreamShare`: over a real WebSocket, anonymous checks carry the public marker and administrator checks do not.
+- **Replaced probe:** `TestIndependentUpstreamAdminReservation` fills the upstream with unmarked contexts, which the server treats as privileged work. The two tests above cover the scenario with real anonymous marking.
+
+### F4 — the pending-registration page treated a batch ID as a row ID
+- Fix: `src/utils/pendingRegistrations.js` identifies rows by operation ID and domain together. The table's `row-key` uses it, and reconciling removes only that row.
+- Test: `tests/pendingRegistrations.test.mjs`, where reconciling one domain of a two-domain batch keeps the other.
 
 ## 2. What changed, by review finding
 
@@ -48,7 +100,8 @@ Numbers refer to the review of `main@6662f8a`.
   - Loopback, private and link-local addresses are exempt (see the risk in section 4).
 - `src/backend/api/websocket.go`:
   - Anonymous web checks are charged to the bucket. The new setting is `PublicDomainsPerMinute`, default 500, range 1–100000; 0 or missing means the default.
-  - Anonymous checks use a separate `web:public` pool with half of `WebCheckConcurrencyLimit`. The administrator uses `web:admin`.
+  - Anonymous checks use a separate `web:public` pool with half of `WebCheckConcurrencyLimit`. The administrator uses `web:admin`. These outer pools only limit how many lookups each kind of session runs; the actual upstream reservation is the public share described under F3.
+  - Administrator connections: see F1.
 - The new setting is in `config/config.go`, the admin settings page (`AdminSetting.vue`) and `deploy/backend/config.yaml` (800 there, to match that file's `WebCheckDomainLimit: 800`).
 
 ### 1.3 Time spent queuing counted as upstream timeout
@@ -94,7 +147,7 @@ Numbers refer to the review of `main@6662f8a`.
 ### 1.9 The README promised an API mode that did not exist
 - New `GET /api/v1/check?domain=&queryType=&raw=`, authenticated by `X-API-Key` or `Authorization: Bearer`. Keys come from `POWERWHOIS_API_KEYS` (comma separated; keys shorter than 24 characters are ignored).
 - The endpoint answers 404 when no keys are configured, and allows 600 requests per minute per key.
-- It allows administrator lookup modes and shares `WebCheckConcurrencyLimit` through the `web:api` pool.
+- It allows administrator lookup modes. **Pool accounting:** API requests go through their own outer pool `web:api`, sized to `WebCheckConcurrencyLimit`. That is a separate pool with the same number, not a share of one web total, so the API can run that many lookups alongside the web pools. All of them then share the real per-upstream slots (3 per WHOIS server, 4 per RDAP server and per TLD for DNS). API work counts as privileged, so it can also use the slots reserved from anonymous visitors.
 - Documented in `API documentation.md` and both READMEs.
 - Test: `TestIntegrationAPIRequiresConfiguredKey`.
 
@@ -112,7 +165,7 @@ Numbers refer to the review of `main@6662f8a`.
 ## 3. Files changed
 
 - Backend:
-  - `api/apis.go`, `api/auth.go`, `api/routes.go`, `api/websocket.go`; new `api/clientip.go`, `api/clientip_test.go`, `api/limits.go`, `api/session_test.go`
+  - `api/apis.go`, `api/auth.go`, `api/routes.go`, `api/websocket.go`; new `api/admission.go`, `api/admission_test.go`, `api/clientip.go`, `api/clientip_test.go`, `api/limits.go`, `api/session_test.go`
   - `config/config.go`, `constant/constant.go`, `log/logger.go`, `main.go`
   - `lookup/customize/customize.go`, `lookup/dnslib/dnsresolver.go`, `lookup/lookuper/lookuper.go`
   - `lookup/network/http.go`, `lookup/network/limits.go`; new `lookup/network/network_test.go`
@@ -121,14 +174,15 @@ Numbers refer to the review of `main@6662f8a`.
   - `scheduler/bulk_check.go`, `scheduler/export.go`, `scheduler/bulk_check_test.go`
   - `typo/typo.go`, `utils/format_tools.go`; new `utils/format_tools_test.go`
   - `security_regression_test.go` (now expects 401); new `proxy_regression_test.go`
-- Frontend: `.env`, `src/pages/IndexPage.vue`, `src/components/AdminLogin.vue`, `src/components/AdminSetting.vue`; new `src/components/PendingRegistrations.vue`.
+- Frontend: `.env`, `src/pages/IndexPage.vue`, `src/components/AdminLogin.vue`, `src/components/AdminSetting.vue`, `src/utils/websocketHandler.js`; new `src/components/PendingRegistrations.vue`, `src/utils/pendingRegistrations.js`, `tests/pendingRegistrations.test.mjs`.
 - Deploy: `deploy/caddy/Caddyfile`, `deploy/docker-compose.yml`, `deploy/backend/config.yaml`.
 - Docs: `README.md`, `README.zh.md`, `API documentation.md`, `HANDOFF.md`, this file.
 
 ## 4. Behaviour changes and compatibility risks
 
 1. **Login failures return 401 instead of 400.** External scripts that check for 400 must be updated.
-2. **Logout revokes every administrator token** (single admin account). Logging out in one browser signs out all the others.
+2. **Logout revokes every administrator token** (single admin account). Logging out in one browser signs out all the others, closes reserved WebSocket connections, and stops running registration batches from sending domains not yet submitted. Those domains are reported as `error` "管理员会话已结束，此域名未提交" (session ended, domain not submitted) and can be submitted again after signing in.
+   - **Administrator WebSocket tickets.** The ticket is in the connection URL, so Nginx access logs may record it. It is single-use and expires in 30 s, so a logged value is useless once the connection is made. Eight reserved connections are shared by all administrator browsers; a ninth falls back to the public pool.
 3. **Per-IP limits and the private-address exemption.**
    - Loopback, private and link-local client addresses are exempt from anonymous limits and the per-IP connection cap, on purpose. If a proxy is misconfigured and every visitor appears as one private address, limits switch off (the old behaviour) instead of all visitors, including the administrator before signing in, sharing one bucket of 16 connections.
    - With the right-to-left resolution, a remote client can only be classified as private if every hop to the right of it is a trusted proxy, which a client cannot forge. Remaining ways in, all requiring deployment changes:
@@ -143,6 +197,7 @@ Numbers refer to the review of `main@6662f8a`.
 7. **WebSocket bulk actions are asynchronous.** Errors still arrive as `bulkCheckError`. Clients that sent several bulk actions back-to-back now get a busy error for the extra ones.
 8. **Caddy now waits for the backend healthcheck.** If `wget` is missing from a custom image, Caddy will never start; the default `alpine:3.24.4` image includes busybox `wget`.
 9. New Redis keys: `powerwhois:auth:generation` and, temporarily, `bulkCheckErrorResult:kept`.
+10. **Anonymous lookups get at most 2 of 3 WHOIS or 3 of 4 RDAP/DNS slots per upstream.** Under heavy anonymous load that is one slot fewer than before for anonymous visitors on each upstream.
 
 ## 5. Not done (follow-ups)
 
@@ -169,20 +224,26 @@ Numbers refer to the review of `main@6662f8a`.
 
 ## 6. Independent verification before merge
 
-The PR head has not been verified by anyone other than the author. Before merging, a reviewer should, on Linux with Go 1.27.4, Node 22.23.5, Yarn 1.22.22, **`redis-server`** and Docker:
+The new candidate has not been verified by anyone other than the author. Before merging, a reviewer should, on Linux with Go 1.27.4, Node 22.23.5, Yarn 1.22.22, **`redis-server`** and Docker, check out the candidate commit and run each command separately, saving raw output and recording each command's own exit code. Do not pipe a test command into `grep`: the pipeline's status is `grep`'s, and a build failure need not print `--- FAIL`.
 
 ```bash
-git fetch origin && git switch --detach origin/pw-cli-impl-20261122
-gofmt -l src/backend                      # must print nothing
-(cd src/backend && go vet ./... && go test -race -count=1 -v ./... 2>&1 | grep -E '^--- (SKIP|FAIL)')   # must print nothing
-(cd src/frontend && yarn install --frozen-lockfile && yarn lint && yarn test && yarn build)
-(cd deploy && POWERWHOIS_ADMIN_PASSWORD=x POWERWHOIS_JWT_SECRET=y docker compose config >/dev/null)
-docker run --rm -v "$PWD/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.9-alpine caddy validate --config /etc/caddy/Caddyfile
+set -o pipefail
+mkdir -p /tmp/pw-verify
+gofmt -l src/backend | tee /tmp/pw-verify/gofmt.log; echo "gofmt exit=$? files=$(wc -l < /tmp/pw-verify/gofmt.log)"   # files must be 0
+(cd src/backend && go vet ./...) 2>&1 | tee /tmp/pw-verify/vet.log; echo "vet exit=$?"
+(cd src/backend && go test -race -count=1 -v ./...) > /tmp/pw-verify/go-test.log 2>&1; echo "go test exit=$?"
+grep -c '^--- PASS' /tmp/pw-verify/go-test.log; grep -c -- '--- SKIP' /tmp/pw-verify/go-test.log; grep -c 'DATA RACE' /tmp/pw-verify/go-test.log   # expect 42, 0, 0
+(cd src/frontend && yarn install --frozen-lockfile && yarn lint && yarn test && yarn build) > /tmp/pw-verify/frontend.log 2>&1; echo "frontend exit=$?"
+(cd deploy && POWERWHOIS_ADMIN_PASSWORD=x POWERWHOIS_JWT_SECRET=y docker compose config >/dev/null); echo "compose exit=$?"
+docker run --rm -v "$PWD/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.9-alpine caddy validate --config /etc/caddy/Caddyfile; echo "caddy exit=$?"
 ```
 
-Then bring up the Compose stack once and confirm that the backend turns healthy and Caddy starts (item 7 in section 7). That is the first time the `wget` healthcheck and `depends_on: service_healthy` run for real.
+Then:
+1. Bring up the Compose stack once and confirm that the backend turns healthy and Caddy starts (item 7 in section 7). That is the first time the `wget` healthcheck and `depends_on: service_healthy` run for real.
+2. In a real browser, signed in: the Network tab shows `POST /api/admin/ws-ticket` followed by `/app/ws?ticket=…`. After restarting the backend, the page reconnects with a new ticket, one socket at a time. While anonymous connections fill the public pool (for example 64 scripted connections from loopback), the administrator still connects (items 9 and 10 in section 7).
+3. Review the diff, especially `api/admission.go`, `api/clientip.go`, `api/auth.go` (generation, logout, `submissionGate`), `network/limits.go` (public share) and `register/register.go` (`mayStart`, `Pending`).
 
-Also review the diff, especially `api/clientip.go`, `api/auth.go` (token generation and logout) and `register/register.go` (`Pending`). Merge only when that review and the required `Verify PowerWhois` check on the PR both pass, for example with `gh pr merge --merge`. The Redis tests must show `PASS` in the CI log, not `SKIP`.
+Merge only when that verification and the required `Verify PowerWhois` check on the PR both pass, for example with `gh pr merge --merge`. The Redis tests must show `PASS` in the CI log, not `SKIP`.
 
 To publish the branch from an authenticated machine:
 
@@ -193,7 +254,7 @@ gh pr create --base main --head pw-cli-impl-20261122 \
   --body-file docs/handoff/2026-11-22-review-fixes.md
 ```
 
-For reference, the commit was created with:
+For reference, the first candidate commit (`b093223`) was created with:
 
 ```bash
 git add -A
@@ -225,10 +286,32 @@ EOF
 6. With `POWERWHOIS_API_KEYS` set: `curl -H "X-API-Key: …" "https://<host>/api/v1/check?domain=example.com"` returns JSON. Without the key it returns 401; with no keys configured it returns 404.
 7. `docker compose ps` shows the backend as healthy, and `docker compose logs typonamer` shows application log lines.
 8. While a registry is throttling, the log and results show "上游请求过多" (too many upstream requests) on retries rather than a wall of timeouts.
+9. With 64 anonymous connections open (scripted, from several addresses), a signed-in administrator page still connects, and the bulk pause and cancel buttons work.
+10. Start a registration batch of several domains against a mock or sandbox registrar that answers slowly, and log out while the first request is in flight. Only that domain reaches the registrar; its outcome appears under Manage → 待核对注册 or as a stored result after signing in again. The others report "管理员会话已结束，此域名未提交" (session ended, domain not submitted).
+11. In 待核对注册, with two uncertain domains from one batch, recording one leaves the other listed.
 
 ## 8. Rollback
 
-Redeploy the previous release package and frontend as a pair. Data stays compatible:
-- The bulk keys are unchanged.
-- `powerwhois:auth:generation` is ignored by older releases, but tokens issued by this release keep working on them until they expire.
-- If a re-check was interrupted, `bulkCheckErrorResult:kept` may be left behind; delete it, or run Clear, after rolling back.
+Redeploy the previous release package and frontend as a pair, after these steps.
+
+**1. Back up Redis** (for example `redis-cli BGSAVE` and copy the RDB and AOF files) before changing anything.
+
+**2. Do not delete `bulkCheckErrorResult:kept`.** This list exists only while a re-check is requeueing or was interrupted mid-requeue. It holds complete `Unknown` and `Reserved` results that have been moved out of `bulkCheckErrorResult`. Older releases do not know the key: they neither count nor export it, and their Clear leaves it in place. Deleting it, or rolling back while it exists, loses those results. With this release still running:
+
+```bash
+redis-cli EXISTS bulkCheckErrorResult:kept     # 0: nothing to do
+```
+
+If it returns 1, use either option:
+- **Finish the requeue:** press 继续任务 (resume) or let the task run. The requeue step returns the list to `bulkCheckErrorResult` (`restoreKept`), after which the key no longer exists.
+- **Or export first:** download the CSV with this release (its export includes the kept rows), keep it with the backup, and then use the manual recovery below.
+
+If you have already rolled back and the key exists, return the rows to the list the older release reads. Every element is a complete result row, and a domain is never in both lists:
+
+```bash
+redis-cli EVAL "local r = redis.call('LRANGE', KEYS[1], 0, -1) for _, v in ipairs(r) do redis.call('RPUSH', KEYS[2], v) end redis.call('DEL', KEYS[1]) return #r" 2 bulkCheckErrorResult:kept bulkCheckErrorResult
+```
+
+**3. Rotate `POWERWHOIS_JWT_SECRET` when rolling back.** Older releases ignore the `gen` claim and `powerwhois:auth:generation`. Every unexpired token signed with the current secret would become valid again, including tokens revoked by logout. A new secret invalidates them all; administrators then sign in again.
+
+**4. Other data stays compatible.** The bulk keys are unchanged. Registration records written by this release, including the new `failed` "此域名未提交" (domain not submitted) records, use the existing format.

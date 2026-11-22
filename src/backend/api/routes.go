@@ -25,6 +25,7 @@ func ApiRoute(router fiber.Router, bulk *scheduler.BulkCheck, client *redis.Clie
 
 	admin := router.Group("/admin", LoginRequired)
 	admin.Post("/logout", Logout)
+	admin.Post("/ws-ticket", IssueWSTicket)
 	admin.Get("/setting", AdminSettingList)
 	admin.Put("/setting", SettingUpdate)
 	admin.Get("/log", DownloadLog)

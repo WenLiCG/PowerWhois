@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -51,6 +52,70 @@ func TestAcquireLimitsConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	second()
+}
+
+// TestAnonymousWorkCannotTakeReservedUpstreamSlots guards verification finding
+// F3: anonymous lookups share each upstream's real slots, but some stay reserved
+// for administrators, and the total never exceeds the upstream limit.
+func TestAnonymousWorkCannotTakeReservedUpstreamSlots(t *testing.T) {
+	for _, limit := range []int{3, 4} {
+		key := fmt.Sprintf("test:whois-reserve-%d", limit)
+		public := WithPublic(context.Background())
+		var releases []func()
+		for range PublicLimit(limit) {
+			release, err := Acquire(public, key, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			releases = append(releases, release)
+		}
+		short, cancel := context.WithTimeout(public, 50*time.Millisecond)
+		if _, err := Acquire(short, key, limit); err == nil {
+			t.Fatalf("limit %d: anonymous work took more than %d slots", limit, PublicLimit(limit))
+		}
+		cancel()
+		for i := PublicLimit(limit); i < limit; i++ {
+			adminCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			release, err := Acquire(adminCtx, key, limit)
+			cancel()
+			if err != nil {
+				t.Fatalf("limit %d: administrator could not use reserved slot %d: %v", limit, i+1, err)
+			}
+			releases = append(releases, release)
+		}
+		full, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		if _, err := Acquire(full, key, limit); err == nil {
+			t.Fatalf("limit %d: total exceeded the upstream limit", limit)
+		}
+		cancel()
+		// Freeing an anonymous slot lets anonymous work continue.
+		releases[0]()
+		again, cancel := context.WithTimeout(public, 50*time.Millisecond)
+		release, err := Acquire(again, key, limit)
+		cancel()
+		if err != nil {
+			t.Fatalf("limit %d: anonymous slot was not returned: %v", limit, err)
+		}
+		release()
+		for _, release := range releases[1:] {
+			release()
+		}
+	}
+	// Administrators may use every slot when no anonymous work is waiting.
+	var releases []func()
+	for range 3 {
+		release, err := Acquire(context.Background(), "test:admin-all", 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	for _, release := range releases {
+		release()
+	}
+	if PublicLimit(1) != 1 || PublicLimit(3) != 2 || PublicLimit(4) != 3 || PublicLimit(7) != 6 {
+		t.Fatal("unexpected public share")
+	}
 }
 
 func TestRetryAfter(t *testing.T) {

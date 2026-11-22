@@ -11,7 +11,7 @@
         <q-table
             :rows="rows"
             :columns="columns"
-            row-key="operationId"
+            :row-key="pendingRowKey"
             :loading="loading"
             :pagination="{ rowsPerPage: 50 }"
             no-data-label="没有待核对的注册操作"
@@ -40,6 +40,7 @@
 import { ref, onMounted } from "vue";
 import { useQuasar } from "quasar";
 import { api } from "boot/axios";
+import { pendingRowKey, withoutPendingRow } from "src/utils/pendingRegistrations";
 
 defineOptions({
     name: "PendingRegistrations"
@@ -91,7 +92,8 @@ function reconcile(row, outcome) {
         busy.value = true;
         try {
             await api.put("/admin/registration/" + row.operationId, { domain: row.domainName, outcome });
-            rows.value = rows.value.filter((item) => item.operationId !== row.operationId);
+            // Remove only this domain; the batch's other unresolved domains stay listed.
+            rows.value = withoutPendingRow(rows.value, row);
             $q.notify({ position: "top", type: "positive", message: "已保存核对结果" });
         } catch {
             $q.notify({ position: "top", type: "negative", message: "无法保存：操作可能仍在提交（30 秒内），或已被处理" });

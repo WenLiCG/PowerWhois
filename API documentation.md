@@ -70,6 +70,21 @@ POST /api/admin/logout
 - 未认证 (401)
 - 无法写入 Redis (503)：令牌未被撤销
 
+退出后，进行中的注册批次不再提交尚未发出的域名（这些域名返回 `error`，说明为“管理员会话已结束，此域名未提交”）；已经发给注册商的请求仍会收集结果并保存。
+
+#### 管理员 WebSocket 票据
+
+```
+POST /api/admin/ws-ticket
+```
+
+需要 `Authorization: Bearer {JWT 令牌}`。返回 `{"ticket": "...", "expiresIn": 30}`。用 `/app/ws?ticket={ticket}` 建立 WebSocket 连接时，连接进入管理员专用的 8 个连接名额，不占用匿名访客共用的 64 个名额，连接建立后立即收到 `adminAuthResult: true`，无需再发送 `adminAuth`。
+
+- 票据一次有效，30 秒过期，退出登录后作废；无效票据会按普通匿名连接处理。
+- 票据出现在 URL 中，可能被代理访问日志记录；它在使用或过期后即失效。
+- 管理员会话过期或被撤销时，服务器关闭这类连接，释放名额。
+- 未认证 (401)；未使用的票据过多 (503)。
+
 ### 集成 API
 
 ```
@@ -85,6 +100,8 @@ GET /api/v1/check?domain=example.com&queryType=whoisQuery&raw=0
 - `domain`（必填）：域名或 HTTP(S) URL，按可注册域名规范化。
 - `queryType`（可选，默认 `whoisQuery`）：与管理员可用的查询类型相同，包括 `whoisQueryWithProxy` 和自定义查询接口名称。
 - `raw`（可选）：为 `1` 时返回原始响应 `rawResponse`。
+
+**并发**：集成 API 有自己的外层并发池 `web:api`，大小等于 `webCheckConcurrencyLimit`，与网页管理员池、匿名池分开计数，并不共享一个总数。真正的上游上限在内层：每个 WHOIS 服务器 3 个、每个 RDAP 服务器 4 个、每个 TLD 的 DNS 查询 4 个，由所有请求（网页、批量、API）共享。API 请求按管理员级别计算，可使用为匿名访客以外保留的名额。
 
 **响应**：
 
