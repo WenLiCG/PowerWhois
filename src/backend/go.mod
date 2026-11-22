@@ -2,7 +2,7 @@ module typonamer
 
 go 1.26.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/dromara/carbon/v2 v2.5.4

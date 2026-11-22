@@ -53,7 +53,7 @@ Anonymous sessions can use direct WHOIS, RDAP, DNS and Mixed mode. Paid proxy an
 
 # Development
 
-Use Go 1.27.3, Node 22 and Yarn 1.22.22. The release build runs on Linux.
+Use Go 1.27.4, Node 22 and Yarn 1.22.22. The release build runs on Linux.
 
 ```bash
 make -C src setup

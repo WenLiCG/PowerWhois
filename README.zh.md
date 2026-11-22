@@ -60,7 +60,7 @@
 
 # 开发与打包
 
-需要 Go 1.27.3、Node 22、Yarn 1.22.22 和 Linux 工具链。
+需要 Go 1.27.4、Node 22、Yarn 1.22.22 和 Linux 工具链。
 
 ```bash
 make -C src setup
