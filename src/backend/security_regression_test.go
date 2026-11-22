@@ -32,7 +32,7 @@ const (
 
 func TestUnauthenticatedTuningReturns401(t *testing.T) {
 	t.Setenv("APP_TUNING", "true")
-	app := newApp()
+	app, _ := newApp(context.Background(), nil, nil)
 
 	for _, path := range []string{"/api/tuning/debug/pprof/", "/api/tuning/monitor"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -50,7 +50,7 @@ func TestUnauthenticatedTuningReturns401(t *testing.T) {
 
 func TestTuningDisabledWhenAppTuningUnset(t *testing.T) {
 	t.Setenv("APP_TUNING", "")
-	app := newApp()
+	app, _ := newApp(context.Background(), nil, nil)
 
 	for _, path := range []string{"/api/tuning/debug/pprof/", "/api/tuning/monitor"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -97,7 +97,7 @@ func TestFailedLoginLogOmitsSubmittedPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := newApp()
+	app, _ := newApp(context.Background(), nil, nil)
 	body := strings.NewReader(`{"username":"not-a-user","password":"` + testWrongPassword + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/login", body)
 	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
@@ -126,7 +126,11 @@ func TestAuthenticatedTuningReachesHandler(t *testing.T) {
 	t.Setenv("APP_TUNING", "true")
 	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", testEnvPassword)
 	t.Setenv("POWERWHOIS_JWT_SECRET", testEnvJWT)
-	if err := config.ApplyRequiredSecrets(); err != nil {
+	fixture := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(fixture, []byte(startupConfigYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Load(fixture); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,7 +143,7 @@ func TestAuthenticatedTuningReachesHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := newApp()
+	app, _ := newApp(context.Background(), nil, nil)
 	for _, path := range []string{"/api/tuning/debug/pprof/", "/api/tuning/monitor"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set(fiber.HeaderAuthorization, "Bearer "+signed)
@@ -172,6 +176,9 @@ func assertStartupRefused(t *testing.T, env map[string]string, missingName strin
 
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "typonamer")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", bin, ".")
 	build.Dir = backendDir(t)
 	buildOut, err := build.CombinedOutput()
@@ -207,7 +214,12 @@ func assertStartupRefused(t *testing.T, env map[string]string, missingName strin
 }
 
 func startupEnv(extra map[string]string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH")}
+	var env []string
+	for _, key := range []string{"PATH", "SYSTEMROOT", "WINDIR"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
 	for key, value := range extra {
 		env = append(env, key+"="+value)
 	}

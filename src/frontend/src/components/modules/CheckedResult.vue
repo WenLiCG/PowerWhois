@@ -18,7 +18,7 @@
                 class="q-mb-sm q-mr-sm"
                 label="重查错误域名"
                 @click="requerycheckedErrorDomains()"
-                v-if="webStore.unCheckDomains < 1 && webStore.checkedErrorDomains > 0"
+                v-if="!webStore.checking && domainResults.some((row) => row.status === 'Error')"
             ></q-btn>
 
             <q-btn
@@ -28,7 +28,7 @@
                 label="注册选中域名"
                 :disable="webStore.unRegisterDomains > 0"
                 @click="registerSelectedDomains()"
-                v-if="tokenStore.token && selectedDomains.length > 0 && webStore.unCheckDomains < 1"
+                v-if="tokenStore.token && eligibleSelected.length > 0 && !webStore.checking"
             ></q-btn>
 
             <q-space />
@@ -41,7 +41,10 @@
                     已注册: <q-badge color="warning">{{ webStore.checkedTakenDomains }}</q-badge>
                 </span>
                 <span>
-                    未注册: <q-badge color="secondary">{{ webStore.checkedFreeDomains }}</q-badge>
+                    未找到注册记录: <q-badge color="secondary">{{ webStore.checkedFreeDomains }}</q-badge>
+                </span>
+                <span>
+                    证据不足或保留: <q-badge color="grey">{{ webStore.checkedUnknownDomains }}</q-badge>
                 </span>
                 <span>
                     错误: <q-badge color="negative">{{ webStore.checkedErrorDomains }}</q-badge>
@@ -77,7 +80,13 @@
                 <div>
                     <span class="cursor-pointer" v-if="props.row.isChecked" @click="showCheckedRawResponse(props.row)">
                         <q-chip dense color="warning" text-color="white" v-if="props.row.status == 'Taken'">{{ props.row.status }}</q-chip>
-                        <q-chip dense color="secondary" text-color="white" v-if="props.row.status == 'Free'">{{ props.row.status }}</q-chip>
+                        <q-chip dense color="secondary" text-color="white" v-if="props.row.status == 'Free'">未找到
+                            <q-tooltip>{{ props.row.errorInfo }}</q-tooltip>
+                        </q-chip>
+                        <q-chip dense color="grey" text-color="white" v-if="['Unknown', 'Reserved'].includes(props.row.status)">
+                            {{ props.row.status === 'Reserved' ? '注册局保留' : '证据不足' }}
+                            <q-tooltip>{{ props.row.errorInfo }}</q-tooltip>
+                        </q-chip>
                         <q-chip dense color="negative" text-color="white" v-if="props.row.status == 'Error'">
                             {{ props.row.status }}
                             <q-tooltip class="bg-red" transition-show="scale" transition-hide="scale">
@@ -135,6 +144,7 @@
                         <q-chip dense color="green" text-color="white" v-if="props.row.registerStatus == 'success'"> OK </q-chip>
                         <q-chip dense color="secondary" text-color="white" v-if="props.row.registerStatus == 'failed'"> Failed </q-chip>
                         <q-chip dense color="negative" text-color="white" v-if="props.row.registerStatus == 'error'"> Error </q-chip>
+                        <q-chip dense color="orange" text-color="white" v-if="props.row.registerStatus == 'outcome_unknown'">待核对</q-chip>
                     </span>
                     <span v-else-if="props.row.selectedRegister"><q-spinner-ios color="primary" size="1.8em" /></span>
                     <span v-else></span>
@@ -162,7 +172,7 @@
     <q-dialog v-model="showRegisterRawResponseDialog">
         <q-card style="min-width: 50vw; max-width: 100vw; max-height: 90vh">
             <q-card-section class="row items-center">
-                <div class="text-h6">域名 {{ registerRawResponseDomain }} 的注册响应</div>
+                <div class="text-h6">域名 {{ registerRow?.domain }} 的注册响应</div>
                 <q-space />
                 <q-btn icon="close" flat round dense v-close-popup />
             </q-card-section>
@@ -170,14 +180,20 @@
             <q-separator />
 
             <q-card-section>
-                <pre class="raw-response-content">{{ registerRawResponseContent ? registerRawResponseContent : "无响应内容" }}</pre>
+                <pre class="raw-response-content">{{ registerRow?.registerRawResponse || "无响应内容" }}</pre>
+                <div v-if="registerRow?.operationId">操作编号 {{ registerRow.operationId }}</div>
             </q-card-section>
+            <q-card-actions v-if="tokenStore.token && registerRow?.registerStatus === 'outcome_unknown'" align="right">
+                <q-btn flat label="已核实失败" :disable="reconciling" @click="reconcile('failed')" />
+                <q-btn flat color="primary" label="已核实成功" :disable="reconciling" @click="reconcile('success')" />
+            </q-card-actions>
         </q-card>
     </q-dialog>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, watchEffect } from "vue";
+import { ref, computed, watch, watchEffect } from "vue";
+import { api } from "boot/axios";
 import { useQuasar } from "quasar";
 import { status, send } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
@@ -215,14 +231,19 @@ const webStore = useWebStore();
 const settingStore = useSettingStore();
 
 const selectedDomains = ref([]);
+const eligibleSelected = computed(() => {
+    const selected = new Set(selectedDomains.value);
+    return props.domainResults.filter((row) => selected.has(row) && row.status === "Free" &&
+        !["outcome_unknown", "success"].includes(row.registerStatus));
+});
 
 const showCheckedRawResponseDialog = ref(false);
 const checkedRawResponseDomain = ref(null);
 const checkedRawResponseContent = ref(null);
 
 const showRegisterRawResponseDialog = ref(false);
-const registerRawResponseDomain = ref(null);
-const registerRawResponseContent = ref(null);
+const registerRow = ref(null);
+const reconciling = ref(false);
 
 const tableColumns = ref([
     { name: "domainID", label: "ID", field: "domainID", align: "center", sortable: true },
@@ -297,104 +318,68 @@ function showCheckedRawResponse(data) {
 }
 
 function showRegisterRawResponse(data) {
-    registerRawResponseDomain.value = data.domain;
-    registerRawResponseContent.value = data.registerRawResponse;
+    registerRow.value = data;
     showRegisterRawResponseDialog.value = true;
 }
 
 function requerycheckedErrorDomains() {
-    if (isWebsocketConnected()) {
-        webStore.setIsErrorRecheck(true);
-
-        let errorDomainList = [];
-        props.domainResults.forEach((domain) => {
-            if (domain.status == "Error") {
-                errorDomainList.push(domain.domain);
-            }
-        });
-
-        if (errorDomainList.length > 0) {
-            const webCheckData = {
-                event: "webCheck",
-                data: {
-                    queryType: props.queryType,
-                    domains: errorDomainList
-                }
-            };
-            send(JSON.stringify(webCheckData));
-        }
+    if (!isWebsocketConnected() || webStore.checking) return;
+    const domains = props.domainResults.filter((row) => row.status === "Error").map((row) => row.domain);
+    if (domains.length && send(JSON.stringify({ event: "webCheck", data: { queryType: props.queryType, domains } }))) {
+        webStore.beginCheck(true);
     }
 }
 
 function registerSelectedDomains() {
-    if (selectedDomains.value.length == 0) {
-        $q.notify({
-            position: "top",
-            type: "warning",
-            message: "请先选择需要注册的域名"
-        });
+    const domains = [...new Set(eligibleSelected.value.map((row) => row.domain))];
+    const registerType = props.registerType;
+    if (!registerType) {
+        $q.notify({ position: "top", type: "warning", message: "请先选择注册接口" });
         return;
     }
-
-    if (props.registerType == null) {
-        $q.notify({
-            position: "top",
-            type: "warning",
-            message: "请先选择注册接口"
-        });
+    if (!domains.length || webStore.unRegisterDomains || !isWebsocketConnected()) return;
+    if (!globalThis.crypto?.randomUUID) {
+        $q.notify({ position: "top", type: "warning", message: "请在 HTTPS 页面提交注册" });
         return;
     }
-
-    if (isWebsocketConnected()) {
-        let registerDomainList = [];
-        selectedDomains.value.forEach((domain) => {
-            registerDomainList.push(domain.domain);
-        });
-
-        $q.dialog({
-            title: `是否确认要注册选中的 ${registerDomainList.length} 个域名?`,
-            cancel: "取消",
-            ok: "确定",
-            persistent: true
-        }).onOk(() => {
-            const registerData = {
-                event: "register",
-                data: {
-                    registerType: props.registerType,
-                    domains: registerDomainList
-                }
-            };
-            send(JSON.stringify(registerData));
-
-            webStore.setRegisteringDomains(selectedDomains.value);
-        });
-    }
+    const operationId = globalThis.crypto.randomUUID();
+    $q.dialog({
+        title: "确认注册 " + domains.length + " 个域名",
+        message: "通过 " + registerType + " 提交，价格和可注册性以注册商为准。域名清单 " + domains.join("、"),
+        cancel: "取消",
+        ok: "确认提交",
+        persistent: true
+    }).onOk(() => {
+        if (webStore.unRegisterDomains || webStore.checking || domains.some((name) => webStore.byName[name]?.status !== "Free")) return;
+        const data = { registerType, operationId, domains };
+        if (send(JSON.stringify({ event: "register", data }))) webStore.setRegisteringDomains(domains, operationId);
+    });
 }
 
-onMounted(() => {
-    updateVisibleColumns();
-});
+function reconcile(outcome) {
+    const row = registerRow.value;
+    if (!row?.operationId || reconciling.value) return;
+    $q.dialog({
+        title: "保存人工核对结果",
+        message: "请先在注册商确认 " + row.domain + " 的订单结果。确认失败后可以重新提交注册。",
+        cancel: true
+    }).onOk(async () => {
+        reconciling.value = true;
+        try {
+            const { data } = await api.put("/admin/registration/" + row.operationId, { domain: row.domain, outcome });
+            webStore.updateRegisterResult(data);
+        } catch {
+            $q.notify({ position: "top", type: "negative", message: "找不到可更新的操作或仍在处理，请核对注册商" });
+        } finally {
+            reconciling.value = false;
+        }
+    });
+}
 
-// watch(
-//     () => webStore.checkedFreeDomains,
-//     (newVal) => {
-//         if (newVal > 0) {
-//             webStore.domains.forEach((domain) => {
-//                 if (domain.status == "Free") {
-//                     selectedDomains.value.forEach((selectedDomain) => {
-//                         if (selectedDomain.domain == domain.domain) {
-//                             // 如果已经选中，则不添加
-//                             return;
-//                         }
-//                     });
-//                     selectedDomains.value.push(domain);
-//                 }
-//             });
-//         } else {
-//             selectedDomains.value = [];
-//         }
-//     }
-// );
+watchEffect(updateVisibleColumns);
+watch(() => props.domainResults, (rows) => {
+    if (!rows.some((row) => selectedDomains.value.includes(row))) selectedDomains.value = [];
+});
 </script>
 
 <style scoped>

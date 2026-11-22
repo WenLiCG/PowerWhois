@@ -11,7 +11,7 @@ export const useSettingStore = defineStore("setting", {
     actions: {
         setSetting(newSetting) {
             this.webCheckDomainLimit = newSetting.webCheckDomainLimit;
-            this.typoDefaultCcTlds = newSetting.typoDefaultCcTlds;
+            this.typoDefaultCcTlds = newSetting.typoDefaultCcTlds || [];
             this.registerApis = newSetting.registerApis;
             this.whoisApis = newSetting.whoisApis;
         },
@@ -21,7 +21,7 @@ export const useSettingStore = defineStore("setting", {
             }
 
             if (newSetting.typoDefaultCcTlds) {
-                this.typoDefaultCcTlds = newSetting.typoDefaultCcTlds;
+                this.typoDefaultCcTlds = newSetting.typoDefaultCcTlds || [];
             }
 
             this.registerApis = [];

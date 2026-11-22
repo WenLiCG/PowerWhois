@@ -17,6 +17,7 @@
                     unchecked-icon="radio_button_unchecked"
                     val="whoisQueryWithProxy"
                     label="Whois + Proxy"
+                    v-if="tokenStore.token"
                     :disable="disable"
                 />
                 <q-radio
@@ -54,6 +55,8 @@
 </template>
 
 <script setup>
+import { watch } from "vue";
+import { useTokenStore } from "src/stores/tokenStore";
 import { useSettingStore } from "src/stores/settingStore";
 
 defineOptions({
@@ -70,4 +73,8 @@ const props = defineProps({
 const queryType = defineModel("queryType");
 
 const settingStore = useSettingStore();
+const tokenStore = useTokenStore();
+watch(() => tokenStore.token, (token) => {
+    if (!token && !["whoisQuery", "dnsQuery", "mixedQuery"].includes(queryType.value)) queryType.value = "whoisQuery";
+});
 </script>

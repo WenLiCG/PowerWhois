@@ -7,7 +7,7 @@ AuthUsername: admin
 # Admin password and JWT secret are environment variables, not this file.
 # POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET are required.
 # Startup refuses if either one is missing. Changing the JWT secret invalidates issued tokens.
-AuthExpireDays: 30
+AuthExpireDays: 1
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -25,22 +25,7 @@ RetryMax: 2
 GlobalProxyTlds:
 
 ## The TLDs forced to go through proxy in mixed query
-MixedProxyTlds:
-    - shop
-    - win
-    - com.pl
-    - pl
-    - bg
-    - ae
-    - at
-    - com.co
-    - co
-    - org.uk
-    - ws
-    - org.br
-    - com.tw
-    - tw
-    - design
+MixedProxyTlds: []
 
 ## The TLDs forced to go through DNS check in mixed query
 MixedDnsTlds:
@@ -61,17 +46,17 @@ MixedDnsTlds:
     - pt
 
 ## Setting proxy information
-SocketProxyHost: test.superproxy.io
-SocketProxyPort: 22222
-SocketProxyAuth: true
-SocketProxyUser: testuser
-SocketProxyPassword: 1234567890
+SocketProxyHost: ""
+SocketProxyPort: 0
+SocketProxyAuth: false
+SocketProxyUser: ""
+SocketProxyPassword: ""
 
 # ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: 50
+BulkCheckConcurrencyLimit: 15
 
 # ------ Web check settings ------
-WebCheckConcurrencyLimit: 10
+WebCheckConcurrencyLimit: 15
 WebCheckDomainLimit: 800
 
 # ------ Typo check settings ------
@@ -95,31 +80,6 @@ TypoCustomizedReplaces:
     - s2:ss22
     - sa:sal
 
-# ------ Register APIs ------
-RegisterApis:
-    - ApiName: rrp reg
-      ApiUrl: https://api-ote.rrpproxy.net/api/call?domain={domain}
-      SuccessText:
-          - successfully
-      FailText:
-          - not
-          - code = 540
-          - already registered
-      ConcurrencyLimit: 1
-    - ApiName: dynadot
-      ApiUrl: https://api.dynadot.com/api3.xml?domain={domain}
-      SuccessText:
-          - <SuccessCode>0</SuccessCode><Status>success
-      FailText:
-          - <SuccessCode>1</SuccessCode><Status>not_available
-      ConcurrencyLimit: 1
-
-# ------ Whois APIs ------
-WhoisApis:
-    - ApiName: rrp whois
-      ApiUrl: https://api-ote.rrpproxy.net/api/call?domain={domain}
-      FreeText:
-          - Domain name available
-      TakenText:
-          - not
-      ConcurrencyLimit: 1
+# Add administrator-only provider templates here or through Settings.
+RegisterApis: []
+WhoisApis: []

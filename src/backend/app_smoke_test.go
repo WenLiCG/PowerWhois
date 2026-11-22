@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,7 @@ import (
 // HTTP app and exercise an existing route. A malformed login body is rejected
 // before any credential is checked.
 func TestSmokeMalformedLoginReturns400(t *testing.T) {
-	app := newApp()
+	app, _ := newApp(context.Background(), nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader("{"))
 	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)

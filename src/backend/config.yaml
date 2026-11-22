@@ -6,7 +6,7 @@ AuthUsername: admin
 # Admin password and JWT secret are environment variables, not this file.
 # POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET are required.
 # Startup refuses if either one is missing. Changing the JWT secret invalidates issued tokens.
-AuthExpireDays: 30
+AuthExpireDays: 1
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -37,10 +37,10 @@ SocketProxyUser: test
 SocketProxyPassword: 123456
 
 # ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: 100
+BulkCheckConcurrencyLimit: 15
 
 # ------ Web check settings ------
-WebCheckConcurrencyLimit: 10
+WebCheckConcurrencyLimit: 15
 WebCheckDomainLimit: 500
 
 # ------ Typo check settings ------

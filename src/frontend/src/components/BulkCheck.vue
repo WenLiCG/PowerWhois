@@ -5,6 +5,7 @@
             :multiple="false"
             accept="text/plain"
             max-files="1"
+            :max-file-size="100 * 1024 * 1024"
             auto-upload
             hide-upload-btn
             no-thumbnails
@@ -201,7 +202,7 @@ function onUploadFailed(info) {
     $q.notify({
         position: "top",
         type: "negative",
-        message: "上传文件失败, 请重试上传",
+        message: info.xhr?.status === 409 ? "请先完成、暂停或清理当前任务再上传" : "上传文件失败，请检查文件大小并重试",
         progress: true,
         timeout: 10000,
         actions: [{ label: "确定", color: "white" }]
@@ -510,7 +511,7 @@ watch(
                 showUploadBtn.value = false;
                 showStartBtn.value = false;
                 showPauseBtn.value = false;
-                showResumeBtn.value = false;
+                showResumeBtn.value = bulkStore.canResume;
                 showCancelBtn.value = false;
                 showCreateBtn.value = true;
                 showRequeryBtn.value = false;
@@ -522,7 +523,7 @@ watch(
                 taskStatusMsg.value = {
                     color: "negative",
                     textColor: "white",
-                    text: "任务出现错误"
+                    text: bulkStore.taskError || "任务出现错误"
                 };
                 break;
         }

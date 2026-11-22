@@ -53,7 +53,6 @@ import { ref } from "vue";
 import { useQuasar } from "quasar";
 import { api } from "boot/axios";
 import { setUserName, setToken } from "src/utils/tokenHandler";
-import { status, send } from "src/utils/websocketHandler";
 
 const emit = defineEmits(["login-success"]);
 
@@ -64,16 +63,8 @@ const username = ref("");
 const password = ref("");
 const submitting = ref(false);
 
-function isWebsocketConnected() {
-    if (status.value == "OPEN") {
-        return true;
-    } else {
-        return false;
-    }
-}
-
-function onSubmit() {
-    if (loginForm.value.validate()) {
+async function onSubmit() {
+    if (await loginForm.value.validate()) {
         submitting.value = true;
         api.post("/login", {
             username: username.value,
@@ -84,25 +75,9 @@ function onSubmit() {
                 setToken(response.data.token);
                 submitting.value = false;
                 emit("login-success");
-                if (isWebsocketConnected()) {
-                    const adminAuthData = {
-                        event: "adminAuth",
-                        data: response.data.token
-                    };
-                    send(JSON.stringify(adminAuthData));
-                } else {
-                    $q.notify({
-                        position: "top",
-                        type: "warning",
-                        message: "登录成功",
-                        timeout: 0,
-                        actions: [{ label: "确定", color: "white" }]
-                    });
-                }
             })
             .catch((error) => {
                 submitting.value = false;
-                console.error("Login erroe: ", error);
                 if (error.response && error.response.status === 400) {
                     $q.notify({
                         position: "top",
@@ -113,7 +88,7 @@ function onSubmit() {
                     $q.notify({
                         position: "top",
                         type: "negative",
-                        message: "登录失败, 请稍后重试."
+                        message: error.response?.status === 429 ? "登录尝试过多，请稍后再试" : "登录失败，请稍后重试"
                     });
                 }
             });

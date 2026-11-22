@@ -8,14 +8,14 @@
     "scripts": {
         "lint": "eslint --ext .js,.vue ./",
         "format": "prettier --write \"**/*.{js,vue,css,html,md,json}\" --ignore-path .gitignore",
-        "test": "echo \"No test specified\" && exit 0",
+        "test": "node --test tests/*.test.mjs",
         "dev": "quasar dev",
         "build": "quasar build"
     },
     "dependencies": {
         "@quasar/extras": "^1.16.4",
         "@vueuse/core": "^11.0.3",
-        "axios": "^1.2.1",
+        "axios": "^1.21.1",
         "pinia": "^2.0.11",
         "quasar": "^2.16.0",
         "vue": "^3.4.18",

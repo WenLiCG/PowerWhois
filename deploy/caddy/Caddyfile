@@ -1,26 +1,36 @@
 {
-    admin   off
-    auto_https off
+	admin off
+	auto_https off
 }
 
 :8080 {
-    encode zstd gzip
-    @static {
-        path_regexp \.(ico|css|js|gif|jpg|jpeg|png|svg|woff)$
-    }
-    header @static Cache-Control max-age=5184000
+	encode zstd gzip
 
-    handle /api/* {
-        reverse_proxy /api/* typonamer:8080
-    }
+	handle /api/admin/bulkcheckupload {
+		request_body {
+			max_size 106MB
+		}
+		reverse_proxy typonamer:8080
+	}
 
-    handle /app/* {
-        reverse_proxy /app/* typonamer:8080
-    }
+	handle /api/* {
+		request_body {
+			max_size 64KiB
+		}
+		reverse_proxy typonamer:8080
+	}
 
-    handle * {
-        root * /typonamer
-        try_files {path} /index.html
-        file_server
-    }
+	handle /app/* {
+		reverse_proxy typonamer:8080
+	}
+
+	handle {
+		root * /typonamer
+		try_files {path} /index.html
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=5184000, immutable"
+		@index path /index.html
+		header @index Cache-Control "no-cache"
+		file_server
+	}
 }
