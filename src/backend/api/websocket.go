@@ -99,18 +99,14 @@ func onMessage(ep *socketio.EventPayload) {
 			return
 		}
 		c.Token = token
-		valid, _ := ValidateToken(token)
-		if valid {
-			scheduler.BulkCheckAddKws(ep.Kws, func() bool { valid, _ := ValidateToken(token); return valid })
+		if validAdminToken(token) {
+			scheduler.BulkCheckAddKws(ep.Kws, func() bool { return validAdminToken(token) })
 		} else {
 			scheduler.BulkCheckRemoveKws(ep.Kws)
 		}
 		return
 	}
-	admin := false
-	if c.Token != "" {
-		admin, _ = ValidateToken(c.Token)
-	}
+	admin := c.Token != "" && validAdminToken(c.Token)
 	if !admin {
 		scheduler.BulkCheckRemoveKws(ep.Kws)
 	}
@@ -188,7 +184,8 @@ func onMessage(ep *socketio.EventPayload) {
 		}
 		c.RegisterTask = scheduler.NewRegisterTask(ep.Kws.UUID, ep.Kws)
 		c.RegisterTask.SetDomains(domains)
-		go c.RegisterTask.Run(req.RegisterType)
+		token := c.Token
+		go c.RegisterTask.Run(req.RegisterType, func() bool { return validAdminToken(token) })
 	default:
 		emit(ep.Kws, "webCheckError", "未知操作")
 	}

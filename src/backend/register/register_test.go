@@ -146,4 +146,20 @@ func TestRegistrationPersistsIntentAndBlocksDuplicateSubmission(t *testing.T) {
 	if !strings.Contains(string(data), "outcome_unknown") {
 		t.Fatal("uncertain result not persisted")
 	}
+
+	checks := 0
+	unsent, err := RegisterForSession(context.Background(), "waiting.net", "fixture", func() bool {
+		checks++
+		return checks == 1
+	})
+	if err != errNotSubmitted || unsent.RegisterStatus != "failed" || unsent.AuditID == "" || calls.Load() != 2 {
+		t.Fatalf("queued domain should be audited without submission: %+v, %v", unsent, err)
+	}
+	data, err = r.Get(context.Background(), "powerwhois:registration:"+unsent.AuditID).Bytes()
+	if err != nil || !strings.Contains(string(data), `"status":"failed"`) {
+		t.Fatalf("unsent audit was not persisted: %s, %v", data, err)
+	}
+	if retry, err := RegisterContext(context.Background(), "waiting.net", "fixture"); err != nil || retry.RegisterStatus != "success" || calls.Load() != 3 {
+		t.Fatalf("an unsent attempt blocked a later registration: %+v, %v", retry, err)
+	}
 }

@@ -2,6 +2,7 @@ package register
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 var limiterMu sync.RWMutex
 var limiterList = map[string]*golimit.GoLimit{}
 var auditStore *redis.Client
+var errNotSubmitted = errors.New("管理员会话已结束，域名未提交")
 
 // Configure once before accepting registration requests. Registration fails closed without storage.
 func SetAuditStore(r *redis.Client) { auditStore = r }
@@ -50,7 +52,12 @@ func SetupLimiter() {
 func Register(domain string, registerType string) (RegisterInfo, error) {
 	return RegisterContext(context.Background(), domain, registerType)
 }
-func RegisterContext(ctx context.Context, domain string, registerType string) (registerInfo RegisterInfo, resultErr error) {
+func RegisterContext(ctx context.Context, domain string, registerType string) (RegisterInfo, error) {
+	return RegisterForSession(ctx, domain, registerType, nil)
+}
+
+// RegisterForSession checks the authorizing session again at the registrar submission boundary.
+func RegisterForSession(ctx context.Context, domain string, registerType string, maySubmit func() bool) (registerInfo RegisterInfo, resultErr error) {
 	canonical, validationErr := utils.TrimAndGetMainDomain(domain)
 	if validationErr != nil {
 		return RegisterInfo{RegisterStatus: constant.RegisterStatusError}, validationErr
@@ -60,6 +67,11 @@ func RegisterContext(ctx context.Context, domain string, registerType string) (r
 		RegisterType:   registerType,
 		DomainName:     domain,
 		RegisterStatus: constant.RegisterStatusError,
+	}
+	if maySubmit != nil && (ctx.Err() != nil || !maySubmit()) {
+		registerInfo.RegisterStatus = constant.RegisterStatusFailed
+		registerInfo.RawResponse = errNotSubmitted.Error()
+		return registerInfo, errNotSubmitted
 	}
 	cfg := config.GetConfig()
 
@@ -112,11 +124,32 @@ func RegisterContext(ctx context.Context, domain string, registerType string) (r
 			registerInfo.RegisterStatus = "outcome_unknown"
 			registerInfo.RawResponse = "Cannot persist outcome; verify registrar using audit ID " + id
 			resultErr = fmt.Errorf("registration outcome could not be persisted; verify registrar")
+			return
+		}
+		if resultErr == errNotSubmitted {
+			c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			// A late cleanup may only remove this attempt's guard.
+			if err := auditStore.Eval(c, `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end`, []string{guard}, id).Err(); err != nil {
+				log.Error("Cannot release the guard for a registration that was not submitted")
+			}
 		}
 	}()
 
 	var response string
 	var err error
+	submit := func() {
+		requestCtx := ctx
+		if maySubmit != nil {
+			if ctx.Err() != nil || !maySubmit() {
+				err = errNotSubmitted
+				return
+			}
+			// An already authorized request must finish even if the browser disconnects.
+			requestCtx = context.WithoutCancel(ctx)
+		}
+		response, err = sendRegisterRequest(requestCtx, apiUrl, id)
+	}
 
 	limiterMu.RLock()
 	limiter, hasLimiter := limiterList[apiInfo.ApiName]
@@ -128,12 +161,18 @@ func RegisterContext(ctx context.Context, domain string, registerType string) (r
 
 		limiter.Do(func() {
 			defer wg.Done()
-			response, err = sendRegisterRequest(ctx, apiUrl, id)
+			submit()
 		})
 
 		wg.Wait()
 	} else {
-		response, err = sendRegisterRequest(ctx, apiUrl, id)
+		submit()
+	}
+
+	if err == errNotSubmitted {
+		registerInfo.RegisterStatus = constant.RegisterStatusFailed
+		registerInfo.RawResponse = err.Error()
+		return registerInfo, err
 	}
 
 	if err != nil {

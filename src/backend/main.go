@@ -71,6 +71,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer r.Close()
+	if err := api.InitAuth(ctx, r); err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot load administrator sessions:", err)
+		os.Exit(1)
+	}
 	register.SetAuditStore(r)
 	scheduler.Init(ctx, r)
 

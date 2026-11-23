@@ -35,8 +35,8 @@
                                 <q-item clickable @click="tab = 'setting'">
                                     <q-item-section>设置</q-item-section>
                                 </q-item>
-                                <q-item clickable @click="logout">
-                                    <q-item-section>退出登录</q-item-section>
+                                <q-item clickable :disable="loggingOut" @click="logout">
+                                    <q-item-section>退出所有管理会话</q-item-section>
                                 </q-item>
                             </q-list>
                         </q-btn-dropdown>
@@ -97,12 +97,25 @@ const $q = useQuasar();
 const tokenStore = useTokenStore();
 const settingStore = useSettingStore();
 const tab = ref("webCheck");
+const loggingOut = ref(false);
 
 function loginedUpdate() {
     location.reload();
 }
 
-function logout() {
+async function logout() {
+    if (loggingOut.value) return;
+    loggingOut.value = true;
+    try {
+        await api.post("/admin/logout");
+    } catch (error) {
+        if (error.response?.status !== 401) {
+            $q.notify({ type: "negative", message: "退出失败，请重试" });
+            return;
+        }
+    } finally {
+        loggingOut.value = false;
+    }
     close();
     removeToken();
     open();

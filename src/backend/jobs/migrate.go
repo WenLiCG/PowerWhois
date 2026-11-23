@@ -41,7 +41,12 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 		}
 		inputs[d.Domain] = d.Order
 	}
-	for _, key := range []string{constant.BulkCheckTakenResultRedisKey, constant.BulkCheckFreeResultRedisKey, constant.BulkCheckErrorResultRedisKey} {
+	for _, key := range []string{
+		constant.BulkCheckTakenResultRedisKey,
+		constant.BulkCheckFreeResultRedisKey,
+		constant.BulkCheckErrorResultRedisKey,
+		constant.BulkCheckErrorResultRedisKey + ":kept",
+	} {
 		for offset := int64(0); ; offset += 1000 {
 			rows, e := s.Redis.LRange(ctx, key, offset, offset+999).Result()
 			if e != nil {
@@ -58,7 +63,7 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 				switch r.RegisterStatus {
 				case "Taken":
 					r.Status = "registered"
-				case "Free":
+				case "Free", "NotFound":
 					r.Status = "not_found"
 					r.RegisterStatus = "NotFound"
 					if r.LookupType == "dns" {
@@ -66,6 +71,8 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 						r.RegisterStatus = "Unknown"
 						r.QueryError = "legacy DNS absence does not establish registration status"
 					}
+				case "Unknown", "Reserved":
+					r.Status = "unknown"
 				default:
 					r.Status = "error"
 				}

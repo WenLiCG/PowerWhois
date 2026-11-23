@@ -42,7 +42,7 @@ func (r *RegisterTask) SetDomains(domains []string) {
 }
 
 // Run the register task for the given user and register type.
-func (r *RegisterTask) Run(registerType string) {
+func (r *RegisterTask) Run(registerType string, maySubmit func() bool) {
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
@@ -108,7 +108,7 @@ func (r *RegisterTask) Run(registerType string) {
 	// Start the web query workers
 	for i := 0; i < concurrencyLimit; i++ {
 		wg.Add(1)
-		go r.registerHandler(i, ch, &wg, registerType)
+		go r.registerHandler(i, ch, &wg, registerType, maySubmit)
 	}
 
 	// Send the domains to the web query workers
@@ -143,7 +143,7 @@ func (r *RegisterTask) Stop() {
 	}
 }
 
-func (r *RegisterTask) registerHandler(i int, ch chan string, wg *sync.WaitGroup, registerType string) {
+func (r *RegisterTask) registerHandler(i int, ch chan string, wg *sync.WaitGroup, registerType string, maySubmit func() bool) {
 	defer wg.Done()
 
 	handerSeq := i + 1
@@ -165,7 +165,7 @@ func (r *RegisterTask) registerHandler(i int, ch chan string, wg *sync.WaitGroup
 
 			log.Debugf("Register task handler %d for user %s, register domain %s", handerSeq, r.UserID, domain)
 
-			registerResult, err := register.RegisterContext(r.Ctx, domain, registerType)
+			registerResult, err := register.RegisterForSession(r.Ctx, domain, registerType, maySubmit)
 			if err != nil {
 				log.Errorf("Register domain %s error: %v", domain, err)
 			}

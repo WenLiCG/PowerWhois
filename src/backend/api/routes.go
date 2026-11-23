@@ -8,6 +8,7 @@ func ApiRoute(router fiber.Router) {
 	V1Routes(router)
 	// Login API
 	router.Post("/login", Login)
+	router.Post("/admin/logout", Logout)
 
 	// Web APIs
 	router.Get("/web/setting", WebSettingList) // 网页查询配置获取接口
