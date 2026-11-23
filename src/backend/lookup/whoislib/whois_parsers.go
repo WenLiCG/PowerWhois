@@ -1,6 +1,7 @@
 package whoislib
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"typonamer/constant"
@@ -11,20 +12,15 @@ import (
 	"github.com/duke-git/lancet/v2/strutil"
 )
 
-var dateOrdinal = regexp.MustCompile(`(?i)(\b\d{1,2})(st|nd|rd|th)\b`)
+var ordinalDate = regexp.MustCompile(`\b([0-9]{1,2})(?:st|nd|rd|th)\b`)
 
 var whoisResponseReplaceList = map[string]string{
 	"\r\n": "\n",
 }
 
 // ParseWhoisResponse parses the WHOIS response and returns the DomainInfo struct.
-func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher) (domainInfo lookupinfo.DomainInfo, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = lookuperror.ErrorParseWhoisResponse
-		}
-	}()
-	domainInfo = lookupinfo.DomainInfo{
+func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher) (lookupinfo.DomainInfo, error) {
+	domainInfo := lookupinfo.DomainInfo{
 		LookupType:  constant.LookupTypeWhois,
 		DomainName:  domain,
 		RawResponse: response,
@@ -32,14 +28,13 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 
 	// Clean up the response by replacing unwanted characters with a newline.
 	responseContent := strutil.ReplaceWithMap(response, whoisResponseReplaceList)
-
-	if matcher.ReReserved != nil && matcher.ReReserved.MatchString(responseContent) {
+	if strings.HasPrefix(responseContent, "Reserved by QDR") || strings.Contains(responseContent, "has been reserved by aeDA Regulator") {
 		return domainInfo, lookuperror.ErrorReservedDomain
 	}
 
 	if matcher.ReFree != nil {
 		if matcher.ReFree.MatchString(responseContent) {
-			return domainInfo, lookuperror.ErrorWhoisNotFound
+			return domainInfo, errors.New("domain not found")
 		}
 	}
 
@@ -77,12 +72,22 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	if matcher.ReCreationDate != nil {
 		matchCreationDate := matcher.ReCreationDate.FindStringSubmatch(responseContent)
 		if len(matchCreationDate) > 1 {
-			matchCreationDateStr := dateOrdinal.ReplaceAllString(strings.TrimSpace(matchCreationDate[1]), "$1")
-			layout := matcher.DateTimeLayoutForCreationDate
-			if layout == "" {
-				layout = matcher.DateTimeLayout
+			matchCreationDateStr := ordinalDate.ReplaceAllString(strutil.Trim(matchCreationDate[1]), "${1}")
+			if matcher.DateTimeLayoutForCreationDate != "" {
+				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayoutForCreationDate).ToDateTimeString()
+			} else if matcher.DateTimeLayout != "" {
+				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayout).ToDateTimeString()
+			} else {
+				creationDate := carbon.SetTimezone(carbon.UTC).Parse(matchCreationDateStr).ToDateTimeString()
+				if creationDate != "" {
+					domainInfo.CreationDate = creationDate
+				} else {
+					if strings.Contains(matchCreationDateStr, "+") {
+						dateTimStrs := strutil.SplitAndTrim(matchCreationDateStr, "+")
+						domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).Parse(dateTimStrs[0]).ToDateTimeString()
+					}
+				}
 			}
-			domainInfo.CreationDate = parseWhoisDate(matchCreationDateStr, layout)
 		}
 	}
 
@@ -90,12 +95,22 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	if matcher.ReExpiryDate != nil {
 		matchExpiryDate := matcher.ReExpiryDate.FindStringSubmatch(responseContent)
 		if len(matchExpiryDate) > 1 {
-			matchExpiryDateStr := dateOrdinal.ReplaceAllString(strings.TrimSpace(matchExpiryDate[1]), "$1")
-			layout := matcher.DateTimeLayoutForExpiryDate
-			if layout == "" {
-				layout = matcher.DateTimeLayout
+			matchExpiryDateStr := ordinalDate.ReplaceAllString(strutil.Trim(matchExpiryDate[1]), "${1}")
+			if matcher.DateTimeLayoutForExpiryDate != "" {
+				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayoutForExpiryDate).ToDateTimeString()
+			} else if matcher.DateTimeLayout != "" {
+				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayout).ToDateTimeString()
+			} else {
+				expiryDate := carbon.SetTimezone(carbon.UTC).Parse(matchExpiryDateStr).ToDateTimeString()
+				if expiryDate != "" {
+					domainInfo.ExpiryDate = expiryDate
+				} else {
+					if strings.Contains(matchExpiryDateStr, "+") {
+						dateTimStrs := strutil.SplitAndTrim(matchExpiryDateStr, "+")
+						domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).Parse(dateTimStrs[0]).ToDateTimeString()
+					}
+				}
 			}
-			domainInfo.ExpiryDate = parseWhoisDate(matchExpiryDateStr, layout)
 		}
 	}
 
@@ -135,35 +150,8 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	}
 
 	if domainInfo.Registrar == "" && domainInfo.CreationDate == "" && domainInfo.ExpiryDate == "" && len(domainInfo.NameServer) == 0 {
-		return domainInfo, lookuperror.ErrorParseWhoisResponse
+		return domainInfo, errors.New("no domain info found in whois response")
 	}
 
 	return domainInfo, nil
-}
-
-// parseWhoisDate isolates date failures so the remaining record is still parsed.
-func parseWhoisDate(value, layout string) (result string) {
-	defer func() {
-		if recover() != nil {
-			result = ""
-		}
-	}()
-	c := carbon.SetTimezone(carbon.UTC)
-	// Carbon Parse does not guard an existing error and may use a nil Location.
-	if c.Error != nil {
-		return ""
-	}
-	if layout != "" {
-		c = c.ParseByLayout(value, layout)
-	} else {
-		c = c.Parse(value)
-		if c.Error != nil && strings.Contains(value, "+") {
-			// Preserve the existing fallback, starting with a fresh, checked Carbon.
-			return parseWhoisDate(strutil.SplitAndTrim(value, "+")[0], "")
-		}
-	}
-	if c.Error != nil {
-		return ""
-	}
-	return c.ToDateTimeString()
 }

@@ -2,133 +2,164 @@ package register
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
-
+	"time"
 	"typonamer/config"
-	"typonamer/constant"
-	"typonamer/internal/testredis"
-
-	"github.com/google/uuid"
+	"typonamer/internal/testutil"
 )
 
-func TestRegistrationRecordsOneRequestAndReconcilesAmbiguity(t *testing.T) {
-	store := testredis.Start(t)
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("domain") != "example.com" || r.Header.Get("Idempotency-Key") == "" {
-			t.Error("probe did not receive normalized target and operation ID")
-		}
-		if calls.Add(1) == 1 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-		w.Write([]byte("success marker"))
-	}))
-	defer server.Close()
-	provider := config.RegisterApi{
-		ApiName: "fixture", ApiUrl: server.URL + "/?domain={domain}", ConcurrencyLimit: 1,
-		SuccessText: []string{"success marker"}, FailText: []string{"failed marker"},
-	}
-	ctx := context.Background()
-	id := uuid.NewString()
-	if first := Register(ctx, store, "Example.com", id, provider, nil); first.RegisterStatus != constant.RegisterStatusUnknown {
-		t.Fatal("a failed HTTP response was treated as a confirmed registration")
-	}
-	for _, operation := range []string{id, uuid.NewString()} {
-		if result := Register(ctx, store, "example.com", operation, provider, nil); result.OperationID != id || calls.Load() != 1 {
-			t.Fatal("another registrar request was issued before reconciliation")
-		}
-	}
-	if _, err := Reconcile(ctx, store, "example.com", id, constant.RegisterStatusFailed); err != nil {
-		t.Fatal(err)
-	}
-	if result := Register(ctx, store, "example.com", id, provider, nil); result.RegisterStatus != constant.RegisterStatusFailed || calls.Load() != 1 {
-		t.Fatal("the same confirmation was replayed after reconciliation")
-	}
-	newID := uuid.NewString()
-	if result := Register(ctx, store, "example.com", newID, provider, nil); result.RegisterStatus != constant.RegisterStatusSuccess || calls.Load() != 2 {
-		t.Fatal("a new confirmed registration should be able to succeed")
-	}
-	if result := Register(ctx, store, "example.com", uuid.NewString(), provider, nil); result.OperationID != newID || calls.Load() != 2 {
-		t.Fatal("immediate duplicate after a lost success acknowledgement reached the provider")
-	}
-}
-
-func TestRevokedSessionSubmitsNothing(t *testing.T) {
-	store := testredis.Start(t)
+func TestRegistrationUsesMocksAndDoesNotFollowRedirect(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.Write([]byte("success marker"))
+		switch r.URL.Path {
+		case "/redirect":
+			w.Header().Set("Location", "/success")
+			w.WriteHeader(302)
+		case "/failure":
+			w.WriteHeader(500)
+			w.Write([]byte("SUCCESS"))
+		default:
+			w.Write([]byte("SUCCESS"))
+		}
 	}))
 	defer server.Close()
-	provider := config.RegisterApi{
-		ApiName: "fixture", ApiUrl: server.URL + "/?domain={domain}", ConcurrencyLimit: 1,
-		SuccessText: []string{"success marker"}, FailText: []string{"failed marker"},
+	if body, e := sendRegisterRequest(context.Background(), server.URL+"/success"); e != nil || body != "SUCCESS" {
+		t.Fatal(body, e)
 	}
-	ctx := context.Background()
-
-	// Revoked before the claim: nothing is recorded or sent.
-	first := Register(ctx, store, "before.com", uuid.NewString(), provider, func() bool { return false })
-	if first.RegisterStatus != constant.RegisterStatusError || calls.Load() != 0 || store.Exists(ctx, key("before.com")).Val() != 0 {
-		t.Fatalf("revoked before claim: %+v, %d calls", first, calls.Load())
+	for _, path := range []string{"/redirect", "/failure"} {
+		if _, e := sendRegisterRequest(context.Background(), server.URL+path+"?key=secret"); e == nil || strings.Contains(e.Error(), "secret") {
+			t.Fatal("unsafe HTTP error", e)
+		}
 	}
-
-	// Revoked between the claim and the request: a definite failure is stored,
-	// the domain is released, and nothing is sent.
-	checks := 0
-	id := uuid.NewString()
-	second := Register(ctx, store, "between.com", id, provider, func() bool { checks++; return checks == 1 })
-	if second.RegisterStatus != constant.RegisterStatusFailed || calls.Load() != 0 {
-		t.Fatalf("revoked after claim: %+v, %d calls", second, calls.Load())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, e := sendRegisterRequest(ctx, server.URL); e == nil {
+		t.Fatal("canceled request sent")
 	}
-	if stored := store.HGet(ctx, key("between.com"), id).Val(); !strings.Contains(stored, `"registerStatus":"failed"`) {
-		t.Fatalf("stored record = %q", stored)
-	}
-	if pending, err := Pending(ctx, store); err != nil || len(pending) != 0 {
-		t.Fatalf("unsent domain left pending: %+v, %v", pending, err)
-	}
-	if retry := Register(ctx, store, "between.com", uuid.NewString(), provider, nil); retry.RegisterStatus != constant.RegisterStatusSuccess || calls.Load() != 1 {
-		t.Fatalf("domain stayed locked after an unsent operation: %+v", retry)
+	if calls.Load() != 3 {
+		t.Fatalf("unexpected retry/redirect: %d", calls.Load())
 	}
 }
 
-func TestPendingListsOnlyUnresolvedOperations(t *testing.T) {
-	store := testredis.Start(t)
+func TestGETTransactionIsNotReplayedAfterUpstreamAcceptsAndDisconnects(t *testing.T) {
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("domain") == "unclear.com" {
-			w.Write([]byte("no marker"))
+		if calls.Add(1) == 2 {
+			conn, _, e := w.(http.Hijacker).Hijack()
+			if e != nil {
+				t.Error(e)
+				return
+			}
+			conn.Close()
 			return
 		}
-		w.Write([]byte("success marker"))
+		w.Write([]byte("SUCCESS"))
 	}))
 	defer server.Close()
-	provider := config.RegisterApi{
-		ApiName: "fixture", ApiUrl: server.URL + "/?domain={domain}", ConcurrencyLimit: 1,
-		SuccessText: []string{"success marker"}, FailText: []string{"failed marker"},
+	if _, e := sendRegisterRequest(context.Background(), server.URL); e != nil {
+		t.Fatal(e)
 	}
-	ctx := context.Background()
-	unclear := uuid.NewString()
-	if result := Register(ctx, store, "unclear.com", unclear, provider, nil); result.RegisterStatus != constant.RegisterStatusUnknown {
-		t.Fatalf("ambiguous reply = %s", result.RegisterStatus)
+	if _, e := sendRegisterRequest(context.Background(), server.URL); e == nil {
+		t.Fatal("uncertain transaction reported success")
 	}
-	if result := Register(ctx, store, "confirmed.com", uuid.NewString(), provider, nil); result.RegisterStatus != constant.RegisterStatusSuccess {
-		t.Fatalf("confirmed reply = %s", result.RegisterStatus)
+	if calls.Load() != 2 {
+		t.Fatalf("transaction replayed: %d requests", calls.Load())
 	}
-	if err := store.Set(ctx, "unrelated", "keep", 0).Err(); err != nil {
-		t.Fatal(err)
+}
+
+func TestRegistrationPersistsIntentAndBlocksDuplicateSubmission(t *testing.T) {
+	r := testutil.Redis(t)
+	SetAuditStore(r)
+	t.Cleanup(func() { SetAuditStore(nil) })
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("logLevel: Error\n"), 0600)
+	t.Setenv("POWERWHOIS_ADMIN_USER", "fixture")
+	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", "fixture-password-strong")
+	t.Setenv("POWERWHOIS_JWT_SECRET", strings.Repeat("fixture!", 8))
+	if e := config.Load(path); e != nil {
+		t.Fatal(e)
 	}
-	pending, err := Pending(ctx, store)
-	if err != nil || len(pending) != 1 || pending[0].OperationID != unclear || pending[0].DomainName != "unclear.com" || pending[0].StartedAt == 0 {
-		t.Fatalf("pending = %+v, %v", pending, err)
+	var calls atomic.Int32
+	accepted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Idempotency-Key") == "" {
+			t.Error("missing registrar idempotency key")
+		}
+		if r.URL.Query().Get("domain") == "slow.com" {
+			close(accepted)
+			<-r.Context().Done()
+			return
+		}
+		w.Write([]byte("SUCCESS"))
+	}))
+	defer server.Close()
+	c := config.GetConfig()
+	c.RegisterApis = []config.RegisterApi{{ApiName: "fixture", ApiUrl: server.URL + "/?domain={domain}", SuccessText: []string{"SUCCESS"}, FailText: []string{"FAILED"}, ConcurrencyLimit: 1}}
+	if e := config.UpdateConfig(c); e != nil {
+		t.Fatal(e)
 	}
-	if _, err := Reconcile(ctx, store, "unclear.com", unclear, constant.RegisterStatusFailed); err != nil {
-		t.Fatal(err)
+	SetupLimiter()
+	result, e := RegisterContext(context.Background(), "example.com", "fixture")
+	if e != nil || result.RegisterStatus != "success" {
+		t.Fatal(result, e)
 	}
-	if pending, err := Pending(ctx, store); err != nil || len(pending) != 0 {
-		t.Fatalf("reconciled operation still pending: %+v, %v", pending, err)
+	data, e := r.Get(context.Background(), "powerwhois:registration:"+result.AuditID).Bytes()
+	if e != nil {
+		t.Fatal(e)
+	}
+	var record map[string]string
+	json.Unmarshal(data, &record)
+	if record["status"] != "success" || record["domain"] != "example.com" || strings.Contains(string(data), server.URL) {
+		t.Fatal("invalid audit record")
+	}
+	if duplicate, e := RegisterContext(context.Background(), "example.com", "fixture"); e == nil || duplicate.RegisterStatus != "outcome_unknown" || calls.Load() != 1 {
+		t.Fatal("duplicate transaction was sent")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan struct{})
+	go func() { result, e = RegisterContext(ctx, "slow.com", "fixture"); close(finished) }()
+	select {
+	case <-accepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("mock registrar never received request")
+	}
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("registration did not cancel")
+	}
+	if e == nil || result.RegisterStatus != "outcome_unknown" {
+		t.Fatal(result, e)
+	}
+	data, _ = r.Get(context.Background(), "powerwhois:registration:"+result.AuditID).Bytes()
+	if !strings.Contains(string(data), "outcome_unknown") {
+		t.Fatal("uncertain result not persisted")
+	}
+
+	checks := 0
+	unsent, err := RegisterForSession(context.Background(), "waiting.net", "fixture", func() bool {
+		checks++
+		return checks == 1
+	})
+	if err != errNotSubmitted || unsent.RegisterStatus != "failed" || unsent.AuditID == "" || calls.Load() != 2 {
+		t.Fatalf("queued domain should be audited without submission: %+v, %v", unsent, err)
+	}
+	data, err = r.Get(context.Background(), "powerwhois:registration:"+unsent.AuditID).Bytes()
+	if err != nil || !strings.Contains(string(data), `"status":"failed"`) {
+		t.Fatalf("unsent audit was not persisted: %s, %v", data, err)
+	}
+	if retry, err := RegisterContext(context.Background(), "waiting.net", "fixture"); err != nil || retry.RegisterStatus != "success" || calls.Load() != 3 {
+		t.Fatalf("an unsent attempt blocked a later registration: %+v, %v", retry, err)
 	}
 }

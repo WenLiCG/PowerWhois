@@ -9,7 +9,6 @@ type WhoisInfoMatcher struct {
 	ReCreationDate                *regexp.Regexp // ReCreationDate matches the creation date.
 	ReExpiryDate                  *regexp.Regexp // ReExpiryDate matches the expiration date.
 	ReNameServer                  *regexp.Regexp // ReNameServer matches the name server.
-	ReReserved                    *regexp.Regexp
 	ReFree                        *regexp.Regexp // ReFree matches the free status.
 	DateTimeLayout                string         // DateTimeLayout is the layout of the date and time strings.
 	DateTimeLayoutForCreationDate string         // DateTimeLayoutForCreationDate is the layout of the creation date strings.
@@ -19,7 +18,6 @@ type WhoisInfoMatcher struct {
 // 使用正则表达式匹配 WHOIS 数据中的相关信息
 var WhoisMatchers = map[string]WhoisInfoMatcher{
 	"cn": {
-		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -28,7 +26,6 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReFree:         regexp.MustCompile(`^No matching record`),
 	},
 	"中国": {
-		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -37,7 +34,6 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReFree:         regexp.MustCompile(`^No matching record`),
 	},
 	"中國": {
-		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -101,7 +97,6 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReFree:         regexp.MustCompile(`The queried object does not exist:`),
 	},
 	"tw": {
-		DateTimeLayout: "2006-01-02 15:04:05",
 		ReRegistrar:    regexp.MustCompile(`Registration Service Provider: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Record created on ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})`),
@@ -269,7 +264,6 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReDomainStatus: regexp.MustCompile(`Status:\s+(.*)`),
 		ReNameServer:   regexp.MustCompile(`Name Server:\s+(.*)`),
 		ReFree:         regexp.MustCompile(`^No Data Found`),
-		ReReserved:     regexp.MustCompile(`(?im)^Reserved by QDR`),
 	},
 	"ie": {
 		ReRegistrar:    regexp.MustCompile(`Registrar:\s+(.*)`),
@@ -449,7 +443,6 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReDomainStatus: regexp.MustCompile(`Status:\s+(.*)`),
 		ReNameServer:   regexp.MustCompile(`Name Server:\s+(.*)`),
 		ReFree:         regexp.MustCompile(`^No Data Found`),
-		ReReserved:     regexp.MustCompile(`(?im)^Domain .* has been reserved by aeDA Regulator`),
 	},
 	"th": {
 		ReRegistrar:    regexp.MustCompile(`Registrar:\s+(.*)`),

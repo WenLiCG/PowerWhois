@@ -10,33 +10,16 @@ export const useSettingStore = defineStore("setting", {
 
     actions: {
         setSetting(newSetting) {
-            this.webCheckDomainLimit = newSetting.webCheckDomainLimit;
-            this.typoDefaultCcTlds = newSetting.typoDefaultCcTlds || [];
-            this.registerApis = newSetting.registerApis;
-            this.whoisApis = newSetting.whoisApis;
+            this.webCheckDomainLimit = newSetting.webCheckDomainLimit || 100;
+            for (const key of ['typoDefaultCcTlds', 'registerApis', 'whoisApis']) {
+                this[key] = Array.isArray(newSetting[key]) ? newSetting[key] : [];
+            }
         },
         updateSetting(newSetting) {
-            if (newSetting.webCheckDomainLimit) {
-                this.webCheckDomainLimit = newSetting.webCheckDomainLimit;
-            }
-
-            if (newSetting.typoDefaultCcTlds) {
-                this.typoDefaultCcTlds = newSetting.typoDefaultCcTlds || [];
-            }
-
-            this.registerApis = [];
-            if (newSetting.registerApis && newSetting.registerApis.length > 0) {
-                newSetting.registerApis.forEach((apiItem) => {
-                    this.registerApis.push(apiItem.apiName);
-                });
-            }
-
-            this.whoisApis = [];
-            if (newSetting.whoisApis && newSetting.whoisApis.length > 0) {
-                newSetting.whoisApis.forEach((apiItem) => {
-                    this.whoisApis.push(apiItem.apiName);
-                });
-            }
+            this.setSetting({ ...newSetting,
+                registerApis: (newSetting.registerApis || []).map(api => api.apiName),
+                whoisApis: (newSetting.whoisApis || []).map(api => api.apiName)
+            });
         },
         clearSetting() {
             this.webCheckDomainLimit = 100;

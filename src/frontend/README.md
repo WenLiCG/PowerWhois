@@ -1,43 +1,10 @@
-# Typo Namer
+# PowerWhois Web
 
-Typo Namer 的前端代码
+Vue 3 + Quasar. Use Node.js 24 and npm.
 
-## Install the dependencies
+- `npm ci`
+- `npm run dev` — local 8090, backend proxy to 127.0.0.1:8080
+- `npm test` and `npm run lint`
+- `npm run build` — output `dist/spa`
 
-```bash
-yarn
-# or
-npm install
-```
-
-### Start the app in development mode (hot-code reloading, error reporting, etc.)
-
-```bash
-quasar dev
-```
-
-### Lint the files
-
-```bash
-yarn lint
-# or
-npm run lint
-```
-
-### Format the files
-
-```bash
-yarn format
-# or
-npm run format
-```
-
-### Build the app for production
-
-```bash
-quasar build
-```
-
-### Customize the configuration
-
-See [Configuring quasar.config.js](https://v2.quasar.dev/quasar-cli-vite/quasar-config-js).
+Use the root [deployment guide](../../docs/DEPLOYMENT.md). The existing `.env` is not automatically a safe place for browser credentials; do not expose secrets through client build variables.

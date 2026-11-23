@@ -12,12 +12,12 @@
                     :disable="disable"
                 />
                 <q-radio
+                    v-if="tokenStore.token"
                     v-model="queryType"
                     checked-icon="check_circle"
                     unchecked-icon="radio_button_unchecked"
                     val="whoisQueryWithProxy"
                     label="Whois + Proxy"
-                    v-if="tokenStore.token"
                     :disable="disable"
                 />
                 <q-radio
@@ -37,18 +37,20 @@
                     :disable="disable"
                 />
 
-                <q-separator vertical class="q-ml-md" v-if="settingStore.whoisApis.length > 0 && $q.screen.gt.sm" />
+                <template v-if="tokenStore.token">
+                    <q-separator vertical class="q-ml-md" v-if="settingStore.whoisApis.length > 0 && $q.screen.gt.sm" />
 
-                <q-radio
-                    v-model="queryType"
-                    checked-icon="check_circle"
-                    unchecked-icon="radio_button_unchecked"
-                    :val="api"
-                    :label="api"
-                    :disable="disable"
-                    v-for="api in settingStore.whoisApis"
-                    :key="api"
-                />
+                    <q-radio
+                        v-model="queryType"
+                        checked-icon="check_circle"
+                        unchecked-icon="radio_button_unchecked"
+                        :val="api"
+                        :label="api"
+                        :disable="disable"
+                        v-for="api in settingStore.whoisApis"
+                        :key="api"
+                    />
+                </template>
             </div>
         </q-item-section>
     </q-item>
@@ -56,8 +58,8 @@
 
 <script setup>
 import { watch } from "vue";
-import { useTokenStore } from "src/stores/tokenStore";
 import { useSettingStore } from "src/stores/settingStore";
+import { useTokenStore } from "src/stores/tokenStore";
 
 defineOptions({
     name: "WhoisSelection"
@@ -74,7 +76,10 @@ const queryType = defineModel("queryType");
 
 const settingStore = useSettingStore();
 const tokenStore = useTokenStore();
+
 watch(() => tokenStore.token, (token) => {
-    if (!token && !["whoisQuery", "dnsQuery", "mixedQuery"].includes(queryType.value)) queryType.value = "whoisQuery";
+    if (!token && (queryType.value === "whoisQueryWithProxy" || settingStore.whoisApis.includes(queryType.value))) {
+        queryType.value = "whoisQuery";
+    }
 });
 </script>

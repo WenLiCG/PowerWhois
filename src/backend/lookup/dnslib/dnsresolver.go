@@ -7,156 +7,259 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"typonamer/constant"
-	"typonamer/lookup/lookuperror"
-	"typonamer/lookup/lookupinfo"
 	"typonamer/lookup/network"
 
+	"typonamer/config"
+	"typonamer/constant"
+	"typonamer/log"
+	"typonamer/lookup/lookuperror"
+	"typonamer/lookup/lookupinfo"
+
+	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/miekg/dns"
 )
 
-var rootServers = []string{
-	"a.root-servers.net.", "b.root-servers.net.", "c.root-servers.net.", "d.root-servers.net.",
-	"e.root-servers.net.", "f.root-servers.net.", "g.root-servers.net.", "h.root-servers.net.",
-	"i.root-servers.net.", "j.root-servers.net.", "k.root-servers.net.", "l.root-servers.net.", "m.root-servers.net.",
+type NsCache struct {
+	TldNsMap map[string][]string
+	mux      sync.RWMutex
 }
 
-type delegation struct {
-	servers []string
-	expires time.Time
+var (
+	rootServers = []string{
+		"a.root-servers.net.",
+		"b.root-servers.net.",
+		"c.root-servers.net.",
+		"d.root-servers.net.",
+		"e.root-servers.net.",
+		"f.root-servers.net.",
+		"g.root-servers.net.",
+		"h.root-servers.net.",
+		"i.root-servers.net.",
+		"j.root-servers.net.",
+		"k.root-servers.net.",
+		"l.root-servers.net.",
+		"m.root-servers.net.",
+	}
+
+	TldNsCache = NsCache{
+		TldNsMap: make(map[string][]string),
+	}
+)
+
+func HasTldNsCache(tld string) bool {
+	TldNsCache.mux.RLock()
+	defer TldNsCache.mux.RUnlock()
+	if _, ok := TldNsCache.TldNsMap[tld]; ok {
+		return true
+	}
+	return false
 }
 
-var cacheMu sync.Mutex
-var tldCache = map[string]delegation{}
+func AddTldNsCache(tld string, nameServers []string) {
+	TldNsCache.mux.Lock()
+	defer TldNsCache.mux.Unlock()
+	TldNsCache.TldNsMap[tld] = nameServers
+}
 
-// NsCheck walks the delegation chain for domain. The timeout starts once a
-// slot for the TLD is held, so queuing behind other lookups does not count.
-func NsCheck(parent context.Context, domain, tld string, timeout time.Duration) (result lookupinfo.DomainInfo, resultErr error) {
-	result = lookupinfo.DomainInfo{LookupType: constant.LookupTypeDNS, DomainName: domain}
-	release, err := network.Acquire(parent, "dns:"+tld, 4)
+func GetTldNsCache(tld string) []string {
+	TldNsCache.mux.RLock()
+	defer TldNsCache.mux.RUnlock()
+	if _, ok := TldNsCache.TldNsMap[tld]; ok {
+		return TldNsCache.TldNsMap[tld]
+	}
+	return []string{}
+}
+
+func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, error) {
+	log.Debugf("Resolving NS record for domain %s", domain)
+
+	domainInfo := lookupinfo.DomainInfo{
+		LookupType: constant.LookupTypeDNS,
+		DomainName: domain,
+	}
+
+	cfg := config.GetConfig()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.DnsTimeout)*time.Second)
+	defer cancel()
+	release, err := network.Acquire(ctx, "dns")
 	if err != nil {
-		return result, err
+		return domainInfo, err
 	}
 	defer release()
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
-	defer func() {
-		// Report an interrupted request as such, not as a DNS timeout.
-		if parent.Err() != nil && resultErr != nil {
-			resultErr = parent.Err()
-		}
-	}()
+	var lastErr error
+	answered := false
 
-	var trace strings.Builder
-	fmt.Fprintf(&trace, "DNS NS trace for %s\n", domain)
-	defer func() { result.RawResponse = trace.String() }()
-	msg := new(dns.Msg).SetQuestion(dns.Fqdn(domain), dns.TypeNS)
-	msg.RecursionDesired = false
-	target := msg.Question[0].Name
-	zone, servers := ".", rootServers
-	cacheMu.Lock()
-	cached := tldCache[tld]
-	cacheMu.Unlock()
-	if time.Now().Before(cached.expires) {
-		zone, servers = dns.Fqdn(tld), cached.servers
+	nsRecords := make([]string, 0)
+
+	parts := strings.Split(strutil.Trim(domain, "."), ".")
+	if len(parts) < 2 {
+		return domainInfo, fmt.Errorf("invalid domain: %s", domain)
 	}
-	udp := dns.Client{Net: "udp", Timeout: 1500 * time.Millisecond}
-	for depth := 0; depth < 8; depth++ {
-		var next []string
-		for _, server := range servers {
-			if ctx.Err() != nil {
-				return result, lookuperror.ErrorDnsTimeout
+	tld := parts[len(parts)-1]
+
+	// Create DNS client
+	dnsClient := new(dns.Client)
+	dnsClient.Net = "udp"
+	dnsClient.Timeout = time.Duration(cfg.DnsTimeout) * time.Second
+
+	// Create DNS NS query message
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(domain), dns.TypeNS)
+	msg.RecursionDesired = false
+
+	// Initialize the nameservers
+	level := 0
+	rawTrace := "┌─ DNS Resolution Trace\n"
+	rawTrace += fmt.Sprintf("├─ Target: %s\n", domain)
+	rawTrace += fmt.Sprintf("├─ Root Servers: \n")
+	for _, rootNs := range rootServers {
+		rawTrace += fmt.Sprintf("│  ├─ %s\n", rootNs)
+	}
+
+	nextNameservers := rootServers
+	if HasTldNsCache(tld) {
+		log.Debugf("Using cached NS records for '%s': %v", tld, GetTldNsCache(tld))
+		nextNameservers = GetTldNsCache(tld)
+
+		rawTrace += "│\n"
+		indent := strings.Repeat("│  ", level)
+		rawTrace += fmt.Sprintf("%s├─ Level %d: Query for %s\n", indent, level+1, domain)
+		rawTrace += fmt.Sprintf("%s├─ Got answer for: %s\n", indent, tld)
+		rawTrace += fmt.Sprintf("%s├─ Found nameservers: \n", indent)
+		for _, ns := range nextNameservers {
+			rawTrace += fmt.Sprintf("%s│  ├─ %s\n", indent, ns)
+		}
+		rawTrace += fmt.Sprintf("%s└─ Via: %s\n", indent, nextNameservers[0])
+		level++
+	}
+
+	for {
+		var responseNS []string
+		foundNS := false
+
+		indent := strings.Repeat("│  ", level)
+		rawTrace += "│\n"
+		rawTrace += fmt.Sprintf("%s├─ Level %d: Query for %s\n", indent, level+1, domain)
+
+		for _, nameserver := range nextNameservers {
+			domainInfo.Source = nameserver
+			if err := network.Wait(ctx, "dns", nameserver); err != nil {
+				return domainInfo, err
 			}
-			reply := exchange(ctx, &udp, msg, server)
-			if reply == nil {
-				fmt.Fprintf(&trace, "%s via %s: no response\n", zone, server)
+			response, _, err := dnsClient.ExchangeContext(ctx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+			if err == nil && response != nil && response.Truncated {
+				tcp := *dnsClient
+				tcp.Net = "tcp"
+				response, _, err = tcp.ExchangeContext(ctx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+			}
+			if err != nil {
+				lastErr = err
+				log.Debugf("Failed to query DNS for domain %s using nameserver %s: %s", domain, nameserver, err)
 				continue
 			}
-			fmt.Fprintf(&trace, "%s via %s: %s\n", zone, server, dns.RcodeToString[reply.Rcode])
-			if reply.Rcode != dns.RcodeSuccess && reply.Rcode != dns.RcodeNameError {
-				continue
-			}
-			var nextZone string
-			var ttl uint32
-			if reply.Rcode == dns.RcodeSuccess {
-				for _, records := range [][]dns.RR{reply.Answer, reply.Ns} {
-					for _, rr := range records {
-						ns, ok := rr.(*dns.NS)
-						if !ok {
-							continue
-						}
-						name := strings.ToLower(ns.Hdr.Name)
-						if name == target {
-							result.NameServer = append(result.NameServer, strings.TrimSuffix(strings.ToLower(ns.Ns), "."))
-							continue
-						}
-						if name != zone && dns.IsSubDomain(zone, name) && dns.IsSubDomain(name, target) {
-							if len(name) > len(nextZone) {
-								nextZone, next, ttl = name, nil, ns.Hdr.Ttl
+
+			if response != nil {
+				if response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError {
+					answered = true
+				} else {
+					lastErr = lookuperror.ErrorDnsServerFailed
+				}
+				if response.Rcode == dns.RcodeNameError {
+					domainInfo.RawResponse = response.String()
+					return domainInfo, lookuperror.ErrorNsNotFound
+				}
+				log.Debugf("DNS query for %s using nameserver %s Rcode is %d", domain, nameserver, response.Rcode)
+				if response.Rcode == dns.RcodeSuccess {
+					records := response.Answer
+					if len(records) == 0 {
+						records = response.Ns
+					}
+
+					isTldNs := false
+
+					if len(records) > 0 {
+						hdrName := ""
+						for _, rr := range records {
+							if ns, ok := rr.(*dns.NS); ok {
+								foundNS = true
+								responseNS = append(responseNS, ns.Ns)
+								hdrName = strutil.Trim(ns.Hdr.Name, ".")
+								if hdrName == domain {
+									nsRecords = append(nsRecords, strutil.Trim(ns.Ns, "."))
+								} else if hdrName == tld {
+									isTldNs = true
+								}
+								log.Debugf("Found NS record for domain %s from nameserver %s is: %v", ns.Hdr.Name, nameserver, ns.Ns)
 							}
-							if name == nextZone {
-								next = append(next, ns.Ns)
-								ttl = min(ttl, ns.Hdr.Ttl)
+						}
+						if foundNS {
+							rawTrace += fmt.Sprintf("%s├─ Got answer for: %s\n", indent, hdrName)
+							rawTrace += fmt.Sprintf("%s├─ Found nameservers: \n", indent)
+							for _, ns := range responseNS {
+								rawTrace += fmt.Sprintf("%s│  ├─ %s\n", indent, ns)
 							}
+							rawTrace += fmt.Sprintf("%s└─ Via: %s\n", indent, nameserver)
+
+							if isTldNs {
+								if !HasTldNsCache(tld) {
+									log.Infof("Adding NS records for '%s' to cache: %v", tld, responseNS)
+									AddTldNsCache(tld, responseNS)
+								}
+							}
+							break
 						}
 					}
 				}
-			}
-			if len(result.NameServer) > 0 {
-				fmt.Fprintln(&trace, strings.Join(result.NameServer, ", "))
-				return result, nil
-			}
-			if nextZone != "" {
-				zone = nextZone
-				if zone == dns.Fqdn(tld) && ttl != 0 {
-					cacheMu.Lock()
-					tldCache[tld] = delegation{next, time.Now().Add(min(time.Hour, time.Duration(ttl)*time.Second))}
-					cacheMu.Unlock()
-				}
-				break
-			}
-			if reply.Authoritative && reply.Rcode == dns.RcodeNameError {
-				return result, lookuperror.ErrorNsNotFound
-			}
-			if reply.Authoritative && reply.Rcode == dns.RcodeSuccess {
-				for _, rr := range reply.Ns {
-					if _, ok := rr.(*dns.SOA); ok && dns.IsSubDomain(rr.Header().Name, target) {
-						return result, lookuperror.ErrorNsNotFound
-					}
-				}
+			} else {
+				log.Warnf("DNS query for %s using nameserver %s response is nil", domain, nameserver)
 			}
 		}
-		if len(next) == 0 {
+
+		if len(nsRecords) > 0 {
+			// Found the nameservers for the target domain
+			log.Infof("Found NS record for %s are: %v", domain, nsRecords)
 			break
 		}
-		servers = next
+
+		if !foundNS {
+			log.Infof("No nameservers found for %s", domain)
+			rawTrace += fmt.Sprintf("%s└─ No nameservers found for %s\n", indent, domain)
+			break
+		}
+
+		// Use the nameservers found in the current level to resolve the next level
+		answered = false
+		nextNameservers = responseNS
+		level++
+
+		if level > 3 {
+			log.Warnf("Failed to resolve NS record for domain %s", domain)
+			break
+		}
 	}
-	if ctx.Err() != nil {
-		return result, lookuperror.ErrorDnsTimeout
+
+	rawTrace += "│\n"
+	rawTrace += "└─ Resolution Complete\n"
+
+	domainInfo.NameServer = nsRecords
+	domainInfo.RawResponse = rawTrace
+
+	if len(nsRecords) == 0 {
+		if ctx.Err() != nil {
+			return domainInfo, ctx.Err()
+		}
+		if !answered {
+			if lastErr != nil {
+				return domainInfo, lastErr
+			}
+			return domainInfo, lookuperror.ErrorDnsServerFailed
+		}
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNsNotFound, domain)
 	}
-	return result, lookuperror.ErrorDnsServerFailed
+
+	return domainInfo, nil
 }
 
-func exchange(ctx context.Context, udp *dns.Client, msg *dns.Msg, host string) *dns.Msg {
-	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil {
-		return nil
-	}
-	for _, address := range addresses {
-		if !address.IsGlobalUnicast() || address.IsPrivate() {
-			continue
-		}
-		addr := net.JoinHostPort(address.String(), "53")
-		reply, _, err := udp.ExchangeContext(ctx, msg, addr)
-		if err == nil && reply.Truncated {
-			tcp := *udp
-			tcp.Net = "tcp"
-			reply, _, err = tcp.ExchangeContext(ctx, msg, addr)
-		}
-		if err == nil {
-			return reply
-		}
-	}
-	return nil
+func NsCheck(domain string) (lookupinfo.DomainInfo, error) {
+	return NsCheckContext(context.Background(), domain)
 }

@@ -1,8 +1,8 @@
 <template>
     <div class="flex justify-center">
-        <q-input outlined autofocus class="full-width" v-model="domainInput" placeholder="请输入域名" :disable="webStore.checking || webStore.unRegisterDomains > 0">
+        <q-input outlined autofocus class="full-width" v-model="domainInput" label="原始域名" placeholder="example.com" @keyup.enter="typoCheckDomain()" :disable="webStore.unCheckDomains > 0">
             <template v-slot:append>
-                <q-btn icon="send" color="primary" label="GO" :disable="webStore.checking || webStore.unRegisterDomains > 0" @click="typoCheckDomain()" />
+                <q-btn icon="send" color="primary" label="生成并查询" :disable="webStore.unCheckDomains > 0" @click="typoCheckDomain()" />
             </template>
         </q-input>
     </div>
@@ -10,25 +10,25 @@
     <q-separator class="q-mt-md" />
 
     <div>
-        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="webStore.checking || webStore.unRegisterDomains > 0" />
+        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="webStore.unCheckDomains > 0" />
     </div>
 
     <q-separator />
 
     <div>
-        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="webStore.checking || webStore.unRegisterDomains > 0" />
+        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="webStore.unCheckDomains > 0" />
     </div>
 
     <q-separator />
 
     <div>
-        <WhoisSelection v-model:queryType="queryType" :disable="webStore.checking || webStore.unRegisterDomains > 0" />
+        <WhoisSelection v-model:queryType="queryType" :disable="webStore.unCheckDomains > 0" />
     </div>
 
     <q-separator v-if="tokenStore.token" />
 
     <div v-if="tokenStore.token">
-        <RegisterSelection v-model:registerType="registerType" :disable="webStore.checking || webStore.unRegisterDomains > 0" />
+        <RegisterSelection v-model:registerType="registerType" :disable="webStore.unCheckDomains > 0" />
     </div>
 
     <q-separator class="q-my-md" />
@@ -84,7 +84,7 @@ function isWebsocketConnected() {
         $q.notify({
             position: "top",
             type: "warning",
-            message: "网络连接失败, 请等待重连后重试",
+            message: "网络连接失败, 请尝试刷新网页后重试",
             progress: true,
             timeout: 5000,
             actions: [{ label: "确定", color: "white" }]
@@ -113,6 +113,7 @@ function typoCheckDomain() {
         }
 
         if (isWebsocketConnected()) {
+            webStore.clearDomains();
             const typoCheckData = {
                 event: "typoCheck",
                 data: {
@@ -122,7 +123,7 @@ function typoCheckDomain() {
                     queryType: queryType.value
                 }
             };
-            if (send(JSON.stringify(typoCheckData))) webStore.beginCheck();
+            send(JSON.stringify(typoCheckData));
         }
     } else {
         $q.notify({

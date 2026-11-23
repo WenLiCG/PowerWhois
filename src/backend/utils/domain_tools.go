@@ -5,7 +5,6 @@ import (
 	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
 	"net"
-	"net/url"
 	"strings"
 
 	"github.com/duke-git/lancet/v2/strutil"
@@ -35,20 +34,12 @@ func TrimAndGetMainDomain(domain string) (string, error) {
 }
 
 func TrimDomain(domain string) (string, error) {
-	domain = strings.TrimSpace(domain)
-	if strings.Contains(domain, "://") {
-		address, err := url.Parse(domain)
-		if err != nil || (address.Scheme != "https" && address.Scheme != "http") || address.Hostname() == "" || address.User != nil {
-			return "", errors.New("invalid domain URL")
-		}
-		domain = address.Hostname()
-	}
-	domain = strings.TrimSuffix(domain, ".")
+	domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
 	ascii, err := idna.Lookup.ToASCII(domain)
 	if err != nil || len(ascii) > 253 || !strings.Contains(ascii, ".") || net.ParseIP(ascii) != nil {
 		return "", errors.New("invalid domain name")
 	}
-	ascii = strings.ToLower(strings.TrimSuffix(ascii, "."))
+	ascii = strings.ToLower(ascii)
 	for _, label := range strings.Split(ascii, ".") {
 		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return "", errors.New("invalid domain label")

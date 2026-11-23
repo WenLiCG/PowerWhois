@@ -1,5 +1,6 @@
 <template>
     <div v-if="settings">
+        <p class="text-caption text-grey-8">密码至少 12 位，登录有效期为 1–30 天。通过环境变量设置的凭据需在服务端修改并重启。</p>
         <q-form @validation-error="showValidationError" @submit="onSubmit" ref="settingForm">
             <!-- 管理员配置 -->
             <q-card class="no-shadow q-pb-lg" bordered>
@@ -23,6 +24,27 @@
                                 item-aligned
                                 v-model="settings.authUsername"
                                 :rules="[$rules.required('请输入管理员用户名')]"
+                            />
+                        </q-item-section>
+                    </q-item>
+                </q-card-section>
+
+                <q-card-section class="row q-pa-sm">
+                    <q-item class="col-4 q-pa-sm">
+                        <q-item-section class="text-right">管理员密码</q-item-section>
+                    </q-item>
+                    <q-item class="col-8 q-pa-sm">
+                        <q-item-section>
+                            <q-select outlined dense v-model="settings.secretActions.authPassword" :options="[{label:'保持原密码',value:'keep'},{label:'更换密码',value:'set'}]" emit-value map-options label="密码操作" :disable="settings.secrets?.authPassword?.managed" />
+                            <q-input
+                                type="password"
+                                outlined
+                                dense
+                                round
+                                item-aligned
+                                v-model="settings.authPassword"
+                                :disable="settings.secrets?.authPassword?.managed || settings.secretActions.authPassword !== 'set'"
+                                hint="密码不会回显；更换时输入新密码。环境凭据需在服务端更换。"
                             />
                         </q-item-section>
                     </q-item>
@@ -89,6 +111,15 @@
                 </q-card-section>
             </q-card>
 
+            <q-card flat bordered class="q-my-md">
+                <q-card-section><h2 class="text-subtitle1 q-ma-none">各协议查询限制</h2><p class="text-caption text-grey-8">并发在整个服务内共享；请求频率按上游服务器限制，收到 Retry-After 后等待。</p>
+                    <div class="row q-col-gutter-md">
+                        <div v-for="field in protocolFields" :key="field.key" class="col-12 col-sm-6 col-md-4">
+                            <q-input outlined dense type="number" v-model.number="settings[field.key]" :label="field.label" :min="1" :max="field.max" :rules="[$rules.minValue(1, '至少为 1'), $rules.maxValue(field.max, '超过上限')]" />
+                        </div>
+                    </div>
+                </q-card-section>
+            </q-card>
             <!-- 公共查询参数 -->
             <q-card class="no-shadow q-mt-md q-pb-lg" bordered>
                 <q-card-section class="row items-center q-px-lg">
@@ -175,7 +206,7 @@
                                     $rules.required('请设置重试次数'),
                                     $rules.numeric('重试次数必须为数字'),
                                     $rules.minValue(1, '重试次数至少为1次'),
-                                    $rules.maxValue(10, '重试次数最多为10次')
+                                    $rules.maxValue(5, '重试次数最多为5次')
                                 ]"
                             />
                         </q-item-section>
@@ -352,6 +383,7 @@
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section>
+                            <q-select outlined dense v-model="settings.secretActions.socketProxyPassword" :options="[{label:'保持',value:'keep'},{label:'更换',value:'set'},{label:'清空',value:'clear'}]" emit-value map-options label="代理密码操作" />
                             <q-input
                                 type="password"
                                 outlined
@@ -359,7 +391,9 @@
                                 round
                                 item-aligned
                                 v-model="settings.socketProxyPassword"
-                                placeholder="留空保留现有密码"
+                                :disable="settings.secretActions.socketProxyPassword !== 'set'"
+                                hint="只有更换时需要填写；清空请选择“清空”"
+                                :rules="[v => settings.secretActions.socketProxyPassword !== 'set' || !!v || '请输入新代理密码']"
                             />
                         </q-item-section>
                     </q-item>
@@ -454,32 +488,6 @@
                         </q-item-section>
                     </q-item>
                 </q-card-section>
-
-                <q-card-section class="row q-pa-sm">
-                    <q-item class="col-4 q-pa-sm">
-                        <q-item-section class="text-right">匿名访客每分钟域名数</q-item-section>
-                    </q-item>
-                    <q-item class="col-8 q-pa-sm">
-                        <q-item-section>
-                            <q-input
-                                type="number"
-                                outlined
-                                dense
-                                round
-                                item-aligned
-                                suffix="个/IP"
-                                hint="按访客公网 IP 计算；本机和内网地址不受限制"
-                                v-model.number="settings.publicDomainsPerMinute"
-                                :rules="[
-                                    $rules.required('请设置匿名访客每分钟域名数'),
-                                    $rules.numeric('匿名访客每分钟域名数必须为数字'),
-                                    $rules.minValue(1, '匿名访客每分钟域名数最少为1'),
-                                    $rules.maxValue(100000, '匿名访客每分钟域名数最多为100000')
-                                ]"
-                            />
-                        </q-item-section>
-                    </q-item>
-                </q-card-section>
             </q-card>
 
             <!-- Typo查询参数 -->
@@ -568,7 +576,7 @@
                         <tbody>
                             <tr v-for="apiItem in settings.registerApis" :key="apiItem.apiName">
                                 <td class="text-center">{{ apiItem.apiName }}</td>
-                                <td class="text-left">{{ apiItem.apiUrl ? "待保存" : "已配置" }}</td>
+                                <td class="text-left">{{ apiItem.apiUrl || "已配置（地址不回显）" }}</td>
                                 <td class="text-center">{{ apiItem.concurrencyLimit }}</td>
                                 <td class="text-center q-gutter-sm">
                                     <q-btn color="primary" size="sm" icon="edit" label="修改" @click="openUpdateRegisterApiDialog(apiItem)" />
@@ -616,7 +624,7 @@
                         <tbody>
                             <tr v-for="apiItem in settings.whoisApis" :key="apiItem.apiName">
                                 <td class="text-center">{{ apiItem.apiName }}</td>
-                                <td class="text-left">{{ apiItem.apiUrl ? "待保存" : "已配置" }}</td>
+                                <td class="text-left">{{ apiItem.apiUrl || "已配置（地址不回显）" }}</td>
                                 <td class="text-center">{{ apiItem.concurrencyLimit }}</td>
                                 <td class="text-center q-gutter-sm">
                                     <q-btn color="primary" size="sm" icon="edit" label="修改" @click="openUpdateWhoisApiDialog(apiItem)" />
@@ -683,10 +691,10 @@
                                         dense
                                         hide-bottom-space
                                         v-model="inputRegisterApiData.apiUrl"
-                                        type="password"
-                                        placeholder="包含 {domain} 的 URL，同名接口留空保留"
+                                        type="textarea"
+                                        placeholder="填写新地址，{domain} 为域名占位符；已有接口留空保持原地址，重命名需重填"
                                         lazy-rules
-                                        :rules="[(value) => (updateRegisterApiItem.apiName && updateRegisterApiItem.apiName === inputRegisterApiData.apiName) || !!value || '请输入 URL']"
+                                        :rules="[]"
                                     />
                                 </td>
                             </tr>
@@ -812,10 +820,10 @@
                                         dense
                                         hide-bottom-space
                                         v-model="inputWhoisApiData.apiUrl"
-                                        type="password"
-                                        placeholder="包含 {domain} 的 URL，同名接口留空保留"
+                                        type="textarea"
+                                        placeholder="填写新地址，{domain} 为域名占位符；已有接口留空保持原地址，重命名需重填"
                                         lazy-rules
-                                        :rules="[(value) => (updateWhoisApiItem.apiName && updateWhoisApiItem.apiName === inputWhoisApiData.apiName) || !!value || '请输入 URL']"
+                                        :rules="[]"
                                     />
                                 </td>
                             </tr>
@@ -915,6 +923,14 @@ import { api } from "boot/axios";
 import { useSettingStore } from "src/stores/settingStore";
 
 const $q = useQuasar();
+const protocolFields = [
+    { key: 'rdapTimeout', label: 'RDAP 超时 / 秒', max: 120 },
+    ...[['dns', 'DNS'], ['whois', 'WHOIS'], ['rdap', 'RDAP']].flatMap(([key, label]) => [
+        { key: `${key}Concurrency`, label: `${label} 最大并发`, max: 256 },
+        { key: `${key}Rate`, label: `${label} 每上游每秒请求数`, max: 256 }
+    ])
+];
+
 const settingStore = useSettingStore();
 
 const settingForm = ref(null);
@@ -970,6 +986,7 @@ function getSettings() {
         .then((response) => {
             if (response.data) {
                 settings.value = response.data;
+                settings.value.secretActions = {authPassword:'keep',jwtSecretKey:'keep',socketProxyPassword:'keep'};
                 if (settings.value.globalProxyTlds) {
                     settings.value.globalProxyTldsInput = settings.value.globalProxyTlds.join("\n");
                 } else {
@@ -1016,7 +1033,7 @@ function getSettings() {
             }
         })
         .catch((error) => {
-             $q.notify({
+            this.$q.notify({
                 position: "top",
                 type: "negative",
                 message: "获取数据失败"
@@ -1049,7 +1066,6 @@ function resetLog() {
                 });
             })
             .catch((error) => {
-                console.error("Clear log error: ", error);
                 $q.notify({
                     position: "top",
                     type: "negative",
@@ -1092,7 +1108,6 @@ function downloadLog() {
             downloadingLog.value = false;
         })
         .catch((error) => {
-            console.error("下载日志文件时发生错误:", error);
             $q.notify({
                 position: "top",
                 type: "negative",
@@ -1207,15 +1222,15 @@ function openUpdateRegisterApiDialog(apiItem) {
     updateRegisterApiItem.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        successText: [...(apiItem.successText || [])],
-        failText: [...(apiItem.failText || [])],
+        successText: apiItem.successText,
+        failText: apiItem.failText,
         concurrencyLimit: apiItem.concurrencyLimit
     };
     inputRegisterApiData.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        successText: [...(apiItem.successText || [])],
-        failText: [...(apiItem.failText || [])],
+        successText: apiItem.successText,
+        failText: apiItem.failText,
         concurrencyLimit: apiItem.concurrencyLimit
     };
 }
@@ -1323,15 +1338,15 @@ function openUpdateWhoisApiDialog(apiItem) {
     updateWhoisApiItem.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        freeText: [...(apiItem.freeText || [])],
-        takenText: [...(apiItem.takenText || [])],
+        freeText: apiItem.freeText,
+        takenText: apiItem.takenText,
         concurrencyLimit: apiItem.concurrencyLimit
     };
     inputWhoisApiData.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        freeText: [...(apiItem.freeText || [])],
-        takenText: [...(apiItem.takenText || [])],
+        freeText: apiItem.freeText,
+        takenText: apiItem.takenText,
         concurrencyLimit: apiItem.concurrencyLimit
     };
 }
@@ -1433,15 +1448,19 @@ function onSubmit() {
                         message: "配置参数保存成功"
                     });
                     submitting.value = false;
-                    settings.value.socketProxyPassword = "";
-                    for (const item of [...(settings.value.registerApis || []), ...(settings.value.whoisApis || [])]) item.apiUrl = "";
+                    settings.value.authPassword = '';
+                    settings.value.socketProxyPassword = '';
+                    settings.value.jwtSecretKey = '';
+                    settings.value.secretActions = {authPassword:'keep',jwtSecretKey:'keep',socketProxyPassword:'keep'};
+                    settings.value.secrets = response.data.secrets;
+                    for (const key of ['whoisApis','registerApis']) settings.value[key] = response.data[key];
                     settingStore.updateSetting(response.data);
                 })
                 .catch((error) => {
                     $q.notify({
                         position: "top",
                         type: "negative",
-                        message: error.response?.status === 400 ? error.response.data : "配置参数保存失败，请检查服务端日志"
+                        message: "配置参数保存失败, 请检查服务端日志"
                     });
                     submitting.value = false;
                 });

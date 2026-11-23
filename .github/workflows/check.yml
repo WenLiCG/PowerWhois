@@ -1,58 +1,30 @@
-name: Verify PowerWhois
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
+name: Checks
+on: [push, pull_request]
 permissions:
   contents: read
-
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.27.4'
           cache-dependency-path: src/backend/go.sum
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
-          node-version: '22.23.5'
-      - name: Install tools for tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y redis-server
-          npm install --global yarn@1.22.22
-      - name: Test Go
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y redis-server
+      - run: go test -race ./...
         working-directory: src/backend
-        run: |
-          go vet ./...
-          go test -race ./...
-      - name: Scan Go source
+      - run: |
+          mkdir -p ../../.work
+          go build -o ../../.work/typonamer .
+          go build -o ../../.work/powerwhois ./cmd/powerwhois
+          go build -o ../../.work/powerwhois-mcp ./cmd/powerwhois-mcp
         working-directory: src/backend
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
-          govulncheck ./...
-      - name: Test and build frontend
+      - run: python3 tools/acceptance.py
+      - run: npm ci && npm test && npm run lint && npm run build && npm audit --omit=dev
         working-directory: src/frontend
-        run: |
-          yarn install --frozen-lockfile
-          yarn lint
-          yarn test
-          yarn build
-      - name: Package and scan
-        run: |
-          bash src/package.sh amd64
-          bash src/package.sh arm64
-          scratch=$(mktemp -d)
-          for package in dist/*.tar.gz; do
-            tar -xzf "$package" -C "$scratch"
-            govulncheck -mode=binary "$scratch/deploy/backend/typonamer"
-          done
-      - uses: actions/upload-artifact@v7
-        with:
-          name: PowerWhois-linux
-          path: dist/PowerWhois-*

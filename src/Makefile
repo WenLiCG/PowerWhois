@@ -1,21 +1,20 @@
-SHELL := /bin/bash
-GOARCH ?= $(shell go env GOARCH)
-
-.PHONY: setup backend bundle frontend all package
-all: backend frontend
+.PHONY: setup backend frontend test all
 
 setup:
 	cd backend && go mod download
-	cd frontend && yarn install --frozen-lockfile
+	cd frontend && npm ci
 
 backend:
-	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -buildvcs=true -o ../../deploy/backend/typonamer .
+	mkdir -p ../dist/backend
+	cd backend && go build -trimpath -o ../../dist/backend/typonamer .
+	cd backend && go build -trimpath -o ../../dist/backend/powerwhois ./cmd/powerwhois
+	cd backend && go build -trimpath -o ../../dist/backend/powerwhois-mcp ./cmd/powerwhois-mcp
 
-bundle:
-	cd frontend && yarn build
+frontend:
+	cd frontend && npm run build
 
-frontend: bundle
-	cp -r frontend/dist/spa/. ../deploy/frontend/
+test:
+	cd backend && go test -race ./...
+	cd frontend && npm test && npm run lint
 
-package: bundle
-	bash package.sh $(GOARCH)
+all: backend frontend

@@ -1,315 +1,347 @@
 package config
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
-
-	"typonamer/constant"
 	"typonamer/log"
-
-	"github.com/spf13/viper"
-	"gopkg.in/yaml.v3"
 )
 
-// Published configurations and their slices are immutable.
-var current atomic.Pointer[Config]
-var saveMu sync.Mutex
+var mu sync.RWMutex
 var configFile string
+var config = Config{LogLevel: "Info", WhoisTimeout: 5, DnsTimeout: 3, RdapTimeout: 10,
+	DnsConcurrency: 15, WhoisConcurrency: 15, RdapConcurrency: 4, DnsRate: 20, WhoisRate: 2, RdapRate: 4,
+	WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500, BulkCheckConcurrencyLimit: 32, RetryMax: 2, RetryInterval: 1, AuthExpireDays: 1}
 
 type Config struct {
-	LogLevel string `json:"logLevel" yaml:"LogLevel"`
+	LogLevel string `json:"logLevel"` //日志等级
 
-	AuthUsername   string `json:"authUsername" yaml:"AuthUsername"`
-	AuthPassword   string `json:"-" yaml:"-"`
-	AuthExpireDays int    `json:"authExpireDays" yaml:"AuthExpireDays"`
-	JwtSecretKey   string `json:"-" yaml:"-"`
+	AuthUsername   string `json:"authUsername"`   //认证账号
+	AuthPassword   string `json:"authPassword"`   //认证密码
+	AuthExpireDays int    `json:"authExpireDays"` //认证有效期
+	JwtSecretKey   string `json:"jwtSecretKey"`   //JWT密钥
 
-	WhoisTimeout int `json:"whoisTimeout" yaml:"WhoisTimeout"`
-	DnsTimeout   int `json:"dnsTimeout" yaml:"DnsTimeout"`
+	RdapTimeout      int `json:"rdapTimeout"`
+	DnsConcurrency   int `json:"dnsConcurrency"`
+	WhoisConcurrency int `json:"whoisConcurrency"`
+	RdapConcurrency  int `json:"rdapConcurrency"`
+	DnsRate          int `json:"dnsRate"`
+	WhoisRate        int `json:"whoisRate"`
+	RdapRate         int `json:"rdapRate"`
+	WhoisTimeout     int `json:"whoisTimeout"` //whois超时
+	DnsTimeout       int `json:"dnsTimeout"`   //DNS超时
 
-	RetryOnTimeout bool `json:"retryOnTimeout" yaml:"RetryOnTimeout"`
-	RetryInterval  int  `json:"retryInterval" yaml:"RetryInterval"`
-	RetryMax       int  `json:"retryMax" yaml:"RetryMax"`
+	RetryOnTimeout bool `json:"retryOnTimeout"` //是否重试
+	RetryInterval  int  `json:"retryInterval"`  //重试间隔
+	RetryMax       int  `json:"retryMax"`       //最大重试次数
 
-	GlobalProxyTlds []string `json:"globalProxyTlds" yaml:"GlobalProxyTlds"`
+	GlobalProxyTlds []string `json:"globalProxyTlds"` //全局代理TLD
 
-	MixedProxyTlds []string `json:"mixedProxyTlds" yaml:"MixedProxyTlds"`
-	MixedDnsTlds   []string `json:"mixedDnsTlds" yaml:"MixedDnsTlds"`
+	MixedProxyTlds []string `json:"mixedProxyTlds"` //混合查询代理TLD
+	MixedDnsTlds   []string `json:"mixedDnsTlds"`   //混合查询DNS TLDS
 
-	SocketProxyHost     string `json:"socketProxyHost" yaml:"SocketProxyHost"`
-	SocketProxyPort     int    `json:"socketProxyPort" yaml:"SocketProxyPort"`
-	SocketProxyAuth     bool   `json:"socketProxyAuth" yaml:"SocketProxyAuth"`
-	SocketProxyUser     string `json:"socketProxyUser" yaml:"SocketProxyUser"`
-	SocketProxyPassword string `json:"socketProxyPassword" yaml:"SocketProxyPassword"`
+	SocketProxyHost     string `json:"socketProxyHost"`     //代理服务器地址
+	SocketProxyPort     int    `json:"socketProxyPort"`     //代理服务器端口
+	SocketProxyAuth     bool   `json:"socketProxyAuth"`     //代理服务器认证
+	SocketProxyUser     string `json:"socketProxyUser"`     //代理服务器账号
+	SocketProxyPassword string `json:"socketProxyPassword"` //代理服务器密码
 
-	BulkCheckConcurrencyLimit int `json:"bulkCheckConcurrencyLimit" yaml:"BulkCheckConcurrencyLimit"`
+	BulkCheckConcurrencyLimit int `json:"bulkCheckConcurrencyLimit"` //批量查询并发限制
 
-	WebCheckConcurrencyLimit int `json:"webCheckConcurrencyLimit" yaml:"WebCheckConcurrencyLimit"`
-	WebCheckDomainLimit      int `json:"webCheckDomainLimit" yaml:"WebCheckDomainLimit"`
+	WebCheckConcurrencyLimit int `json:"webCheckConcurrencyLimit"` //网页查询并发限制
+	WebCheckDomainLimit      int `json:"webCheckDomainLimit"`      //单次网页查询域名数量限制
 
-	// PublicDomainsPerMinute limits anonymous web lookups per client IP.
-	PublicDomainsPerMinute int `json:"publicDomainsPerMinute" yaml:"PublicDomainsPerMinute"`
+	TypoDefaultCcTlds      []CcTld  `json:"typoDefaultCcTlds"`      //默认ccTLD
+	TypoCustomizedReplaces []string `json:"typoCustomizedReplaces"` //自定义替换
 
-	TypoDefaultCcTlds      []CcTld  `json:"typoDefaultCcTlds" yaml:"TypoDefaultCcTlds"`
-	TypoCustomizedReplaces []string `json:"typoCustomizedReplaces" yaml:"TypoCustomizedReplaces"`
-
-	RegisterApis []RegisterApi `json:"registerApis" yaml:"RegisterApis"`
-	WhoisApis    []WhoisApi    `json:"whoisApis" yaml:"WhoisApis"`
+	RegisterApis []RegisterApi `json:"registerApis"` //注册接口
+	WhoisApis    []WhoisApi    `json:"whoisApis"`    //自定义whois接口
 }
 
 type CcTld struct {
-	Tld        string `json:"tld" yaml:"Tld"`
-	IsSelected bool   `json:"isSelected" yaml:"IsSelected"`
+	Tld        string `json:"tld"`        //TLD
+	IsSelected bool   `json:"isSelected"` //是否选中
 }
 
 type RegisterApi struct {
-	ApiName          string   `json:"apiName" yaml:"ApiName"`
-	ApiUrl           string   `json:"apiUrl" yaml:"ApiUrl"`
-	SuccessText      []string `json:"successText" yaml:"SuccessText"`
-	FailText         []string `json:"failText" yaml:"FailText"`
-	ConcurrencyLimit int      `json:"concurrencyLimit" yaml:"ConcurrencyLimit"`
+	ApiName          string   `json:"apiName"`          //接口名称
+	ApiUrl           string   `json:"apiUrl"`           //接口地址
+	SuccessText      []string `json:"successText"`      //成功标识
+	FailText         []string `json:"failText"`         //失败标识
+	ConcurrencyLimit int      `json:"concurrencyLimit"` //并发限制
 }
 
 type WhoisApi struct {
-	ApiName          string   `json:"apiName" yaml:"ApiName"`
-	ApiUrl           string   `json:"apiUrl" yaml:"ApiUrl"`
-	FreeText         []string `json:"freeText" yaml:"FreeText"`
-	TakenText        []string `json:"takenText" yaml:"TakenText"`
-	ConcurrencyLimit int      `json:"concurrencyLimit" yaml:"ConcurrencyLimit"`
+	ApiName          string   `json:"apiName"`          //接口名称
+	ApiUrl           string   `json:"apiUrl"`           //接口地址
+	FreeText         []string `json:"freeText"`         //Free标识
+	TakenText        []string `json:"takenText"`        //Taken标识
+	ConcurrencyLimit int      `json:"concurrencyLimit"` //并发限制
 }
 
-var defaults = Config{
-	LogLevel: "Info", AuthUsername: "admin", AuthExpireDays: 1,
-	WhoisTimeout: 6, DnsTimeout: 5, RetryInterval: 3, RetryMax: 2,
-	BulkCheckConcurrencyLimit: 15, WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500,
-	PublicDomainsPerMinute: 500,
-}
-
+// Load is explicit so importing helpers never opens configuration files or exits.
 func Load(path string) error {
-	next := defaults
-	reader := viper.New()
-	reader.SetConfigFile(path)
-	if err := reader.ReadInConfig(); err != nil {
-		return fmt.Errorf("cannot read configuration file %s", path)
-	}
-	if err := reader.Unmarshal(&next); err != nil {
-		return errors.New("cannot decode configuration fields")
-	}
-	if err := applyRequiredSecretsTo(&next); err != nil {
+	v := viper.New()
+	v.SetConfigFile(path)
+	if err := v.ReadInConfig(); err != nil {
 		return err
 	}
-	normalize(&next)
-	if err := validate(next); err != nil {
+	next := GetConfig()
+	if err := v.Unmarshal(&next); err != nil {
 		return err
 	}
-
+	for key, dst := range map[string]*string{"POWERWHOIS_ADMIN_USER": &next.AuthUsername, "POWERWHOIS_ADMIN_PASSWORD": &next.AuthPassword, "POWERWHOIS_JWT_SECRET": &next.JwtSecretKey} {
+		if value := os.Getenv(key); value != "" {
+			*dst = value
+		}
+	}
+	if err := Validate(next); err != nil {
+		return err
+	}
+	mu.Lock()
 	configFile = path
-	current.Store(&next)
+	config = clone(next)
+	mu.Unlock()
 	log.SetLevel(next.LogLevel)
 	return nil
 }
-
-func applyRequiredSecretsTo(cfg *Config) error {
-	password := strings.TrimSpace(os.Getenv("POWERWHOIS_ADMIN_PASSWORD"))
-	secret := strings.TrimSpace(os.Getenv("POWERWHOIS_JWT_SECRET"))
-	var missing []string
-	if password == "" {
-		missing = append(missing, "POWERWHOIS_ADMIN_PASSWORD")
-	}
-	if secret == "" {
-		missing = append(missing, "POWERWHOIS_JWT_SECRET")
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("refusing to start: required environment variable not set: %s", strings.Join(missing, ", "))
-	}
-	cfg.AuthPassword, cfg.JwtSecretKey = password, secret
-	return nil
-}
-
-func GetConfig() Config {
-	if cfg := current.Load(); cfg != nil {
-		return *cfg
-	}
-	return defaults
-}
-
-func PublicSettings(cfg Config) Config {
-	cfg.AuthPassword, cfg.JwtSecretKey, cfg.SocketProxyPassword = "", "", ""
-	cfg.RegisterApis = slices.Clone(cfg.RegisterApis)
-	for i := range cfg.RegisterApis {
-		cfg.RegisterApis[i].ApiUrl = ""
-	}
-	cfg.WhoisApis = slices.Clone(cfg.WhoisApis)
-	for i := range cfg.WhoisApis {
-		cfg.WhoisApis[i].ApiUrl = ""
-	}
-	return cfg
-}
-
-func UpdateConfig(next Config) (Config, error) {
-	saveMu.Lock()
-	defer saveMu.Unlock()
-	prev := GetConfig()
-
-	next.AuthPassword, next.JwtSecretKey = prev.AuthPassword, prev.JwtSecretKey
-	if next.SocketProxyPassword == "" {
-		next.SocketProxyPassword = prev.SocketProxyPassword
-	}
-	normalize(&next)
-	for i := range next.RegisterApis {
-		if next.RegisterApis[i].ApiUrl == "" {
-			for _, old := range prev.RegisterApis {
-				if old.ApiName == next.RegisterApis[i].ApiName {
-					next.RegisterApis[i].ApiUrl = old.ApiUrl
-					break
-				}
-			}
-		}
-	}
-	for i := range next.WhoisApis {
-		if next.WhoisApis[i].ApiUrl == "" {
-			for _, old := range prev.WhoisApis {
-				if old.ApiName == next.WhoisApis[i].ApiName {
-					next.WhoisApis[i].ApiUrl = old.ApiUrl
-					break
-				}
-			}
-		}
-	}
-	if err := validate(next); err != nil {
-		return Config{}, err
-	}
-	if err := writeConfig(configFile, next); err != nil {
-		log.Error("Could not save configuration file")
-		return Config{}, ErrWriteConfig
-	}
-
-	current.Store(&next)
-	log.SetLevel(next.LogLevel)
-	return PublicSettings(next), nil
-}
-
-var ErrWriteConfig = errors.New("could not save configuration")
-
-func normalize(c *Config) {
-	if c.PublicDomainsPerMinute == 0 {
-		// Older configuration files and clients do not send this field.
-		c.PublicDomainsPerMinute = defaults.PublicDomainsPerMinute
-	}
-	c.LogLevel = strings.TrimSpace(c.LogLevel)
-	c.AuthUsername = strings.TrimSpace(c.AuthUsername)
-	for _, list := range [][]string{c.GlobalProxyTlds, c.MixedProxyTlds, c.MixedDnsTlds} {
-		for i := range list {
-			list[i] = strings.Trim(strings.ToLower(strings.TrimSpace(list[i])), ".")
-		}
-	}
-	for i := range c.TypoDefaultCcTlds {
-		tld := &c.TypoDefaultCcTlds[i].Tld
-		*tld = strings.Trim(strings.ToLower(strings.TrimSpace(*tld)), ".")
+func GetConfig() Config { mu.RLock(); defer mu.RUnlock(); return clone(config) }
+func clone(c Config) Config {
+	c.GlobalProxyTlds = slices.Clone(c.GlobalProxyTlds)
+	c.MixedDnsTlds = slices.Clone(c.MixedDnsTlds)
+	c.MixedProxyTlds = slices.Clone(c.MixedProxyTlds)
+	c.TypoDefaultCcTlds = slices.Clone(c.TypoDefaultCcTlds)
+	c.TypoCustomizedReplaces = slices.Clone(c.TypoCustomizedReplaces)
+	c.WhoisApis = slices.Clone(c.WhoisApis)
+	c.RegisterApis = slices.Clone(c.RegisterApis)
+	for i := range c.WhoisApis {
+		c.WhoisApis[i].FreeText = slices.Clone(c.WhoisApis[i].FreeText)
+		c.WhoisApis[i].TakenText = slices.Clone(c.WhoisApis[i].TakenText)
 	}
 	for i := range c.RegisterApis {
-		p := &c.RegisterApis[i]
-		p.ApiName, p.ApiUrl = strings.TrimSpace(p.ApiName), strings.TrimSpace(p.ApiUrl)
-		p.SuccessText, p.FailText = trimMarkers(p.SuccessText), trimMarkers(p.FailText)
+		c.RegisterApis[i].SuccessText = slices.Clone(c.RegisterApis[i].SuccessText)
+		c.RegisterApis[i].FailText = slices.Clone(c.RegisterApis[i].FailText)
 	}
-	for i := range c.WhoisApis {
-		p := &c.WhoisApis[i]
-		p.ApiName, p.ApiUrl = strings.TrimSpace(p.ApiName), strings.TrimSpace(p.ApiUrl)
-		p.FreeText, p.TakenText = trimMarkers(p.FreeText), trimMarkers(p.TakenText)
-	}
+	return c
 }
 
-func trimMarkers(markers []string) []string {
-	for i := range markers {
-		markers[i] = strings.TrimSpace(markers[i])
+// PublicSettings never returns reusable credentials, including secrets embedded in API URLs.
+func PublicSettings() map[string]interface{} {
+	c := GetConfig()
+	data, _ := json.Marshal(c)
+	out := map[string]interface{}{}
+	json.Unmarshal(data, &out)
+	status := map[string]interface{}{}
+	for key, value := range map[string]string{"authPassword": c.AuthPassword, "jwtSecretKey": c.JwtSecretKey, "socketProxyPassword": c.SocketProxyPassword} {
+		env := map[string]string{"authPassword": "POWERWHOIS_ADMIN_PASSWORD", "jwtSecretKey": "POWERWHOIS_JWT_SECRET"}[key]
+		status[key] = map[string]bool{"configured": value != "", "managed": env != "" && os.Getenv(env) != ""}
+		out[key] = ""
 	}
-	return slices.DeleteFunc(markers, func(s string) bool { return s == "" })
+	for _, key := range []string{"whoisApis", "registerApis"} {
+		if list, ok := out[key].([]interface{}); ok {
+			for _, item := range list {
+				a := item.(map[string]interface{})
+				a["urlConfigured"] = a["apiUrl"] != ""
+				a["apiUrl"] = ""
+			}
+		}
+	}
+	out["secrets"] = status
+	return out
 }
-
-func validate(c Config) error {
-	switch strings.ToLower(c.LogLevel) {
-	case "debug", "info", "warn", "error", "off":
-	default:
-		return errors.New("invalid logLevel")
+func Validate(c Config) error {
+	if c.WhoisTimeout < 1 || c.WhoisTimeout > 120 || c.DnsTimeout < 1 || c.DnsTimeout > 120 || c.RdapTimeout < 1 || c.RdapTimeout > 120 {
+		return fmt.Errorf("timeouts must be 1..120 seconds")
 	}
-	if c.AuthUsername == "" || c.AuthExpireDays < 1 || c.AuthExpireDays > 365 {
-		return errors.New("invalid administrator username or session lifetime")
+	if c.RetryMax < 0 || c.RetryMax > 5 || c.RetryInterval < 0 || c.RetryInterval > 60 {
+		return fmt.Errorf("invalid retry limits")
 	}
-	if c.WhoisTimeout < 1 || c.WhoisTimeout > 60 || c.DnsTimeout < 1 || c.DnsTimeout > 60 {
-		return errors.New("WHOIS and DNS timeouts must be 1–60 seconds")
-	}
-	if c.RetryMax < 0 || c.RetryMax > 5 || c.RetryInterval < 0 || c.RetryInterval > 30 {
-		return errors.New("invalid retry count or interval")
-	}
-	if c.WebCheckDomainLimit < 1 || c.WebCheckDomainLimit > 5000 ||
-		c.WebCheckConcurrencyLimit < 1 || c.WebCheckConcurrencyLimit > 64 ||
-		c.BulkCheckConcurrencyLimit < 1 || c.BulkCheckConcurrencyLimit > 128 {
-		return errors.New("invalid domain limit or worker count")
-	}
-	if c.PublicDomainsPerMinute < 1 || c.PublicDomainsPerMinute > 100000 {
-		return errors.New("anonymous domains per minute must be 1–100000")
-	}
-	if len(c.TypoCustomizedReplaces) > 200 || len(c.TypoDefaultCcTlds) > 100 {
-		return errors.New("too many Typo options")
-	}
-	if c.SocketProxyPort < 0 || c.SocketProxyPort > 65535 || (c.SocketProxyHost != "" && c.SocketProxyPort == 0) {
-		return errors.New("invalid SOCKS proxy port")
-	}
-	registerNames := make(map[string]bool)
-	for _, p := range c.RegisterApis {
-		if registerNames[p.ApiName] || !validProvider(p.ApiName, p.ApiUrl, p.ConcurrencyLimit, p.SuccessText, p.FailText) {
-			return errors.New("invalid or duplicate registration provider")
+	for _, n := range []int{c.WebCheckConcurrencyLimit, c.BulkCheckConcurrencyLimit, c.DnsConcurrency, c.WhoisConcurrency, c.RdapConcurrency, c.DnsRate, c.WhoisRate, c.RdapRate} {
+		if n < 1 || n > 256 {
+			return fmt.Errorf("concurrency and rates must be 1..256")
 		}
-		registerNames[p.ApiName] = true
 	}
-	whoisNames := map[string]bool{constant.WhoisQuery: true, constant.WhoisQueryWithProxy: true, constant.DnsQuery: true, constant.MixedQuery: true}
-	for _, p := range c.WhoisApis {
-		if whoisNames[p.ApiName] || !validProvider(p.ApiName, p.ApiUrl, p.ConcurrencyLimit, p.FreeText, p.TakenText) {
-			return errors.New("invalid or duplicate lookup provider")
+	if c.WebCheckDomainLimit < 1 || c.WebCheckDomainLimit > 10000 {
+		return fmt.Errorf("web domain limit must be 1..10000")
+	}
+	if c.AuthUsername == "" || len(c.AuthPassword) < 12 || len(c.JwtSecretKey) < 32 {
+		return fmt.Errorf("configure administrator credentials (password >=12, JWT secret >=32 characters)")
+	}
+	if c.AuthExpireDays < 1 || c.AuthExpireDays > 30 {
+		return fmt.Errorf("auth expiry must be 1..30 days")
+	}
+	names := map[string]bool{"dnsQuery": true, "whoisQuery": true, "mixedQuery": true, "whoisQueryWithProxy": true, "dns": true, "whois": true, "mixed": true, "proxy": true}
+	for _, a := range c.WhoisApis {
+		if a.ApiName == "" || a.ConcurrencyLimit < 1 || a.ConcurrencyLimit > 256 {
+			return fmt.Errorf("invalid custom query API")
 		}
-		whoisNames[p.ApiName] = true
+		if names[a.ApiName] || !validAPI(a.ApiUrl, a.FreeText, a.TakenText) {
+			return fmt.Errorf("custom API needs a unique name, HTTP(S) URL and nonempty, distinct response markers")
+		}
+		names[a.ApiName] = true
+	}
+	names = map[string]bool{}
+	for _, a := range c.RegisterApis {
+		if a.ApiName == "" || a.ConcurrencyLimit < 1 || a.ConcurrencyLimit > 256 {
+			return fmt.Errorf("invalid registration API")
+		}
+		if names[a.ApiName] || !validAPI(a.ApiUrl, a.SuccessText, a.FailText) {
+			return fmt.Errorf("registration API needs a unique name, HTTP(S) URL and nonempty, distinct response markers")
+		}
+		names[a.ApiName] = true
 	}
 	return nil
 }
-
-func validProvider(name, template string, concurrent int, positive, negative []string) bool {
-	if name == "" || len(name) > 100 || !strings.Contains(template, "{domain}") ||
-		concurrent < 1 || concurrent > 64 || len(positive) == 0 || len(negative) == 0 {
+func validAPI(address string, positive, negative []string) bool {
+	u, err := url.Parse(strings.ReplaceAll(address, "{domain}", "example.com"))
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" || len(positive) == 0 || len(negative) == 0 {
 		return false
 	}
-	address, err := url.Parse(strings.ReplaceAll(template, "{domain}", "example.test"))
-	return err == nil && address.Hostname() != "" && address.Fragment == "" &&
-		(address.Scheme == "https" || address.Scheme == "http")
+	for _, markers := range [][]string{positive, negative} {
+		for _, marker := range markers {
+			if strings.TrimSpace(marker) == "" {
+				return false
+			}
+		}
+	}
+	for _, p := range positive {
+		for _, n := range negative {
+			if p == n {
+				return false
+			}
+		}
+	}
+	return true
 }
-
-func writeConfig(path string, cfg Config) error {
-	if path == "" {
-		return ErrWriteConfig
+func UpdateConfig(next Config, secretActions ...map[string]string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if len(secretActions) > 0 {
+		for key, pair := range map[string][2]*string{"authPassword": {&next.AuthPassword, &config.AuthPassword}, "jwtSecretKey": {&next.JwtSecretKey, &config.JwtSecretKey}, "socketProxyPassword": {&next.SocketProxyPassword, &config.SocketProxyPassword}} {
+			switch secretActions[0][key] {
+			case "", "keep":
+				*pair[0] = *pair[1]
+			case "set":
+				if *pair[0] == "" {
+					return fmt.Errorf("%s replacement is empty", key)
+				}
+			case "clear":
+				*pair[0] = ""
+			default:
+				return fmt.Errorf("invalid secret action for %s", key)
+			}
+		}
+		for i := range next.WhoisApis {
+			if next.WhoisApis[i].ApiUrl == "" {
+				for _, old := range config.WhoisApis {
+					if old.ApiName == next.WhoisApis[i].ApiName {
+						next.WhoisApis[i].ApiUrl = old.ApiUrl
+					}
+				}
+			}
+		}
+		for i := range next.RegisterApis {
+			if next.RegisterApis[i].ApiUrl == "" {
+				for _, old := range config.RegisterApis {
+					if old.ApiName == next.RegisterApis[i].ApiName {
+						next.RegisterApis[i].ApiUrl = old.ApiUrl
+					}
+				}
+			}
+		}
 	}
-	data, err := yaml.Marshal(cfg)
+	for env, value := range map[string]string{"POWERWHOIS_ADMIN_USER": next.AuthUsername, "POWERWHOIS_ADMIN_PASSWORD": next.AuthPassword, "POWERWHOIS_JWT_SECRET": next.JwtSecretKey} {
+		if managed := os.Getenv(env); managed != "" && value != managed {
+			return fmt.Errorf("%s is managed by the service environment; change it there and restart", env)
+		}
+	}
+	// Older Web clients omit protocol controls.
+	if next.RdapTimeout == 0 {
+		next.RdapTimeout = config.RdapTimeout
+	}
+	if next.DnsConcurrency == 0 {
+		next.DnsConcurrency = config.DnsConcurrency
+	}
+	if next.WhoisConcurrency == 0 {
+		next.WhoisConcurrency = config.WhoisConcurrency
+	}
+	if next.RdapConcurrency == 0 {
+		next.RdapConcurrency = config.RdapConcurrency
+	}
+	if next.DnsRate == 0 {
+		next.DnsRate = config.DnsRate
+	}
+	if next.WhoisRate == 0 {
+		next.WhoisRate = config.WhoisRate
+	}
+	if next.RdapRate == 0 {
+		next.RdapRate = config.RdapRate
+	}
+	next.GlobalProxyTlds = trimTlds(next.GlobalProxyTlds)
+	next.MixedProxyTlds = trimTlds(next.MixedProxyTlds)
+	next.MixedDnsTlds = trimTlds(next.MixedDnsTlds)
+	if err := Validate(next); err != nil {
+		return err
+	}
+	if err := WriteConfig(next); err != nil {
+		return err
+	}
+	config = clone(next)
+	log.SetLevel(next.LogLevel)
+	return nil
+}
+func WriteConfig(next Config) error {
+	// Encode instead of interpolating: passwords and API URLs may contain YAML syntax.
+	data, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".powerwhois-config-*")
+	var fields map[string]interface{}
+	if err = json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for env, key := range map[string]string{"POWERWHOIS_ADMIN_USER": "authUsername", "POWERWHOIS_ADMIN_PASSWORD": "authPassword", "POWERWHOIS_JWT_SECRET": "jwtSecretKey"} {
+		if os.Getenv(env) != "" {
+			fields[key] = ""
+		}
+	}
+	data, err = yaml.Marshal(fields)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
-	if _, err = file.Write(data); err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
+	f, err := os.CreateTemp(filepath.Dir(configFile), ".powerwhois-config-*")
 	if err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	defer os.Remove(f.Name())
+	if err = f.Chmod(0600); err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), configFile)
+}
+func trimTlds(tlds []string) []string {
+	out := make([]string, 0, len(tlds))
+	for _, tld := range tlds {
+		if tld = strings.Trim(strings.ToLower(strings.TrimSpace(tld)), "."); tld != "" {
+			out = append(out, tld)
+		}
+	}
+	return out
 }

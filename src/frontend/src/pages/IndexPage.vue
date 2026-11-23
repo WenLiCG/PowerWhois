@@ -1,7 +1,17 @@
 <template>
     <q-layout class="bg-grey-1">
         <q-page-container>
-            <q-page class="">
+            <q-page class="workspace">
+                <header class="workspace-header">
+                    <div>
+                        <h1>PowerWhois</h1>
+                        <p>域名查询与批量任务</p>
+                    </div>
+                    <div class="connection-state" role="status">
+                        <q-icon :name="status === 'OPEN' ? 'cloud_done' : 'cloud_off'" />
+                        {{ status === "OPEN" ? "服务已连接" : "连接中断，正在重连" }}
+                    </div>
+                </header>
                 <div class="full-width">
                     <q-tabs
                         v-model="tab"
@@ -25,17 +35,14 @@
                                 <q-item clickable @click="tab = 'setting'">
                                     <q-item-section>设置</q-item-section>
                                 </q-item>
-                                <q-item clickable @click="tab = 'registrations'">
-                                    <q-item-section>待核对注册</q-item-section>
-                                </q-item>
-                                <q-item clickable @click="logout">
-                                    <q-item-section>退出登录</q-item-section>
+                                <q-item clickable :disable="loggingOut" @click="logout">
+                                    <q-item-section>退出所有管理会话</q-item-section>
                                 </q-item>
                             </q-list>
                         </q-btn-dropdown>
                     </q-tabs>
                 </div>
-                <div style="max-width: 1200px; margin: 0 auto">
+                <div class="workspace-content">
                     <q-tab-panels v-model="tab" animated class="full-width bg-grey-1">
                         <q-tab-panel name="webCheck">
                             <WebCheck></WebCheck>
@@ -56,23 +63,23 @@
                         <q-tab-panel name="setting" v-if="tokenStore.token">
                             <AdminSetting></AdminSetting>
                         </q-tab-panel>
-
-                        <q-tab-panel name="registrations" v-if="tokenStore.token">
-                            <PendingRegistrations></PendingRegistrations>
-                        </q-tab-panel>
                     </q-tab-panels>
                 </div>
+                <footer class="workspace-footer">
+                    DNS 无记录不等于未注册；“未找到”仍需注册商确认。
+                    <a href="/api/openapi.json" target="_blank" rel="noopener">API 文档（OpenAPI）</a>
+                </footer>
             </q-page>
         </q-page-container>
     </q-layout>
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useQuasar } from "quasar";
 import { api } from "boot/axios";
-import { getToken, removeToken } from "src/utils/tokenHandler";
-import { close } from "src/utils/websocketHandler";
+import { removeToken } from "src/utils/tokenHandler";
+import { close, open, status } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useSettingStore } from "src/stores/settingStore";
 
@@ -81,7 +88,6 @@ import BulkCheck from "src/components/BulkCheck.vue";
 import TypoCheck from "src/components/TypoCheck.vue";
 import AdminLogin from "src/components/AdminLogin.vue";
 import AdminSetting from "src/components/AdminSetting.vue";
-import PendingRegistrations from "src/components/PendingRegistrations.vue";
 
 defineOptions({
     name: "IndexPage"
@@ -91,28 +97,29 @@ const $q = useQuasar();
 const tokenStore = useTokenStore();
 const settingStore = useSettingStore();
 const tab = ref("webCheck");
+const loggingOut = ref(false);
 
 function loginedUpdate() {
     location.reload();
 }
 
-// Revoke every administrator token on the server, then clear this browser.
-// The local token is cleared even when the request fails.
-function logout() {
-    api.post("/admin/logout")
-        .catch(() => console.warn("Server did not confirm logout; other sessions may remain valid"))
-        .finally(() => removeToken());
-}
-
-watch(() => tokenStore.token, (token, previous) => {
-    if (!token && previous) {
-        close();
-        location.reload();
+async function logout() {
+    if (loggingOut.value) return;
+    loggingOut.value = true;
+    try {
+        await api.post("/admin/logout");
+    } catch (error) {
+        if (error.response?.status !== 401) {
+            $q.notify({ type: "negative", message: "退出失败，请重试" });
+            return;
+        }
+    } finally {
+        loggingOut.value = false;
     }
-});
-
-function onStorage(event) {
-    if (event.key === "token" && !event.newValue && getToken()) removeToken();
+    close();
+    removeToken();
+    open();
+    tab.value = "webCheck";
 }
 
 function getWebSettings() {
@@ -129,7 +136,6 @@ function getWebSettings() {
             }
         })
         .catch((error) => {
-            console.error("Could not read public settings");
             $q.notify({
                 position: "top",
                 type: "negative",
@@ -140,11 +146,9 @@ function getWebSettings() {
 
 onMounted(() => {
     getWebSettings();
-    window.addEventListener("storage", onStorage);
 });
 
 onBeforeUnmount(() => {
-    window.removeEventListener("storage", onStorage);
     close();
 });
 </script>

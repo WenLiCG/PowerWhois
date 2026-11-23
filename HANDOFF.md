@@ -1,5 +1,11 @@
 # PowerWhois 程序员交接文档
 
+## 主分支交接（2026-11-23）
+
+当前部署基线为 `main` 的 Web、CLI、HTTP API 和 MCP 多任务版。通过 [中文 README](README.zh.md) 从源码构建，使用 [部署指南](docs/DEPLOYMENT.md) 备份和迁移旧单批 Redis 数据。已有自动化可以使用 [当前 OpenAPI](src/backend/api/openapi.json) 的 `POST /api/v1/query` 和任务接口。
+
+下方记录对应合并前的单任务版本。其 WebSocket 票据、待核对注册 API 与打包说明对应 [50ef89d 的代码](https://github.com/WenLiCG/PowerWhois/tree/50ef89d30098020da0311aed94aa5e31615ac57d)。迁移前请完成已有待核对注册，保留 Redis 备份和旧程序供核查。
+
 ## 独立验证补记（2026-11-22，Cursor，不是补丁作者）
 
 下面「审查修复」一节是作者在本地候选上的自述，原文保留。补丁已用 `git am` 应用到远端 `main` `6662f8ae55447140152119a90b0cf9399159bb21`，作者身份仍是 WenLiCG，提交说明保留 `Co-Authored-By: Claude Opus 5.5`。源提交与本仓库提交不是同一个 SHA：

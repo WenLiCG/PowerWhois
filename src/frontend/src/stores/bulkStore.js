@@ -4,8 +4,6 @@ export const useBulkStore = defineStore("bulk", {
     state: () => ({
         bulkCheckQueryType: null,
         bulkCheckStatus: null,
-        taskError: "",
-        canResume: false,
         runingProgress: 0,
         runingProgressPercent: "0 %",
         bulkCheckInfo: [
@@ -33,14 +31,14 @@ export const useBulkStore = defineStore("bulk", {
                                 color: "warning"
                             },
                             {
-                                label: "未找到注册记录",
+                                label: "未注册",
                                 id: "free",
                                 value: 0,
                                 icon: "fa-solid fa-ban",
                                 color: "secondary"
                             },
                             {
-                                label: "错误、证据不足或保留",
+                                label: "错误",
                                 id: "error",
                                 value: 0,
                                 icon: "fa-solid fa-triangle-exclamation",
@@ -86,8 +84,6 @@ export const useBulkStore = defineStore("bulk", {
         },
 
         updateBulkCheckInfo(info) {
-            this.taskError = info.Error || "";
-            this.canResume = !!info.CanResume;
             let doneDomains = info.TakenDomains + info.FreeDomains + info.ErrorDomains;
             if (info.TotalDomains > 0) {
                 this.runingProgress = parseFloat((doneDomains / info.TotalDomains).toFixed(4));
@@ -107,8 +103,6 @@ export const useBulkStore = defineStore("bulk", {
 
         clearStatusAndInfo() {
             this.bulkCheckStatus = null;
-            this.taskError = "";
-            this.canResume = false;
             this.runingProgress = 0;
             this.runingProgressPercent = "0 %";
             this.bulkCheckInfo[0].total = 0;

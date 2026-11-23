@@ -1,23 +1,54 @@
 package utils
 
-import "testing"
+import (
+	"encoding/csv"
+	"strings"
+	"testing"
+	"typonamer/lookup/lookupinfo"
+)
 
-func TestRegistrableName(t *testing.T) {
-	for _, tc := range []struct{ input, want string }{
-		{"mail.company.com", "company.com"},
-		{"https://example.com:443/a", "example.com"},
-		{"https://sub.sample.co.uk/test", "sample.co.uk"},
-		{"www.食狮.中国。", "xn--85x722f.xn--fiqs8s"},
-		{"a.example.github.io", "github.io"},
-		{"co.uk", ""},
-		{"first last.com", ""},
-		{"a..com", ""},
-		{"-example.com", ""},
-		{"127.0.0.1", ""},
-	} {
-		got, err := TrimAndGetMainDomain(tc.input)
-		if got != tc.want || (err != nil) != (tc.want == "") {
-			t.Errorf("%q = %q, %v; want %q", tc.input, got, err, tc.want)
+func TestDomainBoundary(t *testing.T) {
+	for in, want := range map[string]string{"foo.bar.ck": "foo.bar.ck", "www.city.kawasaki.jp": "city.kawasaki.jp", "例子.中国": "xn--fsqu00a.xn--fiqs8s", "foo.blogspot.com": "blogspot.com"} {
+		got, e := TrimAndGetMainDomain(in)
+		if e != nil || got != want {
+			t.Fatalf("PSL %s: %s %v", in, got, e)
+		}
+	}
+	for in, want := range map[string]string{" EXAMPLE.COM. ": "example.com", "sub.example.co.uk": "example.co.uk", "bücher.de": "xn--bcher-kva.de", "foo.com.com": "com.com", "foo.com.cn.com.cn": "cn.com.cn"} {
+		got, e := TrimAndGetMainDomain(in)
+		if e != nil || got != want {
+			t.Fatalf("%q: %q %v", in, got, e)
+		}
+	}
+	for _, in := range []string{"hello world.com", "https://example.com/path", "example..com", "-example.com", "example-.com", "127.0.0.1", "a.com\nQUIT", "x_foo.com"} {
+		if _, e := TrimAndGetMainDomain(in); e == nil {
+			t.Fatalf("accepted %q", in)
+		}
+	}
+}
+
+func TestLifecycleNeverCallsHeldOrUnknownDomainsActive(t *testing.T) {
+	for state, want := range map[string]string{"clientHold": "Hold", "serverHold": "Hold", "registrarHold": "Hold", "inactive": "Inactive", "delegated": "Active", "ok": "Active", "future-status": "Unknown"} {
+		if got := GetDomainHumanStatus([]string{state}); got != want {
+			t.Fatalf("%s became %s", state, got)
+		}
+	}
+}
+
+func TestCSVNeutralizesUpstreamFormulas(t *testing.T) {
+	data, err := ConvertQueryResultToCSV([]lookupinfo.QueryResult{{Domain: "example.com", Status: "error", Source: "=cmd()", QueryError: "\n=unsafe", NameServer: []string{"+formula"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(data))).ReadAll()
+	if err != nil || len(rows) != 2 {
+		t.Fatal(err)
+	}
+	for i, title := range rows[0] {
+		if title == "Source" || title == "Error Info" || title == "Name Server" {
+			if !strings.HasPrefix(rows[1][i], "'") {
+				t.Fatalf("unescaped %s", title)
+			}
 		}
 	}
 }

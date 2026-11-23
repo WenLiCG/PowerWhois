@@ -1,0 +1,23 @@
+[Unit]
+Description=PowerWhois Web API and durable tasks
+After=network-online.target powerwhois-redis.service
+Wants=network-online.target
+Requires=powerwhois-redis.service
+[Service]
+DynamicUser=yes
+User=powerwhois
+StateDirectory=powerwhois
+WorkingDirectory=/var/lib/powerwhois/runtime-v2
+EnvironmentFile=/etc/powerwhois/service.env
+ExecStart=/opt/powerwhois/current/typonamer
+Restart=always
+RestartSec=20
+TimeoutStopSec=30
+MemoryMax=700M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target

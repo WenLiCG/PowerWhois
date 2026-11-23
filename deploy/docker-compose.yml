@@ -1,56 +1,42 @@
 services:
   caddy:
-    image: caddy:2.11.9-alpine
+    build:
+      context: ..
+      target: gateway
     ports:
       - "127.0.0.1:8080:8080"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend:/typonamer:ro
     depends_on:
-      typonamer:
-        condition: service_healthy
+      - typonamer
     restart: unless-stopped
     logging:
-      options:
-        max-size: "10m"
-        max-file: "5"
+      options: { max-size: "10m", max-file: "3" }
 
   typonamer:
-    build: ./backend
-    user: "${POWERWHOIS_UID:-1000}:${POWERWHOIS_GID:-1000}"
+    build:
+      context: ..
+      target: backend
     volumes:
-      - ./backend:/typonamer
+      # Mount the directory so atomic config replacement works.
+      - ./backend:/etc/powerwhois
+      - powerwhois-data:/var/lib/powerwhois
     environment:
       TZ: Asia/Shanghai
       REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_DB: "0"
       POWERWHOIS_LISTEN: "0.0.0.0:8080"
-      POWERWHOIS_ADMIN_PASSWORD: "${POWERWHOIS_ADMIN_PASSWORD:?set POWERWHOIS_ADMIN_PASSWORD}"
-      POWERWHOIS_JWT_SECRET: "${POWERWHOIS_JWT_SECRET:?set POWERWHOIS_JWT_SECRET}"
-      # Only Caddy reaches the backend, over the private Compose network.
-      POWERWHOIS_TRUSTED_PROXIES: "${POWERWHOIS_TRUSTED_PROXIES:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7}"
-      # Optional integration API keys (at least 24 characters, comma separated).
-      POWERWHOIS_API_KEYS: "${POWERWHOIS_API_KEYS:-}"
-      POWERWHOIS_LOG_STDOUT: "true"
+      POWERWHOIS_ADMIN_USER: "${POWERWHOIS_ADMIN_USER:?set administrator user}"
+      POWERWHOIS_ADMIN_PASSWORD: "${POWERWHOIS_ADMIN_PASSWORD:?set administrator password}"
+      POWERWHOIS_JWT_SECRET: "${POWERWHOIS_JWT_SECRET:?set random JWT secret}"
+      POWERWHOIS_QUERY_TOKEN: "${POWERWHOIS_QUERY_TOKEN:?set random query token}"
     depends_on:
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
-      interval: 10s
-      timeout: 3s
-      start_period: 40s
-      retries: 5
-    stop_grace_period: 20s
+    stop_grace_period: 30s
     restart: unless-stopped
     logging:
-      options:
-        max-size: "10m"
-        max-file: "5"
+      options: { max-size: "10m", max-file: "3" }
 
   redis:
-    image: redis:7.4.12-alpine
+    image: redis:7-alpine
     command: redis-server /usr/local/etc/redis/redis.conf
     volumes:
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
@@ -62,6 +48,7 @@ services:
       retries: 10
     restart: unless-stopped
     logging:
-      options:
-        max-size: "10m"
-        max-file: "5"
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  powerwhois-data:

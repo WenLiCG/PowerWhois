@@ -2,135 +2,147 @@ package network
 
 import (
 	"context"
+	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"typonamer/config"
 )
 
-// MaxCooldown bounds how long one upstream rate-limit reply can pause that upstream.
-const MaxCooldown = 2 * time.Minute
+var mu sync.Mutex
+var active = map[string]slots{}
+var next = map[string]time.Time{}
 
-var slotsMu sync.Mutex
-var slots = map[string]*slot{}
-var cooldowns = map[string]time.Time{}
-
-type slot struct {
-	active  int
-	public  int
-	waiters int
-	next    chan struct{}
+type slots struct {
+	total  int
+	public int
 }
 
 type publicKey struct{}
 
-// WithPublic marks work done for an anonymous visitor. Acquire limits such
-// work to PublicLimit of each upstream's slots, keeping the rest for
-// administrators, bulk jobs and API clients.
+// WithPublic marks anonymous Web lookups so they leave capacity for authenticated work.
 func WithPublic(ctx context.Context) context.Context {
 	return context.WithValue(ctx, publicKey{}, true)
 }
 
-// IsPublic reports whether ctx carries anonymous work.
 func IsPublic(ctx context.Context) bool {
 	public, _ := ctx.Value(publicKey{}).(bool)
 	return public
 }
 
-// PublicLimit is how many of an upstream's limit slots anonymous work may
-// hold at once. At least one slot stays reserved whenever limit allows it, so
-// privileged work always has capacity without raising the total sent to the
-// upstream. With the registry limits in use (3 or 4) anonymous work gets 2 or 3.
-func PublicLimit(limit int) int {
-	if limit <= 1 {
-		return limit
+func settings(protocol string) (int, int) {
+	c := config.GetConfig()
+	if strings.HasPrefix(protocol, "custom:") {
+		for _, api := range c.WhoisApis {
+			if "custom:"+api.ApiName == protocol {
+				return api.ConcurrencyLimit, c.RdapRate
+			}
+		}
 	}
-	return limit - max(1, limit/4)
+	switch protocol {
+	case "dns":
+		return c.DnsConcurrency, c.DnsRate
+	case "whois":
+		return c.WhoisConcurrency, c.WhoisRate
+	default:
+		return c.RdapConcurrency, c.RdapRate
+	}
 }
 
-// Acquire shares a concurrency budget across all callers of the same upstream.
-// Anonymous work (see WithPublic) is held to PublicLimit of it.
-// It also waits while the upstream is cooling down after a rate-limit reply.
-// Callers should start their request timeout only after Acquire returns, so
-// that time spent queuing is not reported as an upstream timeout.
-func Acquire(ctx context.Context, key string, limit int) (func(), error) {
+func Acquire(ctx context.Context, protocol string) (func(), error) {
 	public := IsPublic(ctx)
-	slotsMu.Lock()
-	defer slotsMu.Unlock()
-	s := slots[key]
-	if s == nil {
-		s = &slot{next: make(chan struct{})}
-		slots[key] = s
-	}
-	s.waiters++
-	defer func() {
-		s.waiters--
-		if s.active == 0 && s.waiters == 0 {
-			delete(slots, key)
-		}
-	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if until, ok := cooldowns[key]; ok {
-			if wait := time.Until(until); wait > 0 {
-				slotsMu.Unlock()
-				timer := time.NewTimer(wait)
-				select {
-				case <-ctx.Done():
-				case <-timer.C:
-				}
-				timer.Stop()
-				slotsMu.Lock()
-				continue
-			}
-			delete(cooldowns, key)
-		}
-		if s.active < limit && (!public || s.public < PublicLimit(limit)) {
-			s.active++
+		limit, _ := settings(protocol)
+		publicLimit := max(1, limit-max(1, limit/4))
+		mu.Lock()
+		used := active[protocol]
+		if used.total < limit && (!public || used.public < publicLimit) {
+			used.total++
 			if public {
-				s.public++
+				used.public++
 			}
+			active[protocol] = used
+			mu.Unlock()
 			return func() {
-				slotsMu.Lock()
-				defer slotsMu.Unlock()
-				s.active--
+				mu.Lock()
+				defer mu.Unlock()
+				used := active[protocol]
+				used.total--
 				if public {
-					s.public--
+					used.public--
 				}
-				close(s.next)
-				s.next = make(chan struct{})
-				if s.active == 0 && s.waiters == 0 {
-					delete(slots, key)
-				}
+				active[protocol] = used
 			}, nil
 		}
-		next := s.next
-		slotsMu.Unlock()
+		mu.Unlock()
 		select {
 		case <-ctx.Done():
-		case <-next:
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
 		}
-		slotsMu.Lock()
 	}
 }
 
-// Cooldown stops new requests to an upstream for d, capped at MaxCooldown.
-// Requests already in flight are not interrupted.
-func Cooldown(key string, d time.Duration) {
-	if d <= 0 {
+// Limit each upstream independently. Recheck after sleep so Retry-After also delays queued requests.
+func Wait(ctx context.Context, protocol, host string) error {
+	key := protocol + ":" + host
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, rate := settings(protocol)
+		mu.Lock()
+		wait := time.Until(next[key])
+		if wait <= 0 {
+			next[key] = time.Now().Add(time.Second / time.Duration(max(1, rate)))
+			mu.Unlock()
+			return nil
+		}
+		mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+func RetryAfter(protocol, host, value string) {
+	until, err := http.ParseTime(value)
+	if seconds, e := strconv.Atoi(value); e == nil && seconds >= 0 {
+		until = time.Now().Add(time.Duration(seconds) * time.Second)
+		err = nil
+	}
+	if err != nil {
 		return
 	}
-	until := time.Now().Add(min(d, MaxCooldown))
-	slotsMu.Lock()
-	defer slotsMu.Unlock()
-	if until.After(cooldowns[key]) {
-		cooldowns[key] = until
+	mu.Lock()
+	defer mu.Unlock()
+	key := protocol + ":" + host
+	if until.After(next[key]) {
+		next[key] = until
 	}
 }
 
-// CoolingDown reports the remaining cooldown for an upstream.
-func CoolingDown(key string) time.Duration {
-	slotsMu.Lock()
-	defer slotsMu.Unlock()
-	return max(0, time.Until(cooldowns[key]))
+type Transport struct {
+	Base     http.RoundTripper
+	Protocol string
+}
+
+func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if err := Wait(r.Context(), t.Protocol, r.URL.Host); err != nil {
+		return nil, err
+	}
+	resp, err := t.Base.RoundTrip(r)
+	if err == nil {
+		resp.Body = http.MaxBytesReader(nil, resp.Body, 2*1024*1024)
+	}
+	if err == nil && (resp.StatusCode == 429 || resp.StatusCode == 503) {
+		RetryAfter(t.Protocol, r.URL.Host, resp.Header.Get("Retry-After"))
+	}
+	return resp, err
 }

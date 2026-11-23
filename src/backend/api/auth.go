@@ -2,10 +2,8 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
-	"math"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,213 +17,208 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type LoginInfo struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// authGenerationKey stores the administrator session generation. Logout
-// increments it, which revokes every token issued for an earlier generation.
-const authGenerationKey = "powerwhois:auth:generation"
+const (
+	// jwtDefaultExpireDays is the default number of days a JWT token is valid.
+	// If the config value AuthExpireDays is not set, it uses the default value of jwtDefaultExpireDays.
+	jwtDefaultExpireDays int = 1
+	authGenerationKey        = "powerwhois:auth:generation"
+)
 
 var authGeneration atomic.Int64
 var authStore atomic.Pointer[redis.Client]
+var logoutMu sync.Mutex
 
-// InitAuth loads the session generation so a logout survives restarts.
-// A nil client keeps the generation in memory only.
-func InitAuth(ctx context.Context, client *redis.Client) error {
-	if client == nil {
-		return nil
-	}
-	authStore.Store(client)
-	value, err := client.Get(ctx, authGenerationKey).Int64()
-	if errors.Is(err, redis.Nil) {
-		value, err = 0, nil
-	}
-	if err != nil {
+// InitAuth restores the administrator generation before the server accepts requests.
+func InitAuth(ctx context.Context, r *redis.Client) error {
+	generation, err := r.Get(ctx, authGenerationKey).Int64()
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return err
 	}
-	authGeneration.Store(value)
+	if generation < 0 {
+		return errors.New("invalid administrator session generation")
+	}
+	authStore.Store(r)
+	authGeneration.Store(generation)
 	return nil
 }
 
+type adminClaims struct {
+	Name       string `json:"name"`
+	Generation int64  `json:"gen"`
+	jwt.RegisteredClaims
+}
+
+// LoginInfo contains the credentials for user authentication.
+type LoginInfo struct {
+	// Username is the login username
+	Username string `json:"username"`
+	// Password is the login password
+	Password string `json:"password"`
+}
+
+// Login handles user authentication and JWT token generation.
+//
+// It validates the provided username and password against configured credentials.
+// On successful authentication, it generates and returns a JWT token.
+//
+// Returns:
+//   - 200: Successful login with username and token
+//   - 400: Invalid credentials or malformed request
+//   - 500: Internal server error during token generation
 func Login(c *fiber.Ctx) error {
+
+	// Parse the request body and get the login information.
 	var login LoginInfo
-	if err := readJSON(c, &login, 8<<10); err != nil {
-		return err
+	if err := c.BodyParser(&login); err != nil {
+		log.Error("Parse login info error: ", err)
+		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the parse fails.
 	}
+
+	// Get the config information.
 	cfg := config.GetConfig()
-	u, p := sha256.Sum256([]byte(login.Username)), sha256.Sum256([]byte(login.Password))
-	expectedUser, expectedPassword := sha256.Sum256([]byte(cfg.AuthUsername)), sha256.Sum256([]byte(cfg.AuthPassword))
-	if cfg.AuthPassword == "" || subtle.ConstantTimeCompare(u[:], expectedUser[:])&subtle.ConstantTimeCompare(p[:], expectedPassword[:]) == 0 {
+
+	// Compare the username and password in the request body with the config values.
+	if (login.Username != cfg.AuthUsername) || (login.Password != cfg.AuthPassword) {
 		log.Warn("Login failed")
-		return c.SendStatus(fiber.StatusUnauthorized)
+		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the username or password is incorrect.
 	}
-	claims := jwt.MapClaims{
-		"name": cfg.AuthUsername,
-		"gen":  authGeneration.Load(),
-		"iat":  time.Now().Unix(),
-		"exp":  time.Now().Add(24 * time.Hour * time.Duration(cfg.AuthExpireDays)).Unix(),
-	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(cfg.JwtSecretKey))
+
+	// Generate a JWT token with the username.
+	token, err := generateToken(login.Username)
 	if err != nil {
-		log.Error("Could not issue administrator token")
-		return c.SendStatus(fiber.StatusInternalServerError)
+		log.Error("Generate token error: ", err)
+		return c.SendStatus(fiber.StatusInternalServerError) // Return a 500 status if the token generation fails.
 	}
+
+	// Return the username and token in the response body.
 	c.Set("Cache-Control", "no-store")
 	return c.JSON(fiber.Map{"username": cfg.AuthUsername, "token": token})
 }
 
-// submissionGate orders logout against registrar submissions. A registration
-// takes the read lock only while it checks that the session is still valid,
-// immediately before it sends a request. Logout holds the write lock while it
-// changes the generation, so once logout has returned, no domain that had not
-// yet passed that check can be submitted. Requests that passed it earlier are
-// already on their way to the registrar; their outcomes are still collected
-// and stored.
-var submissionGate sync.RWMutex
-
-// sessionStillValid reports, under the submission gate, whether check passes.
-func sessionStillValid(check func() bool) bool {
-	submissionGate.RLock()
-	defer submissionGate.RUnlock()
-	return check()
-}
-
-// Logout revokes all administrator tokens, including those in other browsers.
+// Logout revokes all administrator sessions for this installation.
 func Logout(c *fiber.Ctx) error {
+	logoutMu.Lock()
+	defer logoutMu.Unlock()
+	token, ok := strings.CutPrefix(c.Get("Authorization"), "Bearer ")
+	if !ok || !validAdminToken(token) {
+		return jwtError(c, errors.New("invalid or expired credential"))
+	}
+	store := authStore.Load()
+	if store == nil {
+		return fiber.ErrServiceUnavailable
+	}
 	ctx, cancel := context.WithTimeout(c.UserContext(), 3*time.Second)
 	defer cancel()
-	submissionGate.Lock()
-	defer submissionGate.Unlock()
-	defer dropTickets()
-	if client := authStore.Load(); client != nil {
-		next, err := client.Incr(ctx, authGenerationKey).Result()
-		if err != nil {
-			log.Error("Could not revoke administrator sessions: ", err)
-			return fiber.ErrServiceUnavailable
-		}
-		authGeneration.Store(next)
-	} else {
-		authGeneration.Add(1)
+	next, err := store.Incr(ctx, authGenerationKey).Result()
+	if err != nil {
+		log.Error("Cannot revoke administrator sessions")
+		return fiber.ErrServiceUnavailable
 	}
-	log.Info("Administrator sessions revoked")
+	authGeneration.Store(next)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func LoginRequired(c *fiber.Ctx) error {
-	scheme, token, _ := strings.Cut(c.Get("Authorization"), " ")
-	if !strings.EqualFold(scheme, "Bearer") {
-		return fiber.ErrUnauthorized
+func validAdminToken(token string) bool {
+	valid, _ := ValidateToken(token)
+	return valid
+}
+
+// LoginRequired returns a middleware that enforces JWT authentication.
+//
+// The middleware validates the JWT token in the Authorization header using the
+// configured JWT secret as the signing key. Invalid or missing tokens result
+// in a 401 Unauthorized response.
+func LoginRequired() func(*fiber.Ctx) error {
+	return func(c *fiber.Ctx) error {
+		header := c.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			return jwtError(c, fmt.Errorf("authentication required"))
+		}
+		if !validAdminToken(strings.TrimPrefix(header, "Bearer ")) {
+			return jwtError(c, fmt.Errorf("invalid or expired credential"))
+		}
+		return c.Next()
 	}
-	if _, err := tokenExpiry(token); err != nil {
-		return fiber.ErrUnauthorized
+}
+
+// ValidateToken validates a JWT token string.
+//
+// Parameters:
+//   - tokenString: The JWT token to validate
+//
+// Returns:
+//   - bool: True if token is valid, false otherwise
+//   - error: Error details if validation fails, nil on success
+func ValidateToken(tokenString string) (bool, error) {
+	if len(tokenString) == 0 || len(tokenString) > 4096 {
+		return false, errors.New("invalid administrator token")
 	}
-	return c.Next()
-}
-
-var errInvalidToken = errors.New("invalid administrator session")
-
-type adminToken struct {
-	expiry     time.Time
-	generation int64
-}
-
-func tokenExpiry(raw string) (time.Time, error) {
-	token, err := parseAdminToken(raw)
-	return token.expiry, err
-}
-
-func parseAdminToken(raw string) (adminToken, error) {
 	cfg := config.GetConfig()
-	if len(raw) == 0 || len(raw) > 4096 || cfg.JwtSecretKey == "" {
-		return adminToken{}, errInvalidToken
-	}
-	claims := jwt.MapClaims{}
-	token, err := jwt.ParseWithClaims(raw, claims, func(*jwt.Token) (any, error) {
+	claims := &adminClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(*jwt.Token) (any, error) {
 		return []byte(cfg.JwtSecretKey), nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
-	if err != nil || !token.Valid || claims["name"] != cfg.AuthUsername {
-		return adminToken{}, errInvalidToken
+	if err != nil {
+		return false, err
 	}
-	exp, err := claims.GetExpirationTime()
-	if err != nil || exp == nil {
-		return adminToken{}, errInvalidToken
-	}
-	// Tokens issued before this release carry no generation and count as 0.
-	var generation int64
-	if value, ok := claims["gen"]; ok {
-		number, ok := value.(float64)
-		if !ok || number != math.Trunc(number) || number < 0 {
-			return adminToken{}, errInvalidToken
-		}
-		generation = int64(number)
-	}
-	if generation != authGeneration.Load() {
-		return adminToken{}, errInvalidToken
-	}
-	return adminToken{expiry: exp.Time, generation: generation}, nil
+	// Tokens issued before session generations existed default to generation zero.
+	return token.Valid && claims.Name == cfg.AuthUsername && claims.Generation == authGeneration.Load(), nil
 }
 
-// apiKeyHashes holds SHA-256 digests of POWERWHOIS_API_KEYS. ApiRoute sets it
-// before the server accepts requests.
-var apiKeyHashes atomic.Pointer[[][sha256.Size]byte]
-
-func setAPIKeys(value string) {
-	keys := loadAPIKeys(value)
-	apiKeyHashes.Store(&keys)
+// jwtError handles JWT authentication errors by returning a 401 response.
+//
+// Parameters:
+//   - c: The Fiber context
+//   - err: The JWT validation error
+//
+// Returns:
+//   - error: The error from sending the response
+func jwtError(c *fiber.Ctx, err error) error {
+	return c.Status(401).JSON(fiber.Map{"status": "error", "message": err.Error()})
 }
 
-func configuredAPIKeys() [][sha256.Size]byte {
-	if keys := apiKeyHashes.Load(); keys != nil {
-		return *keys
-	}
-	return nil
-}
+// generateToken creates a new JWT token for the given username.
+//
+// The token includes the username claim and expires after the configured number
+// of days (defaults to jwtDefaultExpireDays if not configured).
+//
+// Parameters:
+//   - username: The username to include in the token claims
+//
+// Returns:
+//   - string: The signed JWT token string
+//   - error: Error if token generation fails
+func generateToken(username string) (string, error) {
+	cfg := config.GetConfig()
 
-func loadAPIKeys(value string) [][sha256.Size]byte {
-	var keys [][sha256.Size]byte
-	for _, key := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
-		if len(key) >= 24 {
-			keys = append(keys, sha256.Sum256([]byte(key)))
-		} else {
-			log.Warn("Ignoring a POWERWHOIS_API_KEYS entry shorter than 24 characters")
-		}
+	// Get the number of days the token is valid for.
+	// If the AuthExpireDays config value is not set, use the default value of jwtDefaultExpireDays.
+	var jwtExp int
+	if cfg.AuthExpireDays > 0 {
+		jwtExp = cfg.AuthExpireDays
+	} else {
+		jwtExp = jwtDefaultExpireDays
 	}
-	return keys
-}
 
-func requestAPIKey(c *fiber.Ctx) string {
-	if key := c.Get("X-API-Key"); key != "" {
-		return key
+	// Create the Claims
+	claims := adminClaims{
+		Name:       username,
+		Generation: authGeneration.Load(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24 * time.Duration(jwtExp))),
+		},
 	}
-	scheme, key, _ := strings.Cut(c.Get("Authorization"), " ")
-	if strings.EqualFold(scheme, "Bearer") {
-		return key
-	}
-	return ""
-}
 
-func validAPIKey(key string) bool {
-	if key == "" || len(key) > 512 {
-		return false
-	}
-	sum := sha256.Sum256([]byte(key))
-	match := 0
-	for _, expected := range configuredAPIKeys() {
-		match |= subtle.ConstantTimeCompare(sum[:], expected[:])
-	}
-	return match == 1
-}
+	// Create token
+	tokenObj := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
-// APIKeyRequired protects the integration API. It answers 404 when no keys
-// are configured so the endpoint is invisible on installations that do not use it.
-func APIKeyRequired(c *fiber.Ctx) error {
-	if len(configuredAPIKeys()) == 0 {
-		return fiber.ErrNotFound
+	// Generate encoded token and send it as response.
+	token, err := tokenObj.SignedString([]byte(cfg.JwtSecretKey))
+	if err != nil {
+		// Log the error if the token generation fails.
+		log.Error("Generate token error: ", err)
+		return "", err
 	}
-	if !validAPIKey(requestAPIKey(c)) {
-		return fiber.ErrUnauthorized
-	}
-	return c.Next()
+
+	return token, nil
 }

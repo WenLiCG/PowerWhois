@@ -2,59 +2,115 @@ package customize
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
+	"typonamer/lookup/network"
 
 	"typonamer/config"
 	"typonamer/constant"
+	"typonamer/log"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
-	"typonamer/lookup/network"
 
 	"github.com/duke-git/lancet/v2/strutil"
 )
 
-// CustomizeLookup queries an administrator-configured provider. The timeout
-// starts once a slot for the provider is held.
-func CustomizeLookup(parent context.Context, domain string, provider config.WhoisApi, timeout time.Duration) (lookupinfo.DomainInfo, error) {
-	info := lookupinfo.DomainInfo{LookupType: provider.ApiName, DomainName: domain}
-	slotKey := "custom:" + provider.ApiName
-	release, err := network.Acquire(parent, slotKey, provider.ConcurrencyLimit)
-	if err != nil {
-		return info, err
-	}
-	defer release()
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
-	address := strings.ReplaceAll(provider.ApiUrl, "{domain}", url.QueryEscape(domain))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return info, lookuperror.ErrorCustomizeApiServerResponse
-	}
-	body, code, header, err := network.ReadResponseHeader(network.PrivateLookupClient, req)
-	switch {
-	case parent.Err() != nil:
-		return info, parent.Err()
-	case ctx.Err() != nil:
-		return info, ctx.Err()
-	case code == http.StatusTooManyRequests:
-		network.Cooldown(slotKey, network.RetryAfter(header, time.Now()))
-		return info, lookuperror.ErrorRateLimited
-	case err != nil || code < 200 || code >= 300:
-		return info, lookuperror.ErrorCustomizeApiServerResponse
+func SetupLimiter() {}
+
+func CustomizeLookupContext(ctx context.Context, domain string, queryType string) (lookupinfo.DomainInfo, error) {
+	var domainInfo = lookupinfo.DomainInfo{
+		DomainName: domain,
+		LookupType: queryType,
 	}
 
-	free, taken := strutil.ContainsAny(body, provider.FreeText), strutil.ContainsAny(body, provider.TakenText)
-	switch {
-	case free && !taken:
-		info.CustomizedResult = constant.DomainRegisterStatusFree
-	case taken && !free:
-		info.CustomizedResult = constant.DomainRegisterStatusTaken
-	default:
-		return info, lookuperror.ErrorCustomizeApiWhoisResult
+	cfg := config.GetConfig()
+
+	var apiInfo config.WhoisApi
+	for _, api := range cfg.WhoisApis {
+		if api.ApiName == queryType {
+			apiInfo = api
+			break
+		}
 	}
-	info.RawResponse = "自定义查询接口返回了已配置的状态标记。"
-	return info, nil
+
+	if apiInfo.ApiName == "" {
+		log.Debugf("Invalid query type: %s, no whois api found", queryType)
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorInvalidQueryType, queryType)
+	}
+
+	apiUrl := strutil.TemplateReplace(apiInfo.ApiUrl, map[string]string{
+		"domain": domain,
+	})
+
+	release, err := network.Acquire(ctx, "custom:"+queryType)
+	if err != nil {
+		return domainInfo, err
+	}
+	defer release()
+	response, err := getResponse(ctx, apiUrl)
+	domainInfo.Source = "custom:" + queryType
+
+	if err != nil {
+		log.Errorf("Request whois api %s response error: %v", apiInfo.ApiName, err)
+		if response != "" {
+			domainInfo.RawResponse = response
+		} else {
+			domainInfo.RawResponse = err.Error()
+		}
+		return domainInfo, err
+	}
+
+	domainInfo.RawResponse = response
+
+	if strutil.ContainsAny(response, apiInfo.FreeText) && strutil.ContainsAny(response, apiInfo.TakenText) {
+		log.Errorf("Request whois api %s with domain %s, response both contains free and taken text", apiInfo.ApiName, domain)
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorCustomizeApiWhoisResult, domain)
+	} else if strutil.ContainsAny(response, apiInfo.FreeText) {
+		log.Debugf("Request whois api %s with domain %s, response contains all free text", apiInfo.ApiName, domain)
+		domainInfo.CustomizedResult = constant.DomainRegisterStatusFree
+	} else if strutil.ContainsAny(response, apiInfo.TakenText) {
+		log.Debugf("Request whois api %s with domain %s, response contains all taken text", apiInfo.ApiName, domain)
+		domainInfo.CustomizedResult = constant.DomainRegisterStatusTaken
+	} else {
+		log.Errorf("Request whois api %s with domain %s, response not contains free or taken text", apiInfo.ApiName, domain)
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorCustomizeApiWhoisResult, domain)
+	}
+
+	return domainInfo, nil
+}
+
+func getResponse(ctx context.Context, apiURL string) (string, error) {
+	cfg := config.GetConfig()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	client := &http.Client{Transport: network.Transport{Base: http.DefaultTransport, Protocol: "custom"}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 429 {
+		return "", lookuperror.ErrorRateLimited
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
+	if err != nil || len(data) > 2*1024*1024 {
+		return "", lookuperror.ErrorCustomizeApiServerResponse
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+func CustomizeLookup(domain, mode string) (lookupinfo.DomainInfo, error) {
+	return CustomizeLookupContext(context.Background(), domain, mode)
 }

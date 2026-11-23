@@ -2,11 +2,13 @@ package log
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/dromara/carbon/v2"
 	"github.com/duke-git/lancet/v2/fileutil"
 	"github.com/duke-git/lancet/v2/strutil"
 	"go.uber.org/zap"
@@ -19,7 +21,7 @@ const (
 	logFileName     = "typonamer.log" // 日志文件名称
 	logFileMaxSize  = 20              // 每个日志文件最大尺寸（MB）
 	logFileMaxAge   = 30              // 保留的最大天数
-	logFileCompress = true            // 是否压缩
+	logFileCompress = false           // 是否压缩
 )
 
 var (
@@ -65,22 +67,28 @@ func init() {
 
 	execDir = filepath.Dir(execPath)
 	logDir = filepath.Join(execDir, logDirName)
+	if configured := os.Getenv("POWERWHOIS_LOG_DIR"); configured != "" {
+		logDir = filepath.Clean(configured)
+		execDir = filepath.Dir(logDir)
+		if err := os.MkdirAll(logDir, 0700); err != nil {
+			fmt.Fprintln(os.Stderr, "cannot create log directory")
+			os.Exit(1)
+		}
+	}
 	logFile = filepath.Join(logDir, logFileName)
 
 	fileWriteSyncer := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   logFile,        // 日志文件路径
-		MaxSize:    logFileMaxSize, // 每个日志文件最大尺寸（MB）
-		MaxBackups: 10,
-		MaxAge:     logFileMaxAge,   // 保留的最大天数
-		Compress:   logFileCompress, // 是否压缩
+		Filename: logFile,         // 日志文件路径
+		MaxSize:  logFileMaxSize,  // 每个日志文件最大尺寸（MB）
+		MaxAge:   logFileMaxAge,   // 保留的最大天数
+		Compress: logFileCompress, // 是否压缩
 	})
 
 	// 创建同步器
 	var syncer zapcore.WriteSyncer
-	// Containers set POWERWHOIS_LOG_STDOUT so `docker compose logs` shows the application log.
-	if strings.EqualFold(appDev, "true") || strings.EqualFold(os.Getenv("POWERWHOIS_LOG_STDOUT"), "true") {
+	if appDev != "" && strings.ToLower(appDev) == "true" {
 		// 创建控制台输出
-		consoleSyncer := zapcore.AddSync(os.Stdout)
+		consoleSyncer := zapcore.AddSync(os.Stderr)
 
 		// 创建多输出
 		syncer = zapcore.NewMultiWriteSyncer(consoleSyncer, fileWriteSyncer)
@@ -121,8 +129,34 @@ func SetLevel(level string) {
 	}
 }
 
-func ZipLogs(path string) error {
-	return fileutil.Zip(logDir, path)
+// GetZipLogsFile compresses the log directory into a zip file.
+// It returns the path to the zip file and an error if the compression fails.
+func GetZipLogsFile() (string, error) {
+	clearZipLogsFile()
+
+	zipFileName := fmt.Sprintf("typonamer_logs_%s.zip", carbon.Now().ToShortDateTimeString())
+	destZipFile := filepath.Join(execDir, zipFileName)
+	err := fileutil.Zip(logDir, destZipFile)
+	if err != nil {
+		logger.Error("Error compressing log directory: ", zap.Error(err))
+		return "", err
+	}
+
+	return destZipFile, nil
+}
+
+func clearZipLogsFile() error {
+	fileList, err := fileutil.ListFileNames(execDir)
+	if err != nil {
+		logger.Error("Error listing files in directory: ", zap.Error(err))
+		return err
+	}
+	for _, file := range fileList {
+		if strings.HasPrefix(file, "typonamer_logs_") && strings.HasSuffix(file, ".zip") {
+			os.Remove(filepath.Join(execDir, file))
+		}
+	}
+	return nil
 }
 
 // ResetLogsFile resets the log file by clearing its contents.
@@ -147,7 +181,7 @@ func ResetLogsFile() error {
 
 	for _, file := range fileList {
 		if file != logFileName {
-			if strings.HasSuffix(file, ".log") || strings.HasSuffix(file, ".log.gz") {
+			if strings.HasSuffix(file, ".log") {
 				os.Remove(filepath.Join(logDir, file))
 			}
 		}

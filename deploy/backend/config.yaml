@@ -3,11 +3,10 @@
 LogLevel: Info
 
 # Setting authentication information
-AuthUsername: admin
-# Admin password and JWT secret are environment variables, not this file.
-# POWERWHOIS_ADMIN_PASSWORD and POWERWHOIS_JWT_SECRET are required.
-# Startup refuses if either one is missing. Changing the JWT secret invalidates issued tokens.
-AuthExpireDays: 1
+AuthUsername: ""
+AuthPassword: ""
+AuthExpireDays: 30
+JwtSecretKey: ""
 
 # ------ Common settings ------
 ## Setting whois parameters
@@ -25,7 +24,22 @@ RetryMax: 2
 GlobalProxyTlds:
 
 ## The TLDs forced to go through proxy in mixed query
-MixedProxyTlds: []
+MixedProxyTlds:
+    - shop
+    - win
+    - com.pl
+    - pl
+    - bg
+    - ae
+    - at
+    - com.co
+    - co
+    - org.uk
+    - ws
+    - org.br
+    - com.tw
+    - tw
+    - design
 
 ## The TLDs forced to go through DNS check in mixed query
 MixedDnsTlds:
@@ -46,20 +60,18 @@ MixedDnsTlds:
     - pt
 
 ## Setting proxy information
-SocketProxyHost: ""
-SocketProxyPort: 0
-SocketProxyAuth: false
-SocketProxyUser: ""
-SocketProxyPassword: ""
+SocketProxyHost: test.superproxy.io
+SocketProxyPort: 22222
+SocketProxyAuth: true
+SocketProxyUser: ""user
+SocketProxyPassword: ""7890
 
 # ------ Bulk check settings ------
-BulkCheckConcurrencyLimit: 15
+BulkCheckConcurrencyLimit: 50
 
 # ------ Web check settings ------
 WebCheckConcurrencyLimit: 15
 WebCheckDomainLimit: 800
-# Domains per minute for each anonymous public IP (1-100000). Loopback and private addresses are exempt.
-PublicDomainsPerMinute: 800
 
 # ------ Typo check settings ------
 TypoDefaultCcTlds:
@@ -82,6 +94,40 @@ TypoCustomizedReplaces:
     - s2:ss22
     - sa:sal
 
-# Add administrator-only provider templates here or through Settings.
-RegisterApis: []
-WhoisApis: []
+# ------ Register APIs ------
+RegisterApis:
+    - ApiName: rrp reg
+      ApiUrl: https://api-ote.rrpproxy.net/api/call?domain={domain}
+      SuccessText:
+          - successfully
+      FailText:
+          - not
+          - code = 540
+          - already registered
+      ConcurrencyLimit: 1
+    - ApiName: dynadot
+      ApiUrl: https://api.dynadot.com/api3.xml?domain={domain}
+      SuccessText:
+          - <SuccessCode>0</SuccessCode><Status>success
+      FailText:
+          - <SuccessCode>1</SuccessCode><Status>not_available
+      ConcurrencyLimit: 1
+
+# ------ Whois APIs ------
+WhoisApis:
+    - ApiName: rrp whois
+      ApiUrl: https://api-ote.rrpproxy.net/api/call?domain={domain}
+      FreeText:
+          - Domain name available
+      TakenText:
+          - not
+      ConcurrencyLimit: 1
+
+# Supply credentials through POWERWHOIS_ADMIN_* and POWERWHOIS_JWT_SECRET.
+RdapTimeout: 10
+DnsConcurrency: 15
+WhoisConcurrency: 15
+RdapConcurrency: 4
+DnsRate: 20
+WhoisRate: 2
+RdapRate: 4

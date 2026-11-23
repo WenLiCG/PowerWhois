@@ -1,0 +1,26 @@
+[Unit]
+Description=PowerWhois query API and durable worker
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+User=powerwhois
+Group=powerwhois
+WorkingDirectory=/var/lib/powerwhois
+EnvironmentFile=/etc/powerwhois/powerwhois.env
+Environment=POWERWHOIS_CONFIG=/etc/powerwhois/config.yaml
+Environment=HOME=/var/lib/powerwhois
+Environment=POWERWHOIS_LOG_DIR=/var/lib/powerwhois/logs
+ExecStart=/opt/powerwhois/typonamer
+Restart=always
+RestartSec=20
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/powerwhois /etc/powerwhois
+
+[Install]
+WantedBy=multi-user.target

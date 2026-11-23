@@ -137,9 +137,7 @@ const (
 
 const (
 	// DomainRegisterStatusTaken is the status when a domain is taken.
-	DomainRegisterStatusTaken    = "Taken"
-	DomainRegisterStatusUnknown  = "Unknown"
-	DomainRegisterStatusReserved = "Reserved"
+	DomainRegisterStatusTaken = "Taken"
 
 	// DomainRegisterStatusFree is the status when a domain is free.
 	DomainRegisterStatusFree = "Free"
@@ -160,9 +158,6 @@ const (
 
 	// DomainStatusPendingDelete is the status when a domain is pending deletion.
 	DomainStatusPendingDelete = "PendingDelete"
-
-	// DomainStatusHold is the status when the registry or registrar has suspended the domain.
-	DomainStatusHold = "Hold"
 
 	// DomainStatusUnknown is the status when the domain status is unknown.
 	DomainStatusUnknown = "Unknown"
@@ -216,6 +211,5 @@ const (
 	RegisterStatusFailed = "failed"
 
 	// RegisterStatusError is the status when a register is error.
-	RegisterStatusError   = "error"
-	RegisterStatusUnknown = "outcome_unknown"
+	RegisterStatusError = "error"
 )

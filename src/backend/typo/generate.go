@@ -1,70 +1,69 @@
 package typo
 
 import (
-	"errors"
-
-	"typonamer/constant"
+	"fmt"
+	"sort"
+	"strings"
 	"typonamer/utils"
 )
 
-type Group struct {
-	Kind    string
-	Domains []string
+type Request struct {
+	Domain string   `json:"domain"`
+	Types  []string `json:"types"`
+	TLDs   []string `json:"tlds"`
+}
+type Result struct {
+	Domains []string            `json:"domains"`
+	Groups  map[string][]string `json:"groups"`
 }
 
-func Generate(input string, kinds, suffixes []string, limit int) ([]Group, []string, error) {
-	domain, err := utils.TrimAndGetMainDomain(input)
-	if err != nil || len(kinds) > 8 || len(suffixes) > 100 {
-		return nil, nil, errors.New("Typo 域名或选项无效")
+func Generate(r Request) (Result, error) {
+	out := Result{Domains: []string{}, Groups: map[string][]string{}}
+	domain, err := utils.TrimAndGetMainDomain(r.Domain)
+	if err != nil {
+		return out, err
+	}
+	if len(r.Types) > 8 || len(r.TLDs) > 100 {
+		return out, fmt.Errorf("too many typo types or suffixes")
 	}
 	t := Typo{Domain: domain}
-	generators := map[string]func() []string{
-		constant.TypoTypeWww: t.TypeWww, constant.TypoTypeSkipLetter: t.TypeSkipLetter,
-		constant.TypoTypeDoubleLetter: t.TypeDoubleLetter, constant.TypoTypeReverseLetter: t.TypeReverseLetter,
-		constant.TypoTypeInsertedLetter: t.TypeInsertedLetter, constant.TypoTypeWrongHorizontalKey: t.TypeWrongHorizontalKey,
-		constant.TypoTypeWrongVerticalKey: t.TypeWrongVerticalKey, constant.TypoTypeCustomizedReplace: t.TypeCustomizedReplace,
-		constant.TypoTypeWrongTlds: func() []string { return t.TypeWrongTlds(suffixes) },
-	}
-	var groups []Group
-	var domains []string
-	seen := map[string]bool{domain: true}
-	generated := make(map[string]bool)
-	selected := append([]string{}, kinds...)
-	if len(suffixes) > 0 {
-		selected = append(selected, constant.TypoTypeWrongTlds)
-	}
-	for _, kind := range selected {
-		generate, ok := generators[kind]
+	methods := map[string]func() []string{"www": t.TypeWww, "skipLetter": t.TypeSkipLetter, "doubleLetter": t.TypeDoubleLetter, "reverseLetter": t.TypeReverseLetter, "insertedLetter": t.TypeInsertedLetter, "wrongHorizontalKey": t.TypeWrongHorizontalKey, "wrongVerticalKey": t.TypeWrongVerticalKey, "customizedReplace": t.TypeCustomizedReplace}
+	for _, kind := range r.Types {
+		f, ok := methods[kind]
 		if !ok {
-			return nil, nil, errors.New("未知的 Typo 类型")
+			return out, fmt.Errorf("unknown typo type: %s", kind)
 		}
-		if generated[kind] {
-			continue
+		out.Groups[kind] = f()
+	}
+	if len(r.TLDs) > 0 {
+		for _, suffix := range r.TLDs {
+			if _, e := utils.TrimAndGetMainDomain("example." + strings.TrimPrefix(suffix, ".")); e != nil {
+				return out, fmt.Errorf("invalid suffix")
+			}
 		}
-		generated[kind] = true
-		group := Group{Kind: kind}
-		for _, candidate := range generate() {
-			name, err := utils.TrimDomain(candidate)
-			if err != nil || seen[name] {
+		out.Groups["wrongTlds"] = t.TypeWrongTlds(r.TLDs)
+	}
+	seen := map[string]bool{}
+	for kind, domains := range out.Groups {
+		valid := []string{}
+		groupSeen := map[string]bool{}
+		for _, d := range domains {
+			n, e := utils.TrimAndGetMainDomain(d)
+			if e != nil {
 				continue
 			}
-			canonical, err := utils.GetDomainSuffixPlusOne(name)
-			if err != nil || canonical != name {
-				continue
+			if !groupSeen[n] {
+				valid = append(valid, n)
+				groupSeen[n] = true
 			}
-			seen[name] = true
-			domains = append(domains, name)
-			group.Domains = append(group.Domains, name)
-			if len(domains) > limit {
-				return nil, nil, errors.New("生成域名超过单批限制，请减少 Typo 选项")
+			if !seen[n] {
+				out.Domains = append(out.Domains, n)
+				seen[n] = true
 			}
 		}
-		if len(group.Domains) > 0 {
-			groups = append(groups, group)
-		}
+		sort.Strings(valid)
+		out.Groups[kind] = valid
 	}
-	if len(domains) == 0 {
-		return nil, nil, errors.New("没有生成有效的 Typo 域名")
-	}
-	return groups, domains, nil
+	sort.Strings(out.Domains)
+	return out, nil
 }

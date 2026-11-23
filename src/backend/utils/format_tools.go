@@ -1,14 +1,17 @@
 package utils
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"typonamer/constant"
+	"typonamer/log"
 	"typonamer/lookup/lookuperror"
+	"typonamer/lookup/lookupinfo"
 
+	"encoding/json"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
+	"github.com/jszwec/csvutil"
 )
 
 func GetDnsLite(nameServers []string) string {
@@ -24,25 +27,26 @@ func GetDnsLite(nameServers []string) string {
 	return dnsLite
 }
 
+// GetDomainHumanStatus preserves holds and unknown states without guessing expiry.
 func GetDomainHumanStatus(domainStatus []string) string {
 	if len(domainStatus) > 0 {
 		// convert the domain status strings to lowercase and remove any whitespace
 		lowerDomainStatus := slice.Map(domainStatus, LowerString)
 		noSpaceDomainStatus := slice.Map(lowerDomainStatus, RemoveWhiteSpace)
 
-		// Report the status closest to the domain becoming available first.
-		switch {
-		case slice.Contain(noSpaceDomainStatus, "pendingdelete"):
+		// check if the domain status contains any of the following strings
+		if slice.Contain(noSpaceDomainStatus, "clienthold") || slice.Contain(noSpaceDomainStatus, "serverhold") || slice.Contain(noSpaceDomainStatus, "registrarhold") || slice.Contain(noSpaceDomainStatus, "registarahold") {
+			return "Hold"
+		} else if slice.Contain(noSpaceDomainStatus, "inactive") {
+			return "Inactive"
+		} else if slice.Contain(noSpaceDomainStatus, "pendingdelete") {
 			return constant.DomainStatusPendingDelete
-		case slice.Contain(noSpaceDomainStatus, "redemptionperiod"):
+		} else if slice.Contain(noSpaceDomainStatus, "redemptionperiod") {
 			return constant.DomainStatusRedemptionPeriod
-		case slice.Contain(noSpaceDomainStatus, "registrarhold"):
-			// Registrars commonly apply this hold after a missed renewal.
-			return constant.DomainStatusExpired
-		case slice.Contain(noSpaceDomainStatus, "serverhold") || slice.Contain(noSpaceDomainStatus, "clienthold"):
-			return constant.DomainStatusHold
-		default:
+		} else if slice.Contain(noSpaceDomainStatus, "ok") || slice.Contain(noSpaceDomainStatus, "active") || slice.Contain(noSpaceDomainStatus, "delegated") {
 			return constant.DomainStatusActive
+		} else {
+			return constant.DomainStatusUnknown
 		}
 	} else {
 		return constant.DomainStatusUnknown
@@ -56,14 +60,8 @@ func GetDomainHumanError(err error) string {
 		switch {
 		case errors.Is(err, lookuperror.ErrorInvalidDomainName):
 			return "域名无效"
-		case errors.Is(err, context.Canceled):
-			return "查询中断"
-		case errors.Is(err, lookuperror.ErrorRateLimited):
-			return "上游请求过多，请稍后再查"
 		case errors.Is(err, lookuperror.ErrorWhoisTimeout):
 			return "Whois查询超时"
-		case errors.Is(err, context.DeadlineExceeded):
-			return "查询超时"
 		case errors.Is(err, lookuperror.ErrorNotSupportedTld):
 			return "后缀不支持"
 		case errors.Is(err, lookuperror.ErrorWhoisServerFailed):
@@ -96,6 +94,68 @@ func GetDomainHumanError(err error) string {
 	} else {
 		return ""
 	}
+}
+
+// GetOrderedQueryResult takes a list of domain JSON strings from Redis and convert them back to QueryResult struct array.
+// It sorts the array by the Order field in ascending order.
+func GetOrderedQueryResult(domainResult []string) []lookupinfo.QueryResult {
+	var queryResults []lookupinfo.QueryResult
+	for _, domainJson := range domainResult {
+		var queryItem lookupinfo.QueryResult
+		err := json.Unmarshal([]byte(domainJson), &queryItem)
+		if err != nil {
+			log.Errorf("Error unmarshal query result: %s", err)
+			continue
+		}
+		queryResults = append(queryResults, queryItem)
+	}
+
+	// Sort the queryResults by their Order in ascending order
+	slice.SortByField(queryResults, "Order", "asc")
+
+	return queryResults
+}
+
+// ConvertQueryResultToCSV takes a list of QueryResult struct and converts it to []QueryCsvResult.
+// It then uses csvutil to marshal the []QueryCsvResult to a CSV byte array.
+func ConvertQueryResultToCSV(queryResults []lookupinfo.QueryResult) ([]byte, error) {
+	var csvResults []lookupinfo.QueryCsvResult
+	for _, queryResult := range queryResults {
+		viaProxy := ""
+		if (queryResult.LookupType == constant.LookupTypeWhois) || (queryResult.LookupType == constant.LookupTypeRDAP) {
+			if queryResult.ViaProxy {
+				viaProxy = "Yes"
+			} else {
+				viaProxy = "No"
+			}
+		}
+		csvResults = append(csvResults, lookupinfo.QueryCsvResult{
+			Domain:          queryResult.Domain,
+			LookupType:      queryResult.LookupType,
+			ViaProxy:        viaProxy,
+			Status:          queryResult.Status,
+			Source:          queryResult.Source,
+			QueriedAt:       queryResult.QueriedAt,
+			ErrorInfo:       queryResult.QueryError,
+			CreatedDate:     queryResult.CreatedDate,
+			ExpiryDate:      queryResult.ExpiryDate,
+			NameServer:      slice.Join(queryResult.NameServer, ","),
+			DnsLite:         queryResult.DnsLite,
+			RawDomainStatus: slice.Join(queryResult.RawDomainStatus, ","),
+			DomainStatus:    queryResult.DomainStatus,
+		})
+	}
+
+	for i := range csvResults {
+		r := &csvResults[i]
+		for _, cell := range []*string{&r.Domain, &r.LookupType, &r.Status, &r.ErrorInfo, &r.CreatedDate, &r.ExpiryDate, &r.NameServer, &r.DnsLite, &r.RawDomainStatus, &r.DomainStatus, &r.Source, &r.QueriedAt} {
+			first := strings.TrimLeft(*cell, " ")
+			if len(first) > 0 && strings.ContainsRune("=+-@\t\r\n", rune(first[0])) {
+				*cell = "'" + *cell
+			}
+		}
+	}
+	return csvutil.Marshal(csvResults)
 }
 
 func LowerString(_ int, v string) string {

@@ -3,159 +3,220 @@ package lookuper
 import (
 	"context"
 	"errors"
-	"net/url"
-	"slices"
+	"fmt"
+	"net"
 	"strings"
 	"time"
 
 	"typonamer/config"
 	"typonamer/constant"
+	"typonamer/log"
 	"typonamer/lookup/customize"
 	"typonamer/lookup/dnslib"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
+	"typonamer/lookup/network"
 	"typonamer/lookup/rdaplib"
 	"typonamer/lookup/whoislib"
 	"typonamer/utils"
+
+	"github.com/duke-git/lancet/v2/maputil"
+	"github.com/duke-git/lancet/v2/slice"
 )
 
-func ValidMode(mode string, allowPrivate bool, cfg config.Config) bool {
+func lookup(ctx context.Context, domain string, queryType string) (lookupinfo.DomainInfo, error) {
+	var errDomainInfo = lookupinfo.DomainInfo{
+		DomainName: domain,
+		Source:     "local-validation",
+	}
+	if network.IsPublic(ctx) && !publicMode(queryType) {
+		return errDomainInfo, fmt.Errorf("代理和自定义查询需要管理员登录: %w", lookuperror.ErrorInvalidQueryType)
+	}
+
+	cfg := config.GetConfig()
+
+	domain, err := utils.TrimAndGetMainDomain(domain)
+	if err != nil {
+		return errDomainInfo, lookuperror.ErrorInvalidDomainName
+	}
+	// Get the TLD (Top-Level Domain) of the domain
+	tld, suffix, err := utils.GetTld(domain)
+	if err != nil || tld == "" || suffix == "" {
+		log.Error("Invalid domain name: ", domain)
+		return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorInvalidDomainName, err)
+	}
+
+	// Get the main domain
+	mainDomain, err := utils.TrimAndGetMainDomain(domain)
+	if err != nil {
+		log.Error("Invalid domain name: ", domain)
+		return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorInvalidDomainName, err)
+	}
+
+	switch queryType {
+	case constant.WhoisQuery:
+		if !slice.Contain(rdaplib.RdapSupportedTlds, tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld) {
+			log.Error("Not supported TLD: ", tld)
+			return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
+		}
+
+		useProxy := false
+		if !useProxy {
+			if slice.Contain(cfg.GlobalProxyTlds, tld) {
+				log.Debugf("%s is the TLD that needs to go through proxy, forcing the whois query to go through proxy", tld)
+				useProxy = true
+			}
+			if slice.Contain(cfg.GlobalProxyTlds, suffix) {
+				log.Debugf("%s is the TLD that needs to go through proxy, forcing the whois query to go through proxy", suffix)
+				useProxy = true
+			}
+		}
+		domainInfo, err := Whois(ctx, mainDomain, tld, useProxy)
+		return domainInfo, err
+	case constant.WhoisQueryWithProxy:
+		if !slice.Contain(rdaplib.RdapSupportedTlds, tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld) {
+			log.Error("Not supported TLD: ", tld)
+			return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
+		}
+
+		domainInfo, err := Whois(ctx, mainDomain, tld, true)
+		return domainInfo, err
+	case constant.DnsQuery:
+		domainInfo, err := dnslib.NsCheckContext(ctx, mainDomain)
+		return domainInfo, err
+	case constant.MixedQuery:
+		switch {
+		case slice.Contain(cfg.MixedDnsTlds, tld) || slice.Contain(cfg.MixedDnsTlds, suffix):
+			domainInfo, err := dnslib.NsCheckContext(ctx, mainDomain)
+			return domainInfo, err
+		case !slice.Contain(rdaplib.RdapSupportedTlds, tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld):
+			domainInfo, err := dnslib.NsCheckContext(ctx, mainDomain)
+			return domainInfo, err
+		case slice.Contain(cfg.MixedProxyTlds, tld) || slice.Contain(cfg.MixedProxyTlds, suffix):
+			domainInfo, err := Whois(ctx, mainDomain, tld, true)
+			return domainInfo, err
+		case slice.Contain(cfg.GlobalProxyTlds, tld) || slice.Contain(cfg.GlobalProxyTlds, suffix):
+			domainInfo, err := Whois(ctx, mainDomain, tld, true)
+			return domainInfo, err
+		default:
+			domainInfo, err := Whois(ctx, mainDomain, tld, false)
+			return domainInfo, err
+		}
+	default:
+		domainInfo, err := customize.CustomizeLookupContext(ctx, mainDomain, queryType)
+		return domainInfo, err
+	}
+}
+
+func Whois(ctx context.Context, domain, tld string, viaProxy bool) (lookupinfo.DomainInfo, error) {
+	// Jisc manages ac.uk separately; Nominet's RDAP 404 is not registration evidence there.
+	if strings.HasSuffix(domain, ".ac.uk") {
+		return lookupinfo.DomainInfo{DomainName: domain, Source: "local-validation"}, fmt.Errorf("%w: ac.uk requires a Jisc registry adapter", lookuperror.ErrorNotSupportedTld)
+	}
+	viaProxy = viaProxy && !network.IsPublic(ctx)
+	if slice.Contain(rdaplib.RdapSupportedTlds, tld) {
+		return rdaplib.RDAPQueryContext(ctx, domain, tld, viaProxy)
+	}
+	return whoislib.WhoisQueryContext(ctx, domain, tld, viaProxy)
+}
+
+func Lookup(domain, mode string) (lookupinfo.DomainInfo, error) {
+	return lookup(context.Background(), domain, mode)
+}
+
+func publicMode(mode string) bool {
 	switch mode {
 	case constant.WhoisQuery, constant.DnsQuery, constant.MixedQuery:
 		return true
-	case constant.WhoisQueryWithProxy:
-		return allowPrivate
-	default:
-		return allowPrivate && slices.ContainsFunc(cfg.WhoisApis, func(p config.WhoisApi) bool { return p.ApiName == mode })
 	}
+	return false
 }
 
-func Query(ctx context.Context, domain, mode string, allowPrivate bool, cfg config.Config) lookupinfo.QueryResult {
-	canonical, inputErr := utils.TrimAndGetMainDomain(domain)
-	if inputErr != nil {
-		return Result(domain, lookupinfo.DomainInfo{}, lookuperror.ErrorInvalidDomainName)
+func ValidMode(mode string) bool {
+	if publicMode(mode) || mode == constant.WhoisQueryWithProxy {
+		return true
 	}
-	domain = canonical
-	if !ValidMode(mode, allowPrivate, cfg) {
-		return Result(domain, lookupinfo.DomainInfo{}, lookuperror.ErrorInvalidQueryType)
-	}
-
-	tld, suffix, err := utils.GetTld(domain)
-	if err != nil {
-		return Result(domain, lookupinfo.DomainInfo{}, lookuperror.ErrorInvalidDomainName)
-	}
-	matches := func(tlds []string) bool { return slices.Contains(tlds, tld) || slices.Contains(tlds, suffix) }
-	viaProxy := allowPrivate && (mode == constant.WhoisQueryWithProxy || matches(cfg.GlobalProxyTlds) ||
-		(mode == constant.MixedQuery && matches(cfg.MixedProxyTlds)))
-
-	if mode == constant.DnsQuery || (mode == constant.MixedQuery && matches(cfg.MixedDnsTlds)) {
-		return dnsResult(ctx, domain, tld, cfg.DnsTimeout)
-	}
-	var servers []*url.URL
-	var bootErr error
-	var provider config.WhoisApi
-	for _, p := range cfg.WhoisApis {
-		if p.ApiName == mode {
-			provider = p
-			break
+	for _, a := range config.GetConfig().WhoisApis {
+		if a.ApiName == mode {
+			return true
 		}
 	}
-	if provider.ApiName == "" {
-		if suffix == "ac.uk" {
-			// Jisc runs ac.uk separately from the .uk registration service.
-			if mode == constant.MixedQuery {
-				return dnsResult(ctx, domain, tld, cfg.DnsTimeout)
-			}
-			return Result(domain, lookupinfo.DomainInfo{}, lookuperror.ErrorNotSupportedTld)
-		}
-		bootCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
-		servers, bootErr = rdaplib.Bootstrap(bootCtx, domain)
-		cancel()
-	}
+	return false
+}
 
-	attempts := 1
-	if cfg.RetryOnTimeout {
-		attempts += cfg.RetryMax
-	}
+// Query is the only result-classification and retry path used by all entry points.
+func Query(ctx context.Context, domain, mode string, timeoutSeconds, retries int) lookupinfo.QueryResult {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
 	var info lookupinfo.DomainInfo
-	timeout := time.Duration(cfg.WhoisTimeout) * time.Second
-	for attempt := 0; attempt < attempts; attempt++ {
-		if ctx.Err() != nil {
-			return Result(domain, info, ctx.Err())
-		}
-		// Each client applies the timeout after it holds an upstream slot.
-		switch {
-		case provider.ApiName != "":
-			info, err = customize.CustomizeLookup(ctx, domain, provider, timeout)
-		case len(servers) != 0:
-			info, err = rdaplib.RDAPQuery(ctx, domain, servers, viaProxy, cfg)
-		default:
-			info, err = whoislib.WhoisQuery(ctx, domain, tld, viaProxy, cfg)
-		}
-		if ctx.Err() != nil {
-			return Result(domain, info, ctx.Err())
-		}
-		if errors.Is(err, lookuperror.ErrorNotSupportedTld) || errors.Is(err, lookuperror.ErrorNoParseRuleForTld) {
-			if mode == constant.MixedQuery {
-				return dnsResult(ctx, domain, tld, cfg.DnsTimeout)
-			}
-			if bootErr != nil {
-				err = bootErr
-			}
-		}
-		// A rate-limited upstream is paused by the client; the next attempt waits for it.
-		retryable := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, lookuperror.ErrorWhoisTimeout) ||
-			errors.Is(err, lookuperror.ErrorConnectToProxy) || errors.Is(err, lookuperror.ErrorRateLimited)
-		if !retryable || attempt+1 == attempts {
+	var err error
+	for attempt := 0; attempt <= retries; attempt++ {
+		info, err = lookup(ctx, domain, mode)
+		if err == nil || errors.Is(err, lookuperror.ErrorWhoisNotFound) || errors.Is(err, lookuperror.ErrorNsNotFound) || ctx.Err() != nil {
 			break
 		}
-		select {
-		case <-ctx.Done():
-			return Result(domain, info, ctx.Err())
-		case <-time.After(time.Duration(cfg.RetryInterval) * time.Second):
+		var netErr net.Error
+		if !errors.As(err, &netErr) && !errors.Is(err, lookuperror.ErrorWhoisTimeout) && !errors.Is(err, lookuperror.ErrorDnsTimeout) && !errors.Is(err, lookuperror.ErrorRateLimited) {
+			break
+		}
+		if attempt < retries {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(max(1, config.GetConfig().RetryInterval)) * time.Second):
+			}
 		}
 	}
-	return Result(domain, info, err)
-}
-
-func dnsResult(ctx context.Context, domain, tld string, timeout int) lookupinfo.QueryResult {
-	info, err := dnslib.NsCheck(ctx, domain, tld, time.Duration(timeout)*time.Second)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	return Result(domain, info, err)
 }
 
 func Result(domain string, info lookupinfo.DomainInfo, err error) lookupinfo.QueryResult {
-	result := lookupinfo.QueryResult{
-		Domain: domain, LookupType: info.LookupType, ViaProxy: info.ViaProxy, RawResponse: info.RawResponse,
-		CreatedDate: info.CreationDate, ExpiryDate: info.ExpiryDate, RawDomainStatus: info.DomainStatus,
-	}
-	for _, ns := range info.NameServer {
-		result.NameServer = append(result.NameServer, strings.ToLower(ns))
-	}
-	result.DnsLite = utils.GetDnsLite(result.NameServer)
-	if len(info.DomainStatus) != 0 {
-		result.DomainStatus = utils.GetDomainHumanStatus(info.DomainStatus)
+	r := lookupinfo.QueryResult{Domain: domain, LookupType: info.LookupType, ViaProxy: info.ViaProxy, RawResponse: info.RawResponse, Source: info.Source, QueriedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: "unknown", RegisterStatus: "Unknown", NameServer: []string{}}
+	if r.Source == "" {
+		r.Source = info.LookupType
 	}
 	switch {
 	case errors.Is(err, lookuperror.ErrorWhoisNotFound):
-		result.RegisterStatus = constant.DomainRegisterStatusFree
-		result.QueryError = "注册查询未找到记录，能否购买请以注册商为准"
-	case errors.Is(err, lookuperror.ErrorReservedDomain):
-		result.RegisterStatus = constant.DomainRegisterStatusReserved
-		result.QueryError = "注册局保留"
-	case errors.Is(err, lookuperror.ErrorNsNotFound) || (err == nil && info.LookupType == constant.LookupTypeDNS && len(info.NameServer) == 0):
-		result.RegisterStatus = constant.DomainRegisterStatusUnknown
-		result.QueryError = "DNS 无委派记录，无法确认注册状态"
+		r.Status = "not_found"
+		r.RegisterStatus = "NotFound"
+	case errors.Is(err, lookuperror.ErrorNsNotFound):
+		r.QueryError = "DNS has no delegation; registration status is unknown"
 	case err != nil:
-		result.RegisterStatus = constant.DomainRegisterStatusError
-		result.QueryError = utils.GetDomainHumanError(err)
+		r.Status = "error"
+		r.RegisterStatus = "Error"
+		r.QueryError = err.Error()
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, lookuperror.ErrorWhoisTimeout) || errors.Is(err, lookuperror.ErrorDnsTimeout) || (errors.As(err, &netErr) && netErr.Timeout()) {
+			r.Status = "timeout"
+			r.RegisterStatus = "Timeout"
+		}
+		if errors.Is(err, lookuperror.ErrorReservedDomain) || errors.Is(err, lookuperror.ErrorNotSupportedTld) || errors.Is(err, lookuperror.ErrorNoParseRuleForTld) || errors.Is(err, lookuperror.ErrorParseWhoisResponse) {
+			r.Status = "unknown"
+			r.RegisterStatus = "Unknown"
+		}
+	case info.LookupType == constant.LookupTypeDNS:
+		if len(info.NameServer) > 0 {
+			r.Status = "registered"
+			r.RegisterStatus = "Taken"
+		} else {
+			r.QueryError = "DNS has no delegation; registration status is unknown"
+		}
+	case info.LookupType == constant.LookupTypeWhois || info.LookupType == constant.LookupTypeRDAP || info.CustomizedResult == constant.DomainRegisterStatusTaken:
+		r.Status = "registered"
+		r.RegisterStatus = "Taken"
 	case info.CustomizedResult == constant.DomainRegisterStatusFree:
-		result.RegisterStatus = constant.DomainRegisterStatusFree
-		result.QueryError = "可用性由配置的供应商报告"
-	case info.LookupType == "":
-		result.RegisterStatus = constant.DomainRegisterStatusUnknown
-		result.QueryError = "缺少查询证据"
-	default:
-		result.RegisterStatus = constant.DomainRegisterStatusTaken
+		r.Status = "not_found"
+		r.RegisterStatus = "NotFound"
 	}
-	return result
+	r.CreatedDate = info.CreationDate
+	r.ExpiryDate = info.ExpiryDate
+	for _, ns := range info.NameServer {
+		r.NameServer = append(r.NameServer, strings.ToLower(ns))
+	}
+	r.DnsLite = utils.GetDnsLite(r.NameServer)
+	r.RawDomainStatus = info.DomainStatus
+	r.DomainStatus = utils.GetDomainHumanStatus(info.DomainStatus)
+	return r
 }

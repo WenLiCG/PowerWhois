@@ -1,45 +1,41 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/gofiber/contrib/socketio"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
-
 	"typonamer/config"
-	"typonamer/constant"
 	"typonamer/lookup/lookuper"
-	"typonamer/lookup/network"
-	"typonamer/register"
 	"typonamer/scheduler"
 	"typonamer/typo"
 	"typonamer/utils"
-
-	"github.com/gofiber/contrib/websocket"
-	"github.com/gofiber/fiber/v2"
-	"github.com/redis/go-redis/v9"
 )
 
+type clientInfo struct {
+	mu           sync.Mutex
+	Kws          *socketio.Websocket
+	WebCheckTask *scheduler.WebCheck
+	RegisterTask *scheduler.RegisterTask
+	Token        string
+}
 type MessageObject struct {
 	Event string          `json:"event"`
 	Data  json.RawMessage `json:"data"`
 }
-
 type WebCheck struct {
 	QueryType string   `json:"queryType"`
 	Domains   []string `json:"domains"`
 }
-
 type Register struct {
 	RegisterType string   `json:"registerType"`
-	OperationID  string   `json:"operationId"`
 	Domains      []string `json:"domains"`
+	Confirmed    bool     `json:"confirmed"`
 }
-
 type TypoCheck struct {
 	Domain    string   `json:"domain"`
 	TypoType  []string `json:"typoType"`
@@ -47,478 +43,207 @@ type TypoCheck struct {
 	QueryType string   `json:"queryType"`
 }
 
-type webSession struct {
-	ws    *websocket.Conn
-	ctx   context.Context
-	bulk  *scheduler.BulkCheck
-	redis *redis.Client
+var clientsMu sync.Mutex
+var clients = map[string]*clientInfo{}
 
-	ip          string
-	reserved    bool // admitted with a ticket into the administrator pool
-	wg          sync.WaitGroup
-	writer      sync.Mutex
-	adminUntil  atomic.Int64
-	adminGen    atomic.Int64
-	checking    atomic.Bool
-	registering atomic.Bool
-	bulkBusy    atomic.Bool
-	nextAuth    time.Time
+func init() {
+	socketio.On(socketio.EventDisconnect, onDisconnect)
+	socketio.On(socketio.EventMessage, onMessage)
 }
-
-// clientIPKey carries the proxy-aware client address from the upgrade request into the session.
-const clientIPKey = "powerwhoisClientIP"
-
-// admittedKey carries the administrator session granted by a redeemed ticket.
-const admittedKey = "powerwhoisAdmitted"
-
-// publicBudget limits anonymous web lookups per client address across all sessions.
-var publicBudget domainBudget
-
-// lookupQuery is lookuper.Query; tests replace it to observe lookup contexts.
-var lookupQuery = lookuper.Query
-
-func WebSocketHandler(parent context.Context, bulk *scheduler.BulkCheck, client *redis.Client) (fiber.Handler, func(context.Context) error) {
-	var sessions sync.WaitGroup
-	var lifecycle sync.Mutex
-	var perIP connectionCounter
-	stopping := false
-	allowedOrigin := os.Getenv("POWERWHOIS_WEB_ORIGIN")
-	connections := make(chan struct{}, publicConnections)
-	reserved := make(chan struct{}, adminConnections)
-	busy := func(conn *websocket.Conn) {
-		conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "server busy"), time.Now().Add(time.Second))
+func emit(k *socketio.Websocket, event string, data interface{}) {
+	b, _ := json.Marshal(map[string]interface{}{"event": event, "data": data})
+	k.Emit(b, socketio.TextMessage)
+}
+func onDisconnect(ep *socketio.EventPayload) {
+	clientsMu.Lock()
+	c := clients[ep.Kws.UUID]
+	delete(clients, ep.Kws.UUID)
+	clientsMu.Unlock()
+	if c != nil {
+		c.mu.Lock()
+		if c.WebCheckTask != nil {
+			c.WebCheckTask.Stop()
+		}
+		if c.RegisterTask != nil {
+			c.RegisterTask.Stop()
+		}
+		c.mu.Unlock()
 	}
-	upgrade := websocket.New(func(conn *websocket.Conn) {
-		ip, _ := conn.Locals(clientIPKey).(string)
-		admitted, isReserved := conn.Locals(admittedKey).(adminToken)
-		if isReserved {
-			// Ticket-admitted administrators use their own pool and skip the
-			// per-address cap, so anonymous traffic cannot lock them out.
-			select {
-			case reserved <- struct{}{}:
-				defer func() { <-reserved }()
-			default:
-				busy(conn)
-				return
-			}
+	scheduler.BulkCheckRemoveKws(ep.Kws)
+}
+func onMessage(ep *socketio.EventPayload) {
+	if len(ep.Data) > 4*1024*1024 {
+		emit(ep.Kws, "webCheckError", "请求过大")
+		return
+	}
+	var m MessageObject
+	if json.Unmarshal(ep.Data, &m) != nil {
+		emit(ep.Kws, "webCheckError", "无效 JSON")
+		return
+	}
+	clientsMu.Lock()
+	c := clients[ep.Kws.UUID]
+	clientsMu.Unlock()
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m.Event == "ping" {
+		ep.Kws.Emit([]byte(`{"event":"pong"}`), socketio.TextMessage)
+		return
+	}
+	if m.Event == "adminAuth" {
+		var token string
+		if json.Unmarshal(m.Data, &token) != nil {
+			return
+		}
+		c.Token = token
+		if validAdminToken(token) {
+			scheduler.BulkCheckAddKws(ep.Kws, func() bool { return validAdminToken(token) })
 		} else {
-			if limitedIP(ip) {
-				key := limitKey(ip)
-				if !perIP.acquire(key, connectionsPerIP) {
-					busy(conn)
-					return
-				}
-				defer perIP.release(key)
-			}
-			select {
-			case connections <- struct{}{}:
-				defer func() { <-connections }()
-			default:
-				busy(conn)
-				return
-			}
+			scheduler.BulkCheckRemoveKws(ep.Kws)
 		}
-		lifecycle.Lock()
-		if stopping || parent.Err() != nil {
-			lifecycle.Unlock()
-			return
-		}
-		sessions.Add(1)
-		lifecycle.Unlock()
-		defer sessions.Done()
-
-		ctx, cancel := context.WithCancel(parent)
-		s := &webSession{ws: conn, ctx: ctx, bulk: bulk, redis: client, ip: ip, reserved: isReserved}
-		if isReserved {
-			s.adminGen.Store(admitted.generation)
-			s.adminUntil.Store(admitted.expiry.Unix())
-		}
-		closed := make(chan struct{})
-		closeOnStop := context.AfterFunc(ctx, func() { closeConn(conn, websocket.CloseGoingAway, "server stopping"); close(closed) })
-		defer func() {
-			if !closeOnStop() {
-				<-closed
-			}
-			cancel()
-			s.wg.Wait()
-		}()
-
-		conn.SetReadLimit(1 << 20)
-		if isReserved {
-			s.send("adminAuthResult", true)
-		}
-		s.wg.Go(s.bulkStatus)
-		for {
-			conn.SetReadDeadline(time.Now().Add(75 * time.Second))
-			messageType, message, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-			var envelope MessageObject
-			if messageType == websocket.TextMessage && json.Unmarshal(message, &envelope) == nil {
-				s.handle(envelope)
-			}
-		}
-	}, websocket.Config{HandshakeTimeout: 5 * time.Second})
-	return func(c *fiber.Ctx) error {
-			if !websocket.IsWebSocketUpgrade(c) {
-				return fiber.ErrUpgradeRequired
-			}
-			if origin := c.Get("Origin"); origin != "" && origin != allowedOrigin {
-				parsed, err := url.Parse(origin)
-				if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
-					!strings.EqualFold(parsed.Host, string(c.Context().Request.Header.Host())) {
-					return fiber.ErrForbidden
-				}
-			}
-			c.Locals(clientIPKey, ClientIP(c))
-			// An invalid or used ticket falls back to an ordinary connection,
-			// which can still authenticate with an adminAuth message.
-			if token, ok := redeemTicket(c.Query("ticket")); ok {
-				c.Locals(admittedKey, token)
-			}
-			return upgrade(c)
-		}, func(ctx context.Context) error {
-			lifecycle.Lock()
-			stopping = true
-			lifecycle.Unlock()
-			done := make(chan struct{})
-			go func() { sessions.Wait(); close(done) }()
-			select {
-			case <-done:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-}
-
-// closeConn ends a session from any goroutine. Close on a hijacked fasthttp
-// connection is a no-op (the socket closes when the handler returns), so the
-// read deadline is also expired to unblock the read loop and end the handler.
-func closeConn(conn *websocket.Conn, code int, text string) {
-	conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(time.Second))
-	conn.SetReadDeadline(time.Now())
-	conn.Close()
-}
-
-func (s *webSession) send(event string, data any) bool {
-	if s.ctx.Err() != nil {
-		return false
-	}
-	s.writer.Lock()
-	defer s.writer.Unlock()
-	s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if err := s.ws.WriteJSON(fiber.Map{"event": event, "data": data}); err != nil {
-		closeConn(s.ws, websocket.CloseGoingAway, "write failed")
-		return false
-	}
-	return true
-}
-
-// isAdmin also checks the session generation, so logging out in any browser
-// ends administrator access on already-open connections.
-func (s *webSession) isAdmin() bool {
-	return time.Now().Unix() < s.adminUntil.Load() && s.adminGen.Load() == authGeneration.Load()
-}
-
-func (s *webSession) adminContext() (context.Context, context.CancelFunc) {
-	return context.WithDeadline(s.ctx, time.Unix(s.adminUntil.Load(), 0))
-}
-
-func (s *webSession) handle(message MessageObject) {
-	switch message.Event {
-	case constant.WebsocketRequestEventPing:
-		s.writer.Lock()
-		s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		if err := s.ws.WriteJSON(fiber.Map{"event": constant.WebsocketResponseEventPong}); err != nil {
-			closeConn(s.ws, websocket.CloseGoingAway, "write failed")
-		}
-		s.writer.Unlock()
-	case constant.WebsocketRequestEventAdminAuth:
-		if time.Now().Before(s.nextAuth) {
-			return
-		}
-		s.nextAuth = time.Now().Add(time.Second)
-		var raw string
-		if json.Unmarshal(message.Data, &raw) != nil {
-			s.send("adminAuthResult", false)
-			return
-		}
-		token, err := parseAdminToken(raw)
-		if err != nil {
-			s.adminUntil.Store(0)
-		} else {
-			s.adminGen.Store(token.generation)
-			s.adminUntil.Store(token.expiry.Unix())
-		}
-		s.send("adminAuthResult", err == nil)
-	case constant.WebsocketRequestEventWebCheck:
-		s.webCheck(message.Data)
-	case constant.WebsocketRequestEventTypoCheck:
-		s.typoCheck(message.Data)
-	case constant.WebsocketRequestEventRegister:
-		s.register(message.Data)
-	case constant.WebsocketRequestEventBulkCheckStart, constant.WebsocketRequestEventBulkCheckPause,
-		constant.WebsocketRequestEventBulkCheckResume, constant.WebsocketRequestEventBulkCheckCancel,
-		constant.WebsocketRequestEventBulkCheckClear, constant.WebsocketRequestEventBulkRecheckErrorDomains:
-		// Bulk actions can wait for the task lock, so keep the read loop free to answer pings.
-		if !s.bulkBusy.CompareAndSwap(false, true) {
-			s.send(constant.WebsocketResponseBulkCheckErrorEvent, "上一个批量操作仍在处理，请稍后再试")
-			return
-		}
-		s.wg.Go(func() {
-			defer s.bulkBusy.Store(false)
-			s.bulkAction(message)
-		})
-	}
-}
-
-// bulkStatus runs once a second. It ends administrator access when the token
-// expires or is revoked (closing connections in the reserved pool, so their
-// slots return to administrators) and pushes bulk task status to administrators.
-func (s *webSession) bulkStatus() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	hadError := false
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			expiry := s.adminUntil.Load()
-			if expiry == 0 {
-				if s.reserved {
-					closeConn(s.ws, websocket.ClosePolicyViolation, "session ended")
-					return
-				}
-				continue
-			}
-			if time.Now().Unix() >= expiry || s.adminGen.Load() != authGeneration.Load() {
-				if s.adminUntil.CompareAndSwap(expiry, 0) {
-					s.send("adminAuthResult", false)
-				}
-				if s.reserved {
-					closeConn(s.ws, websocket.ClosePolicyViolation, "session ended")
-					return
-				}
-				continue
-			}
-			if s.bulk == nil {
-				continue
-			}
-			ctx, cancel := context.WithTimeout(s.ctx, 2*time.Second)
-			info, err := s.bulk.Info(ctx)
-			cancel()
-			if err != nil {
-				if !hadError && s.isAdmin() {
-					s.send(constant.WebsocketResponseBulkCheckErrorEvent, "暂时无法读取批量任务状态")
-				}
-				hadError = true
-				continue
-			}
-			hadError = false
-			if s.isAdmin() && !s.send(constant.WebsocketResponseBulkCheckInfoEvent, info) {
-				return
-			}
-		}
-	}
-}
-
-func (s *webSession) bulkAction(message MessageObject) {
-	if !s.isAdmin() || s.bulk == nil {
-		s.send(constant.WebsocketResponseBulkCheckErrorEvent, "请先登录且确认批量服务可用")
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-	defer cancel()
-	var err error
-	switch message.Event {
-	case constant.WebsocketRequestEventBulkCheckStart:
-		var data WebCheck
-		if json.Unmarshal(message.Data, &data) != nil {
-			s.send(constant.WebsocketResponseBulkCheckErrorEvent, "批量任务参数格式错误")
-			return
-		}
-		err = s.bulk.Start(ctx, data.QueryType)
-	case constant.WebsocketRequestEventBulkCheckPause:
-		err = s.bulk.Stop(ctx, constant.BulkCheckStatusPaused)
-	case constant.WebsocketRequestEventBulkCheckResume:
-		err = s.bulk.Resume(ctx)
-	case constant.WebsocketRequestEventBulkCheckCancel:
-		err = s.bulk.Stop(ctx, constant.BulkCheckStatusCanceled)
-	case constant.WebsocketRequestEventBulkCheckClear:
-		err = s.bulk.Clear(ctx)
-	case constant.WebsocketRequestEventBulkRecheckErrorDomains:
-		err = s.bulk.Recheck(ctx)
-	}
-	if err != nil {
-		s.send(constant.WebsocketResponseBulkCheckErrorEvent, "无法执行此操作，请确认当前任务状态或检查服务日志")
-	}
-}
-
-func (s *webSession) webCheck(data json.RawMessage) {
-	const errEvent = constant.WebsocketResponseWebCheckErrorEvent
-	var req WebCheck
-	cfg, admin := config.GetConfig(), s.isAdmin()
-	if json.Unmarshal(data, &req) != nil || len(req.Domains) > cfg.WebCheckDomainLimit || !lookuper.ValidMode(req.QueryType, admin, cfg) {
-		s.send(errEvent, "查询参数无效、超过单批限制，或当前身份无法使用该接口")
-		return
-	}
-	domains := make([]string, 0, len(req.Domains))
-	seen := make(map[string]bool)
-	for _, input := range req.Domains {
-		name, err := utils.TrimAndGetMainDomain(input)
-		if err == nil && !seen[name] {
-			domains = append(domains, name)
-			seen[name] = true
-		}
-	}
-	if len(domains) == 0 {
-		s.send(errEvent, "没有有效域名")
-		return
-	}
-	if s.checking.Load() {
-		s.send(errEvent, "当前连接已有查询正在运行")
-		return
-	}
-	if !admin && limitedIP(s.ip) && !publicBudget.take(limitKey(s.ip), len(domains), cfg.PublicDomainsPerMinute, time.Now()) {
-		s.send(errEvent, "匿名查询过于频繁，请稍后再试")
-		return
-	}
-	s.startCheck(cfg, admin, req.QueryType, domains, errEvent, func() {
-		s.send(constant.WebsocketResponseEventWebCheckDomains, domains)
-	})
-}
-
-func (s *webSession) typoCheck(data json.RawMessage) {
-	const errEvent = constant.WebsocketResponseTypoCheckErrorEvent
-	var req TypoCheck
-	cfg := config.GetConfig()
-	if !s.isAdmin() || json.Unmarshal(data, &req) != nil || !lookuper.ValidMode(req.QueryType, true, cfg) {
-		s.send(errEvent, "请检查 Typo 查询参数及登录状态")
-		return
-	}
-	groups, domains, err := typo.Generate(req.Domain, req.TypoType, req.CcTlds, cfg.WebCheckDomainLimit)
-	if err != nil {
-		s.send(errEvent, err.Error())
-		return
-	}
-	s.startCheck(cfg, true, req.QueryType, domains, errEvent, func() {
-		for _, group := range groups {
-			s.send(constant.WebsocketResponseEventTypoResult, fiber.Map{"typoType": group.Kind, "domains": group.Domains})
-		}
-	})
-}
-
-func (s *webSession) startCheck(cfg config.Config, admin bool, mode string, domains []string, errorEvent string, announce func()) {
-	if !s.checking.CompareAndSwap(false, true) {
-		s.send(errorEvent, "当前连接已有查询正在运行")
-		return
-	}
-	ctx := s.ctx
-	cancel := func() {}
-	if admin {
-		ctx, cancel = s.adminContext()
-	}
-	// Anonymous sessions share half of the web budget, so they cannot crowd out the administrator.
-	pool, limit := "web:admin", cfg.WebCheckConcurrencyLimit
+	admin := c.Token != "" && validAdminToken(c.Token)
 	if !admin {
-		pool, limit = "web:public", max(1, cfg.WebCheckConcurrencyLimit/2)
+		scheduler.BulkCheckRemoveKws(ep.Kws)
 	}
-	// Inside each upstream (WHOIS, RDAP and DNS servers), anonymous lookups may
-	// hold only network.PublicLimit of the shared slots; see network.Acquire.
-	lookupCtx := ctx
-	if !admin {
-		lookupCtx = network.WithPublic(ctx)
-	}
-	announce()
-	s.wg.Go(func() {
-		defer cancel()
-		runDomains(ctx, domains, limit, func(domain string) {
-			release, err := network.Acquire(ctx, pool, limit)
-			if err != nil {
-				return
-			}
-			defer release()
-			result := lookupQuery(lookupCtx, domain, mode, admin, cfg)
-			if ctx.Err() == nil {
-				s.send(constant.WebsocketResponseEventWebCheckResult, result)
-			}
-		})
-		s.checking.Store(false)
-		s.send("webCheckDone", ctx.Err() != nil)
-	})
-}
-
-func (s *webSession) register(data json.RawMessage) {
-	const errEvent = constant.WebsocketResponseRegisterErrorEvent
-	var req Register
-	cfg := config.GetConfig()
-	if !s.isAdmin() || s.redis == nil || json.Unmarshal(data, &req) != nil || !register.ValidOperationID(req.OperationID) ||
-		len(req.Domains) == 0 || len(req.Domains) > cfg.WebCheckDomainLimit {
-		s.send(errEvent, "注册参数无效、数量超限或会话不可用")
+	if m.Event != "webCheck" && !admin {
+		emit(ep.Kws, "webCheckError", "需要管理员登录")
 		return
 	}
-	provider, err := register.FindProvider(cfg, req.RegisterType)
-	if err != nil {
-		s.send(errEvent, err.Error())
-		return
-	}
-	domains := make([]string, 0, len(req.Domains))
-	seen := make(map[string]bool)
-	for _, input := range req.Domains {
-		domain, err := register.CanonicalTarget(input)
-		if err != nil {
-			s.send(errEvent, "注册列表包含无效域名")
+	switch m.Event {
+	case "webCheck":
+		var req WebCheck
+		if json.Unmarshal(m.Data, &req) != nil {
+			emit(ep.Kws, "webCheckError", "无效查询")
 			return
 		}
-		if !seen[domain] {
-			domains = append(domains, domain)
-			seen[domain] = true
+		runWeb(c, req.Domains, req.QueryType, "webCheck", !admin)
+	case "typoCheck":
+		var req TypoCheck
+		if json.Unmarshal(m.Data, &req) != nil {
+			emit(ep.Kws, "typoCheckError", "无效查询")
+			return
+		}
+		generated, err := typo.Generate(typo.Request{Domain: req.Domain, Types: req.TypoType, TLDs: req.CcTlds})
+		if err != nil {
+			emit(ep.Kws, "typoCheckError", err.Error())
+			return
+		}
+		if len(generated.Domains) > config.GetConfig().WebCheckDomainLimit {
+			emit(ep.Kws, "typoCheckError", "生成数量超过网页查询上限，请减少类型或通过 API 分批查询")
+			return
+		}
+		if !lookuper.ValidMode(req.QueryType) {
+			emit(ep.Kws, "typoCheckError", "无效查询类型")
+			return
+		}
+		for kind, domains := range generated.Groups {
+			emit(ep.Kws, "typoResult", map[string]interface{}{"typoType": kind, "domains": domains})
+		}
+		runWeb(c, generated.Domains, req.QueryType, "typoCheck", false)
+	case "bulkCheckStart":
+		var req struct {
+			QueryType string `json:"queryType"`
+		}
+		if json.Unmarshal(m.Data, &req) != nil || !lookuper.ValidMode(req.QueryType) {
+			emit(ep.Kws, "bulkCheckError", "无效查询类型")
+			return
+		}
+		if err := scheduler.SetBulkCheckQueryType(req.QueryType); err != nil {
+			emit(ep.Kws, "bulkCheckError", "保存查询类型失败")
+			return
+		}
+		go scheduler.CreateBulkCheckTask()
+	case "bulkCheckPause":
+		scheduler.PauseBulkCheckTask()
+	case "bulkCheckResume":
+		scheduler.ResumeBulkCheckTask()
+	case "bulkCheckCancel":
+		scheduler.CancelBulkCheckTask()
+	case "bulkCheckClear":
+		scheduler.ClearBulkCheckTask()
+	case "bulkRecheckErrorDomains":
+		scheduler.RecheckBulkCheckErrorDomains()
+	case "register":
+		var req Register
+		if json.Unmarshal(m.Data, &req) != nil || !req.Confirmed {
+			emit(ep.Kws, "registerError", "注册需要明确确认")
+			return
+		}
+		domains, err := validDomains(req.Domains)
+		if err != nil {
+			emit(ep.Kws, "registerError", err.Error())
+			return
+		}
+		if c.RegisterTask != nil {
+			c.RegisterTask.Stop()
+		}
+		c.RegisterTask = scheduler.NewRegisterTask(ep.Kws.UUID, ep.Kws)
+		c.RegisterTask.SetDomains(domains)
+		token := c.Token
+		go c.RegisterTask.Run(req.RegisterType, func() bool { return validAdminToken(token) })
+	default:
+		emit(ep.Kws, "webCheckError", "未知操作")
+	}
+}
+func validDomains(input []string) ([]string, error) {
+	if len(input) == 0 || len(input) > config.GetConfig().WebCheckDomainLimit {
+		return nil, fiber.NewError(400, "域名数量超过限制或为空")
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for i, d := range input {
+		n, e := utils.TrimAndGetMainDomain(d)
+		if e != nil {
+			return nil, fiber.NewError(400, fmt.Sprintf("第 %d 项域名格式错误，请输入纯域名，每行一个", i+1))
+		}
+		if !seen[n] {
+			out = append(out, n)
+			seen[n] = true
 		}
 	}
-	if !s.registering.CompareAndSwap(false, true) {
-		s.send(errEvent, "当前连接已有注册正在运行")
+	return out, nil
+}
+func runWeb(c *clientInfo, input []string, mode, kind string, public bool) {
+	domains, err := validDomains(input)
+	if err != nil {
+		emit(c.Kws, "webCheckError", err.Error())
 		return
 	}
-	ctx, cancel := s.adminContext()
-	s.wg.Go(func() {
-		defer cancel()
-		// After logout or token expiry, domains not yet sent are skipped; see submissionGate.
-		mayStart := func() bool { return sessionStillValid(s.isAdmin) }
-		runDomains(ctx, domains, provider.ConcurrencyLimit, func(domain string) {
-			info := register.Register(ctx, s.redis, domain, req.OperationID, provider, mayStart)
-			if s.isAdmin() {
-				s.send(constant.WebsocketResponseEventRegisterResult, info)
-			}
-		})
-		s.registering.Store(false)
-		s.send("registerDone", nil)
-	})
-}
-
-func runDomains(ctx context.Context, domains []string, workers int, work func(string)) {
-	ch := make(chan string)
-	var wg sync.WaitGroup
-	for range min(workers, len(domains)) {
-		wg.Go(func() {
-			for name := range ch {
-				if ctx.Err() != nil {
-					return
-				}
-				work(name)
-			}
-		})
+	if !lookuper.ValidMode(mode) {
+		emit(c.Kws, "webCheckError", "无效查询类型")
+		return
 	}
-send:
-	for _, name := range domains {
-		select {
-		case ch <- name:
-		case <-ctx.Done():
-			break send
+	if c.WebCheckTask != nil {
+		c.WebCheckTask.Stop()
+	}
+	if kind == "webCheck" {
+		emit(c.Kws, "webCheckDomains", domains)
+	}
+	c.WebCheckTask = scheduler.NewWebCheckTask(c.Kws.UUID, c.Kws)
+	c.WebCheckTask.SetDomains(domains)
+	go c.WebCheckTask.Run(mode, public)
+}
+func WebSocketUpgrade(c *fiber.Ctx) error {
+	if origin := c.Get("Origin"); origin != "" {
+		u, e := url.Parse(origin)
+		if e != nil || !strings.EqualFold(u.Host, c.Hostname()) {
+			return c.SendStatus(403)
 		}
 	}
-	close(ch)
-	wg.Wait()
+	if websocket.IsWebSocketUpgrade(c) {
+		return c.Next()
+	}
+	return fiber.ErrUpgradeRequired
+}
+func WebSocketHandler(k *socketio.Websocket) {
+	k.Conn.SetReadLimit(4 * 1024 * 1024)
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	clients[k.UUID] = &clientInfo{Kws: k}
+	// Tokens arrive in the first frame, never in URL query strings or proxy access logs.
 }

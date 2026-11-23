@@ -234,14 +234,18 @@ func (t *Typo) TypeInsertedLetter() []string {
 	}
 
 	for i := range sld {
-		for _, item := range insertedLetterAlphabetMap[string(sld[i])] {
-			// 在左边插入字母
-			leftDomain := fmt.Sprintf("%s%s%s.%s", sld[:i], string(item), sld[i:], suffix)
-			domains = append(domains, leftDomain)
+		for key, value := range insertedLetterAlphabetMap {
+			if string(sld[i]) == key {
+				for _, item := range value {
+					// 在左边插入字母
+					leftDomain := fmt.Sprintf("%s%s%s.%s", sld[:i], string(item), sld[i:], suffix)
+					domains = append(domains, leftDomain)
 
-			// 在右边插入字母
-			rightDomain := fmt.Sprintf("%s%s%s.%s", sld[:i+1], string(item), sld[i+1:], suffix)
-			domains = append(domains, rightDomain)
+					// 在右边插入字母
+					rightDomain := fmt.Sprintf("%s%s%s.%s", sld[:i+1], string(item), sld[i+1:], suffix)
+					domains = append(domains, rightDomain)
+				}
+			}
 		}
 	}
 
@@ -264,9 +268,13 @@ func (t *Typo) TypeWrongHorizontalKey() []string {
 	}
 
 	for i := range sld {
-		for _, item := range wrongHorizontalAlphabetMap[string(sld[i])] {
-			newDomain := fmt.Sprintf("%s%s%s.%s", sld[:i], string(item), sld[i+1:], suffix)
-			domains = append(domains, newDomain)
+		for key, value := range wrongHorizontalAlphabetMap {
+			if string(sld[i]) == key {
+				for _, item := range value {
+					newDomain := fmt.Sprintf("%s%s%s.%s", sld[:i], string(item), sld[i+1:], suffix)
+					domains = append(domains, newDomain)
+				}
+			}
 		}
 	}
 
@@ -289,9 +297,13 @@ func (t *Typo) TypeWrongVerticalKey() []string {
 	}
 
 	for i := range sld {
-		for _, item := range wrongVerticalAlphabetMap[string(sld[i])] {
-			newDomain := fmt.Sprintf("%s%s%s.%s", sld[:i], string(item), sld[i+1:], suffix)
-			domains = append(domains, newDomain)
+		for key, value := range wrongVerticalAlphabetMap {
+			if string(sld[i]) == key {
+				for _, item := range value {
+					newDomain := fmt.Sprintf("%s%s%s.%s", sld[:i], string(item), sld[i+1:], suffix)
+					domains = append(domains, newDomain)
+				}
+			}
 		}
 	}
 

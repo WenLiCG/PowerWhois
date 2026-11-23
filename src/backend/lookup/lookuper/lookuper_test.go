@@ -1,35 +1,57 @@
 package lookuper
 
 import (
+	"context"
+	"errors"
 	"testing"
-
-	"typonamer/config"
 	"typonamer/constant"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 )
 
-func TestResultRequiresRegistrationEvidence(t *testing.T) {
-	for _, tc := range []struct {
-		name, mode, want string
-		err              error
+func TestStatusEvidence(t *testing.T) {
+	cases := []struct {
+		name, kind string
+		err        error
+		ns         []string
+		want       string
 	}{
-		{"DNS without NS", "dns", "Unknown", lookuperror.ErrorNsNotFound},
-		{"DNS failed", "dns", "Error", lookuperror.ErrorDnsServerFailed},
-		{"DNS timeout", "dns", "Error", lookuperror.ErrorDnsTimeout},
-		{"RDAP object with redacted fields", "rdap", "Taken", nil},
-		{"registry says reserved", "whois", "Reserved", lookuperror.ErrorReservedDomain},
-		{"registry says not found", "whois", "Free", lookuperror.ErrorWhoisNotFound},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := Result("example.com", lookupinfo.DomainInfo{LookupType: tc.mode}, tc.err); got.RegisterStatus != tc.want {
-				t.Fatalf("status = %s, want %s", got.RegisterStatus, tc.want)
+		{"DNS absence", constant.LookupTypeDNS, lookuperror.ErrorNsNotFound, nil, "unknown"},
+		{"DNS failure", constant.LookupTypeDNS, lookuperror.ErrorDnsServerFailed, nil, "error"},
+		{"timeout", constant.LookupTypeRDAP, context.DeadlineExceeded, nil, "timeout"},
+		{"explicit not found", constant.LookupTypeRDAP, lookuperror.ErrorWhoisNotFound, nil, "not_found"},
+		{"redacted positive", constant.LookupTypeRDAP, nil, nil, "registered"},
+		{"DNS delegated", constant.LookupTypeDNS, nil, []string{"ns.example.com"}, "registered"},
+		{"parse error", constant.LookupTypeWhois, lookuperror.ErrorParseWhoisResponse, nil, "unknown"},
+		{"unhandled error", "custom", errors.New("bad response"), nil, "error"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := Result("example.com", lookupinfo.DomainInfo{LookupType: c.kind, NameServer: c.ns, Source: "fixture"}, c.err)
+			if r.Status != c.want || r.Source != "fixture" || r.QueriedAt == "" {
+				t.Fatalf("%+v", r)
 			}
 		})
 	}
-	cfg := config.Config{WhoisApis: []config.WhoisApi{{ApiName: "private"}}}
-	if ValidMode("private", false, cfg) || ValidMode(constant.WhoisQueryWithProxy, false, cfg) ||
-		!ValidMode(constant.MixedQuery, false, cfg) || !ValidMode("private", true, cfg) {
-		t.Fatal("unexpected lookup mode permissions")
+}
+
+func TestUnsupportedTLDKeepsLocalEvidence(t *testing.T) {
+	for _, mode := range []string{constant.WhoisQuery, constant.WhoisQueryWithProxy} {
+		r := Query(context.Background(), "google.cf", mode, 1, 0)
+		if r.Status != "unknown" || r.Source != "local-validation" || r.QueriedAt == "" || r.QueryError == "" {
+			t.Fatalf("unsupported route lacks evidence: %+v", r)
+		}
+	}
+}
+
+func TestDelegatedAcademicUKDoesNotUseNominetAbsence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // A local coverage decision must not require any network request.
+	for _, domain := range []string{"ox.ac.uk", "google.ac.uk", "missing-test.ac.uk"} {
+		info, err := Whois(ctx, domain, "uk", false)
+		r := Result(domain, info, err)
+		if !errors.Is(err, lookuperror.ErrorNotSupportedTld) || r.Status != "unknown" || r.Source != "local-validation" {
+			t.Fatalf("delegated namespace incorrectly classified: %+v %v", r, err)
+		}
 	}
 }

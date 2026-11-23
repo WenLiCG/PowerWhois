@@ -4,100 +4,153 @@ import { date } from "quasar";
 export const useWebStore = defineStore("web", {
     state: () => ({
         domains: [],
-        byName: {},
-        submitting: false,
-        resetOnReply: false,
         unCheckDomains: 0,
-        unRegisterDomains: 0
+        unRegisterDomains: 0,
+        checkedTakenDomains: 0,
+        checkedFreeDomains: 0,
+        checkedUnknownDomains: 0,
+        checkedTimeoutDomains: 0,
+        checkedErrorDomains: 0,
+        isErrorRecheck: false
     }),
-    getters: {
-        checking: (state) => state.submitting || state.unCheckDomains > 0,
-        checkedTakenDomains: (state) => state.domains.filter((row) => row.status === "Taken").length,
-        checkedFreeDomains: (state) => state.domains.filter((row) => row.status === "Free").length,
-        checkedErrorDomains: (state) => state.domains.filter((row) => row.status === "Error").length,
-        checkedUnknownDomains: (state) => state.domains.filter((row) => row.status === "Unknown" || row.status === "Reserved").length
-    },
+
     actions: {
-        beginCheck(recheck = false) {
-            this.submitting = true;
-            this.resetOnReply = !recheck;
+        setIsErrorRecheck(isErrorRecheck) {
+            this.isErrorRecheck = isErrorRecheck;
         },
         setCheckingDomains(newDomains, checkType, typoType) {
-            if (this.resetOnReply) {
-                this.resetOnReply = false;
-                this.domains = [];
-                this.byName = {};
-                this.unCheckDomains = 0;
-            }
-            for (const domain of newDomains) {
-                const row = this.byName[domain];
-                if (row) {
-                    if (!row.isChecked) continue;
-                    Object.assign(row, { isChecked: false, status: null, errorInfo: "", checkedRawResponse: "" });
-                } else {
-                    this.domains.push({ domainID: this.domains.length + 1, domain, checkType, typoType, isChecked: false });
-                    this.byName[domain] = this.domains[this.domains.length - 1];
-                }
-                this.unCheckDomains++;
+            if (this.isErrorRecheck) {
+                newDomains.forEach((domain) => {
+                    for (let i = 0; i < this.domains.length; i++) {
+                        if (this.domains[i].domain == domain.toLowerCase()) {
+                            this.domains[i].lookupType = null;
+                            this.domains[i].status = null;
+                            this.domains[i].errorInfo = "";
+                            this.domains[i].createdDate = null;
+                            this.domains[i].expiryDate = null;
+                            this.domains[i].nameServer = null;
+                            this.domains[i].domainStatus = null;
+                            this.domains[i].checkedRawResponse = null;
+                            this.domains[i].isChecked = false;
+                            this.domains[i].selectedRegister = false;
+                            this.domains[i].registerStatus = null;
+                            this.domains[i].registerRawResponse = null;
+                            this.unCheckDomains++;
+                            this.recount();
+                        }
+                    }
+                });
+            } else {
+                let domainID = this.domains.length + 1;
+                newDomains.forEach((domain) => {
+                    this.domains.push({
+                        domainID: domainID,
+                        domain: domain.toLowerCase(),
+                        checkType: checkType,
+                        typoType: typoType,
+                        lookupType: null,
+                        status: null,
+                        errorInfo: "",
+                        createdDate: null,
+                        expiryDate: null,
+                        nameServer: null,
+                        domainStatus: null,
+                        checkedRawResponse: null,
+                        isChecked: false,
+                        selectedRegister: false,
+                        registerStatus: null,
+                        registerRawResponse: null
+                    });
+                    domainID++;
+                    this.unCheckDomains++;
+                });
             }
         },
-        updateCheckResult(result) {
-            const row = this.byName[result.domain];
-            if (!row || row.isChecked) return;
-            Object.assign(row, {
-                isChecked: true,
-                status: result.registerStatus,
-                lookupType: result.lookupType,
-                errorInfo: result.queryError,
-                checkedRawResponse: result.rawResponse,
-                createdDate: result.createdDate ? date.formatDate(result.createdDate.slice(0, 10), "YYYY-MM-DD") : "",
-                expiryDate: result.expiryDate ? date.formatDate(result.expiryDate.slice(0, 10), "YYYY-MM-DD") : "",
-                domainStatus: result.domainStatus,
-                nameServer: result.nameServer?.length ? result.nameServer : ["N/A"]
+        updateCheckResult(domainResult) {
+            for (let i = 0; i < this.domains.length; i++) {
+                if (this.domains[i].domain == domainResult.domain.toLowerCase() && !this.domains[i].isChecked) {
+                    this.domains[i].status = domainResult.registerStatus;
+                    this.domains[i].lookupType = domainResult.lookupType;
+                    this.domains[i].checkedRawResponse = [domainResult.source && `来源: ${domainResult.source}`, domainResult.queriedAt && `查询时间: ${domainResult.queriedAt}`, domainResult.queryError, domainResult.rawResponse].filter(Boolean).join("\n");
+                    this.domains[i].errorInfo = domainResult.queryError;
+
+                    if (domainResult.registerStatus == "Taken") {
+                        if (domainResult.lookupType == "whois" || domainResult.lookupType == "rdap") {
+                            this.domains[i].createdDate = domainResult.createdDate ? date.formatDate(domainResult.createdDate, "YYYY-MM-DD") : "—";
+                            this.domains[i].expiryDate = domainResult.expiryDate ? date.formatDate(domainResult.expiryDate, "YYYY-MM-DD") : "—";
+                            this.domains[i].domainStatus = domainResult.domainStatus;
+                        }
+
+                        if (domainResult.nameServer && domainResult.nameServer.length > 0) {
+                            this.domains[i].nameServer = domainResult.nameServer.map((item) => item.toLowerCase());
+                        } else {
+                            this.domains[i].nameServer = ["N/A"];
+                        }
+
+                        this.checkedTakenDomains++;
+                    } else if (["NotFound", "Free"].includes(domainResult.registerStatus)) {
+                        this.checkedFreeDomains++;
+                    } else if (domainResult.registerStatus == "Unknown") {
+                        this.checkedUnknownDomains++;
+                    } else if (domainResult.registerStatus == "Timeout") {
+                        this.checkedTimeoutDomains++;
+                    } else if (domainResult.registerStatus == "Error") {
+                        this.domains[i].errorInfo = domainResult.queryError;
+                        this.checkedErrorDomains++;
+                    }
+
+                    this.domains[i].isChecked = true;
+                    this.unCheckDomains--;
+                }
+            }
+        },
+        setRegisteringDomains(domains) {
+            domains.forEach((domain) => {
+                for (let i = 0; i < this.domains.length; i++) {
+                    if (this.domains[i].domainID == domain.domainID) {
+                        this.domains[i].selectedRegister = true;
+                        this.domains[i].registerStatus = null;
+                        this.domains[i].registerRawResponse = null;
+                        this.unRegisterDomains++;
+                    }
+                }
             });
-            this.unCheckDomains--;
         },
-        finishCheck() {
-            this.submitting = false;
-            this.resetOnReply = false;
-            for (const row of this.domains) {
-                if (!row.isChecked) {
-                    Object.assign(row, { isChecked: true, status: "Error", errorInfo: "查询中断，可重新查询" });
+        updateRegisterResult(registerResult) {
+            for (let i = 0; i < this.domains.length; i++) {
+                if (this.domains[i].domain == registerResult.domainName && this.domains[i].selectedRegister) {
+                    if (this.domains[i].registerStatus == null) {
+                        this.domains[i].registerStatus = registerResult.registerStatus;
+                        this.domains[i].registerRawResponse = registerResult.rawResponse;
+                        this.unRegisterDomains--;
+                    }
                 }
             }
-            this.unCheckDomains = 0;
         },
-        setRegisteringDomains(domains, operationId) {
-            for (const name of domains) {
-                const row = this.byName[name];
-                Object.assign(row, { selectedRegister: true, registerStatus: null, registerRawResponse: "", operationId });
+        recount() {
+            this.unCheckDomains = this.domains.filter(d => !d.isChecked).length;
+            this.checkedTakenDomains = this.domains.filter(d => d.status === 'Taken').length;
+            this.checkedFreeDomains = this.domains.filter(d => ['NotFound','Free'].includes(d.status)).length;
+            this.checkedUnknownDomains = this.domains.filter(d => d.status === 'Unknown').length;
+            this.checkedTimeoutDomains = this.domains.filter(d => d.status === 'Timeout').length;
+            this.checkedErrorDomains = this.domains.filter(d => d.status === 'Error').length;
+        },
+        interruptQueries() {
+            for (const d of this.domains) {
+                if (!d.isChecked) { d.status = 'Error'; d.errorInfo = '连接中断，请重查'; d.isChecked = true; }
             }
-            this.unRegisterDomains = domains.length;
-        },
-        updateRegisterResult(result) {
-            const row = this.byName[result.domainName];
-            if (!row?.selectedRegister) return;
-            if (!row.registerStatus) this.unRegisterDomains--;
-            row.registerStatus = result.registerStatus;
-            row.registerRawResponse = result.rawResponse;
-            row.operationId = result.operationId;
-        },
-        finishRegistration(rejected = false) {
-            for (const row of this.domains) {
-                if (row.selectedRegister && !row.registerStatus) {
-                    row.registerStatus = rejected ? "error" : "outcome_unknown";
-                    row.registerRawResponse = rejected ? "提交请求被拒绝" : "连接中断，请用操作编号向注册商核对。";
-                }
-            }
-            this.unRegisterDomains = 0;
+            this.recount();
         },
         clearDomains() {
             this.domains = [];
-            this.byName = {};
             this.unCheckDomains = 0;
             this.unRegisterDomains = 0;
-            this.submitting = false;
-            this.resetOnReply = false;
+            this.checkedTakenDomains = 0;
+            this.checkedFreeDomains = 0;
+            this.checkedUnknownDomains = 0;
+            this.checkedTimeoutDomains = 0;
+            this.checkedErrorDomains = 0;
+            this.isErrorRecheck = false;
         }
     }
 });

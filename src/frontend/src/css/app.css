@@ -1,20 +1,122 @@
-/* app global css */
-
+/* Keep the original light, blue Quasar workspace; make dense operations legible. */
+:root {
+    --q-primary: #1766b1;
+    --q-secondary: #237d73;
+    --q-accent: #52698c;
+    --q-negative: #b82e3d;
+}
+body {
+    color: #203249;
+    background: #f5f7fa;
+    font-family: system-ui, "Microsoft YaHei", sans-serif;
+}
+.workspace-header {
+    max-width: 1200px;
+    margin: auto;
+    padding: 28px 24px 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+}
+h1 {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 0;
+}
+.workspace-header p {
+    color: #546779;
+    margin: 8px 0 0;
+}
+.connection-state {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: #435d75;
+    font-size: 13px;
+}
+.workspace-content {
+    max-width: 1200px;
+    margin: 20px auto 0;
+}
+.workspace-content .q-tab-panel {
+    padding: 24px;
+}
+.workspace-footer {
+    max-width: 1200px;
+    margin: 28px auto;
+    padding: 0 24px;
+    color: #53677b;
+    font-size: 13px;
+    line-height: 1.8;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 12px;
+}
+a {
+    color: #1766b1;
+    text-underline-offset: 3px;
+}
+.q-btn {
+    min-height: 40px;
+}
+.q-field__native {
+    caret-color: #1766b1;
+}
+.q-table td {
+    font-variant-numeric: tabular-nums;
+}
+.q-table th {
+    color: #435d75;
+    font-weight: 600;
+}
+.status-filter {
+    min-width: 150px;
+}
+:focus-visible {
+    outline: 3px solid #1766b1;
+    outline-offset: 3px;
+}
+::selection {
+    background: #c9e5ff;
+    color: #153b62;
+}
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
-
-::-webkit-scrollbar-track {
-    background-color: transparent;
-    -webkit-border-radius: 2em;
-    -moz-border-radius: 2em;
-    border-radius: 2em;
-}
-
 ::-webkit-scrollbar-thumb {
-    background-color: rgb(147, 147, 153, 0.5);
-    -webkit-border-radius: 2em;
-    -moz-border-radius: 2em;
-    border-radius: 2em;
+    background: #8496a9;
+    border-radius: 8px;
+}
+@media (max-width: 600px) {
+    .workspace-header {
+        padding: 20px 16px;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .workspace-content {
+        margin-top: 4px;
+    }
+    .workspace-content .q-tab-panel {
+        padding: 16px;
+    }
+    .q-table__top {
+        gap: 8px;
+        padding: 12px 0;
+    }
+    .q-dialog__inner > .q-card {
+        min-width: 90vw !important;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
 }

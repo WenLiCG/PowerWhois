@@ -1,131 +1,213 @@
 package whoislib
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"typonamer/config"
 	"typonamer/constant"
+	"typonamer/log"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/lookup/network"
 
-	"golang.org/x/net/idna"
+	"github.com/duke-git/lancet/v2/maputil"
+	"github.com/duke-git/lancet/v2/strutil"
 	"golang.org/x/net/proxy"
 )
 
-func WhoisQuery(ctx context.Context, domain, tld string, useProxy bool, cfg config.Config) (lookupinfo.DomainInfo, error) {
-	info := lookupinfo.DomainInfo{LookupType: constant.LookupTypeWhois, DomainName: domain, ViaProxy: useProxy}
-	if WhoisSupportedTlds[tld] == "" {
-		tld, _ = idna.Lookup.ToUnicode(tld)
+// Preserve transport causes so only actual deadline failures count as timeouts.
+func whoisTransportError(err error) error {
+	kind := lookuperror.ErrorWhoisServerFailed
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
+		kind = lookuperror.ErrorWhoisTimeout
 	}
-	server := WhoisSupportedTlds[tld]
-	if server == "" {
-		return info, lookuperror.ErrorNotSupportedTld
-	}
-	matcher, ok := WhoisMatchers[tld]
-	if !ok {
-		return info, lookuperror.ErrorNoParseRuleForTld
+	return fmt.Errorf("%w: %w", kind, err)
+}
+
+// WhoisQuery function is used to query the WHOIS information for a given domain.
+// If the useProxy parameter is set to true, it will use the proxy server to query the WHOIS information.
+func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy bool) (lookupinfo.DomainInfo, error) {
+	log.Debugf("Querying whois for domain: %s", domain)
+
+	var domainInfo = lookupinfo.DomainInfo{
+		LookupType: constant.LookupTypeWhois,
+		ViaProxy:   useProxy,
 	}
 
-	// Direct and proxied traffic leave from different addresses, so registries
-	// limit them separately.
-	slotKey := "whois:" + server
-	if useProxy {
-		slotKey += "|proxy"
+	// Check if the TLD is supported
+	whoisServer, ok := WhoisSupportedTlds[tld]
+	if !ok {
+		log.Warnf("Whois not supported for TLD: %s", tld)
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
 	}
-	release, err := network.Acquire(ctx, slotKey, 3)
-	if err != nil {
-		return info, err
-	}
-	defer release()
-	// The timeout covers the exchange with the registry, not time spent queuing.
+
+	// Read the configuration
+	cfg := config.GetConfig()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
 	defer cancel()
-	baseDialer := &net.Dialer{}
-	dial := baseDialer.DialContext
+	release, err := network.Acquire(ctx, "whois")
+	if err != nil {
+		return domainInfo, err
+	}
+	defer release()
+	if err := network.Wait(ctx, "whois", whoisServer); err != nil {
+		return domainInfo, err
+	}
+	domainInfo.Source = whoisServer
+
+	// Create the address for the WHOIS server
+	whoisAddr := net.JoinHostPort(whoisServer, "43")
+
+	// Create the connection
+	conn := net.Conn(nil)
 	if useProxy {
-		if cfg.SocketProxyHost == "" {
-			return info, lookuperror.ErrorConnectToProxy
+		proxyServer := net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort))
+		var proxyDialer proxy.Dialer
+		var err error
+
+		baseTCPDialer := &net.Dialer{
+			Timeout:  time.Second * time.Duration(cfg.WhoisTimeout),
+			Deadline: time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout*2)),
 		}
-		var auth *proxy.Auth
+
 		if cfg.SocketProxyAuth {
-			auth = &proxy.Auth{User: cfg.SocketProxyUser, Password: cfg.SocketProxyPassword}
+			proxyAuth := proxy.Auth{
+				User:     cfg.SocketProxyUser,
+				Password: cfg.SocketProxyPassword,
+			}
+
+			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, &proxyAuth, baseTCPDialer)
+			if err != nil {
+				log.Warnf("Failed to connect to the proxy server with auth: %s", err)
+				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
+			}
+		} else {
+			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, nil, baseTCPDialer)
+			if err != nil {
+				log.Warnf("Failed to connect to the proxy server without auth: %s", err)
+				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
+			}
 		}
-		dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort)), auth, baseDialer)
+
+		proxyConn, err := proxyDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
 		if err != nil {
-			return info, lookuperror.ErrorConnectToProxy
+			log.Warnf("Failed to connect to the whois server %s via proxy: %s", whoisAddr, err)
+			return domainInfo, whoisTransportError(err)
 		}
-		dial = dialer.(proxy.ContextDialer).DialContext
+
+		// Set timeouts for the proxy connection
+		err = proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+		if err != nil {
+			log.Warnf("Failed to set deadline for proxy connection: %s", err)
+			proxyConn.Close()
+			return domainInfo, whoisTransportError(err)
+		}
+
+		conn = proxyConn
+	} else {
+		rawConn, err := (&net.Dialer{Timeout: time.Second * time.Duration(cfg.WhoisTimeout)}).DialContext(ctx, "tcp", whoisAddr)
+		if err != nil {
+			log.Warnf("Failed to connect to the whois server %s: %s", whoisAddr, err)
+			return domainInfo, whoisTransportError(err)
+		}
+
+		// Set timeouts for the direct connection
+		err = rawConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+		if err != nil {
+			log.Warnf("Failed to set deadline for connection: %s", err)
+			rawConn.Close()
+			return domainInfo, whoisTransportError(err)
+		}
+
+		conn = rawConn
 	}
 
-	conn, err := dial(ctx, "tcp", net.JoinHostPort(server, "43"))
-	if err != nil {
-		return info, transportError(ctx, err, useProxy)
-	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return info, transportError(ctx, err, false)
-		}
+		conn.SetDeadline(deadline)
 	}
 
-	query := domain
-	if options, ok := WhoisTldOptions[tld]; ok {
-		query = options + " " + domain
-	}
-	if _, err := fmt.Fprint(conn, query+"\r\n"); err != nil {
-		return info, transportError(ctx, err, false)
-	}
-	raw, err := io.ReadAll(io.LimitReader(conn, network.MaxResponseBytes+1))
+	log.Infof("Querying WHOIS for domain: %s with TLD: %s on server: %s", domain, tld, whoisServer)
+
+	// Set write deadline
+	err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
 	if err != nil {
-		return info, transportError(ctx, err, false)
+		return domainInfo, whoisTransportError(err)
 	}
-	if len(raw) > network.MaxResponseBytes {
-		return info, lookuperror.ErrorWhoisServerFailed
+
+	queryInfo := fmt.Sprintf("%s\r\n", domain)
+	if maputil.HasKey(WhoisTldOptions, tld) {
+		queryInfo = fmt.Sprintf("%s %s\r\n", WhoisTldOptions[tld], domain)
 	}
-	if strings.TrimSpace(string(raw)) == "" {
-		return info, lookuperror.ErrorNoContentInWhoisResponse
+
+	// Write the query to the server
+	_, err = conn.Write([]byte(queryInfo))
+	if err != nil {
+		log.Warnf("Failed to write query: %s", err)
+		return domainInfo, whoisTransportError(err)
 	}
-	info, err = ParseWhoisResponse(string(raw), domain, matcher)
-	info.ViaProxy = useProxy
-	if errors.Is(err, lookuperror.ErrorParseWhoisResponse) && RateLimitedResponse(string(raw)) {
-		network.Cooldown(slotKey, rateLimitCooldown)
-		return info, lookuperror.ErrorRateLimited
+
+	// Set read deadline
+	err = conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+	if err != nil {
+		return domainInfo, whoisTransportError(err)
 	}
-	return info, err
+
+	// Read the response from the server
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, io.LimitReader(conn, 2*1024*1024+1))
+	if err != nil {
+		log.Warnf("Failed to read WHOIS response: %s", err)
+		return domainInfo, whoisTransportError(err)
+	}
+
+	if buf.Len() > 2*1024*1024 {
+		return domainInfo, fmt.Errorf("WHOIS response too large")
+	}
+	// Get the query result from the buffer
+	queryResult := buf.String()
+	domainInfo.RawResponse = queryResult
+
+	// Check if the query result is empty
+	if strutil.Trim(queryResult) == "" {
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNoContentInWhoisResponse, domain)
+	}
+
+	// Use the matcher corresponding to the TLD to parse the WHOIS data
+	if matcher, ok := WhoisMatchers[tld]; ok {
+		domainInfo, err = ParseWhoisResponse(queryResult, domain, matcher)
+		domainInfo.ViaProxy = useProxy
+		domainInfo.Source = whoisServer
+		if err != nil {
+			if errors.Is(err, lookuperror.ErrorReservedDomain) {
+				return domainInfo, err
+			}
+			if err.Error() == "domain not found" {
+				log.Infof("Domain %s is not registered", domain)
+				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisNotFound, domain)
+			} else {
+				log.Errorf("Failed to parse WHOIS response for domain %s: %s", domain, err)
+				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorParseWhoisResponse, err.Error())
+			}
+		}
+
+		return domainInfo, nil
+	} else {
+		log.Error("No parsing rule for TLD: ", tld)
+		return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNoParseRuleForTld, tld)
+	}
 }
 
-const rateLimitCooldown = 30 * time.Second
-
-var rateLimitText = regexp.MustCompile(`(?i)(rate.?limit|limit exceeded|exceeded (the|your)? ?(query|request|maximum)|too many (requests|queries|connections)|query limit|quota exceeded|please (try|query) again later|access denied.{0,40}(limit|later))`)
-
-// RateLimitedResponse recognises common registry throttling replies. It is only
-// consulted when no registration data could be parsed, so terms-of-use text in
-// ordinary records cannot turn a registered domain into a rate-limit error.
-func RateLimitedResponse(raw string) bool {
-	return rateLimitText.MatchString(raw)
-}
-
-func transportError(ctx context.Context, err error, viaProxy bool) error {
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return ctx.Err()
-	}
-	var netErr net.Error
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
-		return lookuperror.ErrorWhoisTimeout
-	}
-	if viaProxy {
-		return lookuperror.ErrorConnectToProxy
-	}
-	return lookuperror.ErrorWhoisServerFailed
+func WhoisQuery(domain, tld string, viaProxy bool) (lookupinfo.DomainInfo, error) {
+	return WhoisQueryContext(context.Background(), domain, tld, viaProxy)
 }
