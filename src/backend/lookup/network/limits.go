@@ -11,8 +11,20 @@ import (
 )
 
 var mu sync.Mutex
-var active = map[string]int{}
+var active = map[string]slots{}
 var next = map[string]time.Time{}
+
+type slots struct {
+	total  int
+	public int
+}
+
+type publicKey struct{}
+
+// WithPublic marks anonymous Web lookups so they leave capacity for authenticated work.
+func WithPublic(ctx context.Context) context.Context {
+	return context.WithValue(ctx, publicKey{}, true)
+}
 
 func settings(protocol string) (int, int) {
 	c := config.GetConfig()
@@ -34,16 +46,32 @@ func settings(protocol string) (int, int) {
 }
 
 func Acquire(ctx context.Context, protocol string) (func(), error) {
+	public, _ := ctx.Value(publicKey{}).(bool)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		limit, _ := settings(protocol)
+		publicLimit := max(1, limit-max(1, limit/4))
 		mu.Lock()
-		if active[protocol] < limit {
-			active[protocol]++
+		used := active[protocol]
+		if used.total < limit && (!public || used.public < publicLimit) {
+			used.total++
+			if public {
+				used.public++
+			}
+			active[protocol] = used
 			mu.Unlock()
-			return func() { mu.Lock(); active[protocol]--; mu.Unlock() }, nil
+			return func() {
+				mu.Lock()
+				defer mu.Unlock()
+				used := active[protocol]
+				used.total--
+				if public {
+					used.public--
+				}
+				active[protocol] = used
+			}, nil
 		}
 		mu.Unlock()
 		select {

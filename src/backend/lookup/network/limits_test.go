@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,34 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAnonymousLookupsLeaveCapacity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	public := WithPublic(ctx)
+	for i := 0; i < 3; i++ {
+		release, err := Acquire(public, "rdap")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+	}
+
+	blocked, stop := context.WithTimeout(public, 60*time.Millisecond)
+	defer stop()
+	if release, err := Acquire(blocked, "rdap"); !errors.Is(err, context.DeadlineExceeded) {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("fourth anonymous request should wait, got %v", err)
+	}
+
+	release, err := Acquire(ctx, "rdap")
+	if err != nil {
+		t.Fatalf("authenticated work could not use the fourth slot: %v", err)
+	}
+	defer release()
+}
 
 func TestRetryAfterAndCancellation(t *testing.T) {
 	RetryAfter("rdap", "fixture", "1")

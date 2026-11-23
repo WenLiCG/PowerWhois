@@ -7,6 +7,7 @@ import (
 	"sync"
 	"typonamer/config"
 	"typonamer/lookup/lookuper"
+	"typonamer/lookup/network"
 )
 
 type WebCheck struct {
@@ -30,7 +31,7 @@ func (t *WebCheck) Stop() {
 		t.cancel()
 	}
 }
-func (t *WebCheck) Run(mode string) {
+func (t *WebCheck) Run(mode string, public bool) {
 	t.mu.Lock()
 	if t.stopped {
 		t.mu.Unlock()
@@ -40,6 +41,9 @@ func (t *WebCheck) Run(mode string) {
 	t.cancel = cancel
 	t.mu.Unlock()
 	defer cancel()
+	if public {
+		ctx = network.WithPublic(ctx)
+	}
 	cfg := config.GetConfig()
 	ch := make(chan string)
 	var wg sync.WaitGroup

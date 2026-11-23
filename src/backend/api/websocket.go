@@ -125,7 +125,7 @@ func onMessage(ep *socketio.EventPayload) {
 			emit(ep.Kws, "webCheckError", "无效查询")
 			return
 		}
-		runWeb(c, req.Domains, req.QueryType, "webCheck")
+		runWeb(c, req.Domains, req.QueryType, "webCheck", !admin)
 	case "typoCheck":
 		var req TypoCheck
 		if json.Unmarshal(m.Data, &req) != nil {
@@ -148,7 +148,7 @@ func onMessage(ep *socketio.EventPayload) {
 		for kind, domains := range generated.Groups {
 			emit(ep.Kws, "typoResult", map[string]interface{}{"typoType": kind, "domains": domains})
 		}
-		runWeb(c, generated.Domains, req.QueryType, "typoCheck")
+		runWeb(c, generated.Domains, req.QueryType, "typoCheck", false)
 	case "bulkCheckStart":
 		var req struct {
 			QueryType string `json:"queryType"`
@@ -211,7 +211,7 @@ func validDomains(input []string) ([]string, error) {
 	}
 	return out, nil
 }
-func runWeb(c *clientInfo, input []string, mode, kind string) {
+func runWeb(c *clientInfo, input []string, mode, kind string, public bool) {
 	domains, err := validDomains(input)
 	if err != nil {
 		emit(c.Kws, "webCheckError", err.Error())
@@ -229,7 +229,7 @@ func runWeb(c *clientInfo, input []string, mode, kind string) {
 	}
 	c.WebCheckTask = scheduler.NewWebCheckTask(c.Kws.UUID, c.Kws)
 	c.WebCheckTask.SetDomains(domains)
-	go c.WebCheckTask.Run(mode)
+	go c.WebCheckTask.Run(mode, public)
 }
 func WebSocketUpgrade(c *fiber.Ctx) error {
 	if origin := c.Get("Origin"); origin != "" {
