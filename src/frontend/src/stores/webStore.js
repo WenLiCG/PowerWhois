@@ -20,26 +20,20 @@ export const useWebStore = defineStore("web", {
         },
         setCheckingDomains(newDomains, checkType, typoType) {
             if (this.isErrorRecheck) {
-                newDomains.forEach((domain) => {
-                    for (let i = 0; i < this.domains.length; i++) {
-                        if (this.domains[i].domain == domain.toLowerCase()) {
-                            this.domains[i].lookupType = null;
-                            this.domains[i].status = null;
-                            this.domains[i].errorInfo = "";
-                            this.domains[i].createdDate = null;
-                            this.domains[i].expiryDate = null;
-                            this.domains[i].nameServer = null;
-                            this.domains[i].domainStatus = null;
-                            this.domains[i].checkedRawResponse = null;
-                            this.domains[i].isChecked = false;
-                            this.domains[i].selectedRegister = false;
-                            this.domains[i].registerStatus = null;
-                            this.domains[i].registerRawResponse = null;
-                            this.unCheckDomains++;
-                            this.recount();
-                        }
-                    }
-                });
+                const retryDomains = new Set(newDomains.map(domain => domain.toLowerCase()));
+                for (const row of this.domains) {
+                    if (!retryDomains.has(row.domain)) continue;
+                    row.lookupType = null;
+                    row.status = null;
+                    row.errorInfo = "";
+                    row.createdDate = null;
+                    row.expiryDate = null;
+                    row.nameServer = null;
+                    row.domainStatus = null;
+                    row.checkedRawResponse = null;
+                    row.isChecked = false;
+                }
+                this.recount();
             } else {
                 let domainID = this.domains.length + 1;
                 newDomains.forEach((domain) => {
@@ -135,9 +129,19 @@ export const useWebStore = defineStore("web", {
             this.checkedTimeoutDomains = this.domains.filter(d => d.status === 'Timeout').length;
             this.checkedErrorDomains = this.domains.filter(d => d.status === 'Error').length;
         },
+        finishPendingRegistrations(status, message) {
+            for (const domain of this.domains) {
+                if (domain.selectedRegister && domain.registerStatus == null) {
+                    domain.registerStatus = status;
+                    domain.registerRawResponse = message;
+                }
+            }
+            this.unRegisterDomains = 0;
+        },
         interruptQueries() {
+            this.finishPendingRegistrations("outcome_unknown", "连接中断，无法确认是否已提交。请先向注册商核实订单。");
             for (const d of this.domains) {
-                if (!d.isChecked) { d.status = 'Error'; d.errorInfo = '连接中断，请重查'; d.isChecked = true; }
+                if (!d.isChecked) { d.status = 'Error'; d.errorInfo = d.checkedRawResponse = '连接中断，请重查'; d.isChecked = true; }
             }
             this.recount();
         },

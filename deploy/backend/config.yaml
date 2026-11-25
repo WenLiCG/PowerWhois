@@ -1,4 +1,3 @@
-
 # Setting the log level, available values are: Error, Warn, Info, Debug, Off
 LogLevel: Info
 
@@ -25,21 +24,6 @@ GlobalProxyTlds:
 
 ## The TLDs forced to go through proxy in mixed query
 MixedProxyTlds:
-    - shop
-    - win
-    - com.pl
-    - pl
-    - bg
-    - ae
-    - at
-    - com.co
-    - co
-    - org.uk
-    - ws
-    - org.br
-    - com.tw
-    - tw
-    - design
 
 ## The TLDs forced to go through DNS check in mixed query
 MixedDnsTlds:
@@ -60,11 +44,11 @@ MixedDnsTlds:
     - pt
 
 ## Setting proxy information
-SocketProxyHost: test.superproxy.io
-SocketProxyPort: 22222
-SocketProxyAuth: true
-SocketProxyUser: ""user
-SocketProxyPassword: ""7890
+SocketProxyHost: ""
+SocketProxyPort: 0
+SocketProxyAuth: false
+SocketProxyUser: ""
+SocketProxyPassword: ""
 
 # ------ Bulk check settings ------
 BulkCheckConcurrencyLimit: 50
@@ -96,32 +80,9 @@ TypoCustomizedReplaces:
 
 # ------ Register APIs ------
 RegisterApis:
-    - ApiName: rrp reg
-      ApiUrl: https://api-ote.rrpproxy.net/api/call?domain={domain}
-      SuccessText:
-          - successfully
-      FailText:
-          - not
-          - code = 540
-          - already registered
-      ConcurrencyLimit: 1
-    - ApiName: dynadot
-      ApiUrl: https://api.dynadot.com/api3.xml?domain={domain}
-      SuccessText:
-          - <SuccessCode>0</SuccessCode><Status>success
-      FailText:
-          - <SuccessCode>1</SuccessCode><Status>not_available
-      ConcurrencyLimit: 1
 
 # ------ Whois APIs ------
 WhoisApis:
-    - ApiName: rrp whois
-      ApiUrl: https://api-ote.rrpproxy.net/api/call?domain={domain}
-      FreeText:
-          - Domain name available
-      TakenText:
-          - not
-      ConcurrencyLimit: 1
 
 # Supply credentials through POWERWHOIS_ADMIN_* and POWERWHOIS_JWT_SECRET.
 RdapTimeout: 10

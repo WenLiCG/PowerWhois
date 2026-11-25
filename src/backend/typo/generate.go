@@ -37,7 +37,12 @@ func Generate(r Request) (Result, error) {
 	}
 	if len(r.TLDs) > 0 {
 		for _, suffix := range r.TLDs {
-			if _, e := utils.TrimAndGetMainDomain("example." + strings.TrimPrefix(suffix, ".")); e != nil {
+			candidate, e := utils.TrimDomain("example." + strings.TrimPrefix(suffix, "."))
+			if e != nil {
+				return out, fmt.Errorf("invalid suffix")
+			}
+			main, e := utils.GetDomainSuffixPlusOne(candidate)
+			if e != nil || main != candidate {
 				return out, fmt.Errorf("invalid suffix")
 			}
 		}

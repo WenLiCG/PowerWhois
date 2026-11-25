@@ -1,14 +1,15 @@
 package log
 
 import (
+	"archive/zip"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/dromara/carbon/v2"
 	"github.com/duke-git/lancet/v2/fileutil"
 	"github.com/duke-git/lancet/v2/strutil"
 	"go.uber.org/zap"
@@ -28,7 +29,6 @@ var (
 	logger   *zap.Logger
 	sugar    *zap.SugaredLogger
 	logLevel zap.AtomicLevel
-	execDir  string
 	logDir   string
 	logFile  string
 	appDev   = os.Getenv("APP_DEV")
@@ -65,11 +65,9 @@ func init() {
 		os.Exit(1)
 	}
 
-	execDir = filepath.Dir(execPath)
-	logDir = filepath.Join(execDir, logDirName)
+	logDir = filepath.Join(filepath.Dir(execPath), logDirName)
 	if configured := os.Getenv("POWERWHOIS_LOG_DIR"); configured != "" {
 		logDir = filepath.Clean(configured)
-		execDir = filepath.Dir(logDir)
 		if err := os.MkdirAll(logDir, 0700); err != nil {
 			fmt.Fprintln(os.Stderr, "cannot create log directory")
 			os.Exit(1)
@@ -129,34 +127,12 @@ func SetLevel(level string) {
 	}
 }
 
-// GetZipLogsFile compresses the log directory into a zip file.
-// It returns the path to the zip file and an error if the compression fails.
-func GetZipLogsFile() (string, error) {
-	clearZipLogsFile()
-
-	zipFileName := fmt.Sprintf("typonamer_logs_%s.zip", carbon.Now().ToShortDateTimeString())
-	destZipFile := filepath.Join(execDir, zipFileName)
-	err := fileutil.Zip(logDir, destZipFile)
-	if err != nil {
-		logger.Error("Error compressing log directory: ", zap.Error(err))
-		return "", err
-	}
-
-	return destZipFile, nil
-}
-
-func clearZipLogsFile() error {
-	fileList, err := fileutil.ListFileNames(execDir)
-	if err != nil {
-		logger.Error("Error listing files in directory: ", zap.Error(err))
+func WriteZipLogs(out io.Writer) error {
+	w := zip.NewWriter(out)
+	if err := w.AddFS(os.DirFS(logDir)); err != nil {
 		return err
 	}
-	for _, file := range fileList {
-		if strings.HasPrefix(file, "typonamer_logs_") && strings.HasSuffix(file, ".zip") {
-			os.Remove(filepath.Join(execDir, file))
-		}
-	}
-	return nil
+	return w.Close()
 }
 
 // ResetLogsFile resets the log file by clearing its contents.

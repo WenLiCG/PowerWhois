@@ -44,3 +44,14 @@ func TestRegistryResponses(t *testing.T) {
 		})
 	}
 }
+
+func TestEventDatesUseUTCAndIgnoreMalformedEvents(t *testing.T) {
+	created, expires := getDomainDates([]rdap.Event{
+		{Action: "registration", Date: "2026-01-02T00:00:01.123+08:00"},
+		{Action: "registration", Date: "invalid"},
+		{Action: "expiration", Date: "2027-01-02T03:04:05Z"},
+	})
+	if created != "2026-01-01 16:00:01" || expires != "2027-01-02 03:04:05" {
+		t.Fatalf("unexpected dates %q, %q", created, expires)
+	}
+}

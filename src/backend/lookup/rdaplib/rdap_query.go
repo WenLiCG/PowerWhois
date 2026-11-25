@@ -7,10 +7,7 @@ import (
 	"github.com/openrdap/rdap"
 	"github.com/openrdap/rdap/bootstrap"
 	"github.com/openrdap/rdap/bootstrap/cache"
-	"golang.org/x/net/proxy"
-	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 	"typonamer/config"
@@ -25,25 +22,22 @@ func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (l
 	cfg := config.GetConfig()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.RdapTimeout)*time.Second)
 	defer cancel()
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	defer tr.CloseIdleConnections()
+	if useProxy {
+		dialer, err := network.SOCKS5Dialer(cfg)
+		if err != nil {
+			info.Source = "local-validation"
+			return info, err
+		}
+		tr.Proxy = nil
+		tr.DialContext = dialer.DialContext
+	}
 	release, err := network.Acquire(ctx, "rdap")
 	if err != nil {
 		return info, err
 	}
 	defer release()
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	defer tr.CloseIdleConnections()
-	if useProxy {
-		var auth *proxy.Auth
-		if cfg.SocketProxyAuth {
-			auth = &proxy.Auth{User: cfg.SocketProxyUser, Password: cfg.SocketProxyPassword}
-		}
-		dialer, e := proxy.SOCKS5("tcp", net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort)), auth, &net.Dialer{Timeout: time.Duration(cfg.RdapTimeout) * time.Second})
-		if e != nil {
-			return info, lookuperror.ErrorConnectToProxy
-		}
-		tr.Proxy = nil
-		tr.DialContext = dialer.(proxy.ContextDialer).DialContext
-	}
 	client := &http.Client{Transport: network.Transport{Base: tr, Protocol: "rdap"}, Timeout: time.Duration(cfg.RdapTimeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 || req.URL.Scheme != "https" {

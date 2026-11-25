@@ -25,7 +25,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReNameServer:   regexp.MustCompile(`Name Server: (.*)`),
 		ReFree:         regexp.MustCompile(`^No matching record`),
 	},
-	"中国": {
+	"xn--fiqs8s": {
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),
@@ -33,7 +33,7 @@ var WhoisMatchers = map[string]WhoisInfoMatcher{
 		ReNameServer:   regexp.MustCompile(`Name Server: (.*)`),
 		ReFree:         regexp.MustCompile(`^No matching record`),
 	},
-	"中國": {
+	"xn--fiqz9s": {
 		ReRegistrar:    regexp.MustCompile(`Sponsoring Registrar: (.*)`),
 		ReDomainStatus: regexp.MustCompile(`Domain Status: (.*)`),
 		ReCreationDate: regexp.MustCompile(`Registration Time: (.*)`),

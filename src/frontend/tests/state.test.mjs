@@ -17,3 +17,20 @@ test('native Quasar rule adapter accepts zero and rejects empty numeric values',
  assert.equal(rules.numeric('number')(''),'number');assert.equal(rules.numeric('number')('abc'),'number');
  assert.equal(rules.minValue(1,'min')(0),'min');assert.equal(rules.maxValue(5,'max')(6),'max');
 });
+
+test('disconnect preserves finished registrations and marks unresolved orders for verification', () => {
+  setActivePinia(createPinia());
+  const store = useWebStore();
+  store.setCheckingDomains(['one.com', 'two.com'], 'webCheck', '');
+  store.setRegisteringDomains(store.domains);
+  store.updateRegisterResult({domainName: 'one.com', registerStatus: 'success', rawResponse: 'confirmed'});
+  store.interruptQueries();
+  assert.deepEqual(store.domains.map(d => d.registerStatus), ['success', 'outcome_unknown']);
+  assert.equal(store.domains[0].registerRawResponse, 'confirmed');
+  assert.match(store.domains[1].registerRawResponse, /核实订单/);
+  assert.equal(store.unRegisterDomains, 0);
+  store.setIsErrorRecheck(true);
+  store.setCheckingDomains(['ONE.COM', 'one.com', 'two.com'], 'webCheck', '');
+  assert.equal(store.unCheckDomains, 2);
+  assert.deepEqual(store.domains.map(d => d.registerStatus), ['success', 'outcome_unknown']);
+});

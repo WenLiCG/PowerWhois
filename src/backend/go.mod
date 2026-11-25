@@ -18,7 +18,6 @@ require (
 	github.com/openrdap/rdap v0.9.1
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/spf13/viper v1.19.0
-	github.com/zh-five/golimit v1.1.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/net v0.62.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1

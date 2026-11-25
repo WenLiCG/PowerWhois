@@ -10,12 +10,9 @@
     }
     header @static Cache-Control max-age=5184000
 
-    handle /api/* {
-        reverse_proxy /api/* typonamer:8080
-    }
-
-    handle /app/* {
-        reverse_proxy /app/* typonamer:8080
+    @backend path /healthz /api/* /app/*
+    handle @backend {
+        reverse_proxy typonamer:8080
     }
 
     handle * {

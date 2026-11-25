@@ -29,8 +29,8 @@ MixedProxyTlds:
 MixedDnsTlds:
 
 ## Setting proxy information
-SocketProxyHost: 127.0.0.1
-SocketProxyPort: 7890
+SocketProxyHost: ""
+SocketProxyPort: 0
 SocketProxyAuth: false
 SocketProxyUser: ""
 SocketProxyPassword: ""
@@ -39,7 +39,7 @@ SocketProxyPassword: ""
 BulkCheckConcurrencyLimit: 32
 
 # ------ Web check settings ------
-WebCheckConcurrencyLimit: 10
+WebCheckConcurrencyLimit: 15
 WebCheckDomainLimit: 500
 
 # ------ Typo check settings ------
@@ -69,8 +69,8 @@ WhoisApis:
 
 # Supply credentials through POWERWHOIS_ADMIN_* and POWERWHOIS_JWT_SECRET.
 RdapTimeout: 10
-DnsConcurrency: 16
-WhoisConcurrency: 4
+DnsConcurrency: 15
+WhoisConcurrency: 15
 RdapConcurrency: 4
 DnsRate: 20
 WhoisRate: 2

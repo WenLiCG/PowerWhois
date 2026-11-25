@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"typonamer/config"
+	"typonamer/lookup/lookuperror"
 )
 
 func TestAnonymousLookupsLeaveCapacity(t *testing.T) {
@@ -81,5 +84,17 @@ func TestResponseBoundaries(t *testing.T) {
 	if resp, err := client.Do(req); err == nil {
 		resp.Body.Close()
 		t.Fatal("ignored timeout")
+	}
+}
+
+func TestSOCKS5RequiresConfiguredHostAndPort(t *testing.T) {
+	for _, cfg := range []config.Config{
+		{SocketProxyHost: "  ", SocketProxyPort: 1080},
+		{SocketProxyHost: "127.0.0.1", SocketProxyPort: 0},
+		{SocketProxyHost: "::1", SocketProxyPort: 65536},
+	} {
+		if _, err := SOCKS5Dialer(cfg); !errors.Is(err, lookuperror.ErrorProxyNotConfigured) {
+			t.Fatalf("invalid endpoint accepted: %v", err)
+		}
 	}
 }

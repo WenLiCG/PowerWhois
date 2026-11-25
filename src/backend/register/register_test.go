@@ -133,6 +133,14 @@ func TestRegistrationPersistsIntentAndBlocksDuplicateSubmission(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("mock registrar never received request")
 	}
+	// A settings save keeps the occupied slot. An expiring wait never reserves a domain.
+	SetupLimiter()
+	waitCtx, stopWait := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stopWait()
+	queued, queueErr := RegisterContext(waitCtx, "queued.net", "fixture")
+	if queueErr != errNotSubmitted || queued.RegisterStatus != "failed" || queued.AuditID != "" || calls.Load() != 2 {
+		t.Fatalf("queued registration acquired a guard or reached the registrar: %+v, %v", queued, queueErr)
+	}
 	cancel()
 	select {
 	case <-finished:

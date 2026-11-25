@@ -110,6 +110,9 @@ def main():
             else:
                 raise AssertionError("backend startup timeout")
             assert request("/healthz", raw=True) == b"ok"
+            contender = start([str(scratch / "typonamer")], stdout=log)
+            assert contender.wait(timeout=10) > 0, "second worker must report startup failure"
+            assert request("/healthz", raw=True) == b"ok"
             domains = ["taken.com", "missing.com", "broken.com", "slow.com"]
             body = {"domains": domains, "mode": "Fixture", "concurrency": 4, "timeout": 1, "retries": 0}
             expected = ["registered", "not_found", "error", "timeout"]

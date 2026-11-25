@@ -19,11 +19,10 @@ import (
 	"typonamer/utils"
 
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/zh-five/golimit"
 )
 
 var limiterMu sync.RWMutex
-var limiterList = map[string]*golimit.GoLimit{}
+var limiterList map[string]chan struct{}
 var auditStore *redis.Client
 var errNotSubmitted = errors.New("管理员会话已结束，域名未提交")
 
@@ -41,12 +40,17 @@ func init() {
 func SetupLimiter() {
 	limiterMu.Lock()
 	defer limiterMu.Unlock()
-	limiterList = map[string]*golimit.GoLimit{}
+	next := make(map[string]chan struct{})
 	cfg := config.GetConfig()
 
 	for _, api := range cfg.RegisterApis {
-		limiterList[api.ApiName] = golimit.NewGoLimit(uint(api.ConcurrencyLimit))
+		slots := limiterList[api.ApiName]
+		if slots == nil || cap(slots) != api.ConcurrencyLimit {
+			slots = make(chan struct{}, api.ConcurrencyLimit)
+		}
+		next[api.ApiName] = slots
 	}
+	limiterList = next
 }
 
 func Register(domain string, registerType string) (RegisterInfo, error) {
@@ -96,6 +100,21 @@ func RegisterForSession(ctx context.Context, domain string, registerType string,
 	if auditStore == nil {
 		return registerInfo, fmt.Errorf("registration audit storage unavailable")
 	}
+	// A queued request must not outlive its ten-minute duplicate guard.
+	limiterMu.RLock()
+	slots := limiterList[registerType]
+	limiterMu.RUnlock()
+	if slots == nil {
+		return registerInfo, fmt.Errorf("registration provider is unavailable")
+	}
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	case <-ctx.Done():
+		registerInfo.RegisterStatus = constant.RegisterStatusFailed
+		registerInfo.RawResponse = errNotSubmitted.Error()
+		return registerInfo, errNotSubmitted
+	}
 	id := uuid.NewString()
 	guard := fmt.Sprintf("powerwhois:registration-guard:%x", sha256.Sum256([]byte(domain)))
 	accepted, auditErr := auditStore.SetNX(ctx, guard, id, 10*time.Minute).Result()
@@ -136,44 +155,17 @@ func RegisterForSession(ctx context.Context, domain string, registerType string,
 		}
 	}()
 
-	var response string
-	var err error
-	submit := func() {
-		requestCtx := ctx
-		if maySubmit != nil {
-			if ctx.Err() != nil || !maySubmit() {
-				err = errNotSubmitted
-				return
-			}
-			// An already authorized request must finish even if the browser disconnects.
-			requestCtx = context.WithoutCancel(ctx)
-		}
-		response, err = sendRegisterRequest(requestCtx, apiUrl, id)
-	}
-
-	limiterMu.RLock()
-	limiter, hasLimiter := limiterList[apiInfo.ApiName]
-	limiterMu.RUnlock()
-	if hasLimiter {
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		limiter.Do(func() {
-			defer wg.Done()
-			submit()
-		})
-
-		wg.Wait()
-	} else {
-		submit()
-	}
-
-	if err == errNotSubmitted {
+	requestCtx := ctx
+	if ctx.Err() != nil || (maySubmit != nil && !maySubmit()) {
 		registerInfo.RegisterStatus = constant.RegisterStatusFailed
-		registerInfo.RawResponse = err.Error()
-		return registerInfo, err
+		registerInfo.RawResponse = errNotSubmitted.Error()
+		return registerInfo, errNotSubmitted
 	}
+	if maySubmit != nil {
+		// An already authorized request must finish even if the browser disconnects.
+		requestCtx = context.WithoutCancel(ctx)
+	}
+	response, err := sendRegisterRequest(requestCtx, apiUrl, id)
 
 	if err != nil {
 		log.Errorf("Request register api %s response error: %v", apiInfo.ApiName, err)

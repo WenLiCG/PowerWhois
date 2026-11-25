@@ -64,13 +64,13 @@ func TestWebSocketAuthorizationAndLimits(t *testing.T) {
 		}
 	}
 	send("register", Register{Domains: []string{"example.com"}, Confirmed: true})
-	expect("webCheckError", "需要管理员")
+	expect("registerError", "需要管理员")
 	send("webCheck", WebCheck{QueryType: "whoisQueryWithProxy", Domains: []string{"example.com"}})
 	expect("webCheckDomains", "example.com")
 	expect("webCheckResult", "需要管理员登录")
 	send("adminAuth", strings.Repeat("query-only-token", 4))
 	send("register", Register{Confirmed: true})
-	expect("webCheckError", "需要管理员")
+	expect("registerError", "需要管理员")
 	token, e := generateToken("ws-fixture")
 	if e != nil {
 		t.Fatal(e)

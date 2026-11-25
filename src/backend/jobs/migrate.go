@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/redis/go-redis/v9"
+	"reflect"
 	"sort"
 	"strconv"
 	"typonamer/constant"
@@ -35,9 +36,6 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 		var d oldInput
 		if err = json.Unmarshal([]byte(raw), &d); err != nil {
 			return fmt.Errorf("invalid legacy pending data")
-		}
-		if _, err = utils.TrimAndGetMainDomain(d.Domain); err != nil {
-			return fmt.Errorf("invalid legacy domain; retain backup and repair before migration")
 		}
 		inputs[d.Domain] = d.Order
 	}
@@ -76,6 +74,9 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 				default:
 					r.Status = "error"
 				}
+				if old, ok := previous[r.Domain]; ok && !reflect.DeepEqual(old, r) {
+					return fmt.Errorf("legacy records disagree for one domain; reconcile a backup before migration")
+				}
 				previous[r.Domain] = r
 			}
 			if len(rows) < 1000 {
@@ -96,6 +97,19 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 		}
 		return inputs[names[i]] < inputs[names[j]]
 	})
+	// Task inputs are canonical and unique. Never assign a legacy result to
+	// another input by guessing which of two historical aliases should win.
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		domain, e := utils.TrimAndGetMainDomain(name)
+		if e != nil {
+			return fmt.Errorf("invalid legacy domain; retain backup and repair before migration")
+		}
+		if seen[domain] {
+			return fmt.Errorf("legacy domains normalize to the same name %q; reconcile a backup before migration", domain)
+		}
+		seen[domain] = true
+	}
 	mode, e := s.Redis.Get(ctx, constant.BulkCheckQueryTypeRedisKey).Result()
 	if e != nil && e != redis.Nil {
 		return e
@@ -117,6 +131,7 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 			continue
 		}
 		r.Order = i
+		r.Domain, _ = utils.TrimAndGetMainDomain(d)
 		raw, _ := json.Marshal(r)
 		_, err = s.Redis.Eval(ctx, resultScript, []string{s.Prefix + "worker", s.key(t.ID, "results"), s.key(t.ID, "counts")}, s.owner, strconv.Itoa(i), raw, r.Status).Result()
 		if err != nil {

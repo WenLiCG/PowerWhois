@@ -17,7 +17,7 @@ jobs:
           cache: npm
           cache-dependency-path: src/frontend/package-lock.json
       - run: sudo apt-get update && sudo apt-get install -y redis-server
-      - run: go test -race ./...
+      - run: go vet ./... && go test -race ./...
         working-directory: src/backend
       - run: |
           mkdir -p ../../.work
@@ -26,5 +26,29 @@ jobs:
           go build -o ../../.work/powerwhois-mcp ./cmd/powerwhois-mcp
         working-directory: src/backend
       - run: python3 tools/acceptance.py
+      - run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          govulncheck ./...
+        working-directory: src/backend
       - run: npm ci && npm test && npm run lint && npm run build && npm audit --omit=dev
         working-directory: src/frontend
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start a fresh installation and check the gateway
+        working-directory: deploy
+        run: |
+          export POWERWHOIS_ADMIN_USER=smoke
+          export POWERWHOIS_ADMIN_PASSWORD="$(openssl rand -hex 16)"
+          export POWERWHOIS_JWT_SECRET="$(openssl rand -hex 32)"
+          export POWERWHOIS_QUERY_TOKEN="$(openssl rand -hex 32)"
+          export POWERWHOIS_CONFIG_DIR=./runtime/backend
+          sudo install -d -o 10001 -g 10001 -m 750 "$POWERWHOIS_CONFIG_DIR"
+          sudo install -o 10001 -g 10001 -m 600 backend/config.yaml "$POWERWHOIS_CONFIG_DIR/config.yaml"
+          docker compose config --quiet
+          docker compose up -d --build
+          test "$(curl -fsS --retry 20 --retry-all-errors --retry-delay 2 http://127.0.0.1:8080/healthz)" = ok
+          curl -fsS http://127.0.0.1:8080/ | grep -qi PowerWhois
+          curl -fsS http://127.0.0.1:8080/api/web/setting | jq -e '.webCheckDomainLimit > 0'

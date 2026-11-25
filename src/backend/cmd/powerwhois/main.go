@@ -67,7 +67,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 	domain := fs.String("domain", "", "typo domain")
 	types := fs.String("types", "skipLetter", "comma-separated typo types")
 	tlds := fs.String("tlds", "", "comma-separated suffixes")
-	concurrency := fs.Int("concurrency", 15, "workers")
+	concurrency := fs.Int("concurrency", 0, "workers (default set by server)")
 	timeout := fs.Int("timeout", 30, "seconds per domain")
 	retries := fs.Int("retries", 0, "retry count")
 	offset := fs.Int("offset", 0, "input-index cursor")
@@ -123,7 +123,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 		if command == "tasks" {
 			path = "/tasks"
 		}
-		body = map[string]interface{}{"domains": domains, "mode": *mode, "concurrency": *concurrency, "timeout": *timeout, "retries": *retries}
+		params := map[string]interface{}{"domains": domains, "mode": *mode, "timeout": *timeout, "retries": *retries}
+		if *concurrency != 0 {
+			params["concurrency"] = *concurrency
+		}
+		body = params
 	case command == "typo":
 		method = "POST"
 		path = "/typo"

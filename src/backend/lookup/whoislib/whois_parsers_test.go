@@ -4,7 +4,10 @@ import (
 	"errors"
 	"regexp"
 	"testing"
+
+	"github.com/dromara/carbon/v2"
 	"typonamer/lookup/lookuperror"
+	"typonamer/utils"
 )
 
 func TestOrdinalDatesDoNotCorruptMonthNames(t *testing.T) {
@@ -24,6 +27,25 @@ func TestReservedResponsesAreNotAbsence(t *testing.T) {
 		_, e = ParseWhoisResponse("No Data Found", "test."+tld, WhoisMatchers[tld])
 		if e == nil || e.Error() != "domain not found" {
 			t.Fatalf("legitimate absence no longer recognized: %v", e)
+		}
+	}
+}
+
+func TestCNRegistrationDatesIgnoreUnavailableProcessTimezone(t *testing.T) {
+	carbon.SetDefault(carbon.Default{Timezone: "Unavailable/Zone"})
+	t.Cleanup(func() { carbon.SetDefault(carbon.Default{Timezone: carbon.Local}) })
+	for _, suffix := range []string{"cn", "中国", "中國"} {
+		domain, err := utils.TrimAndGetMainDomain("example." + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tld, _, err := utils.GetTld(domain)
+		if err != nil || WhoisSupportedTlds[tld] == "" {
+			t.Fatalf("no registry for %s: %v", domain, err)
+		}
+		info, err := ParseWhoisResponse("Registration Time: 2026-01-02 15:04:05\nExpiration Time: unavailable", domain, WhoisMatchers[tld])
+		if err != nil || info.CreationDate != "2026-01-02 15:04:05" || info.ExpiryDate != "" {
+			t.Fatalf("dates for %s: %+v, %v", domain, info, err)
 		}
 	}
 }

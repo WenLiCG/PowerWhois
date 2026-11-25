@@ -8,6 +8,28 @@ import (
 	"testing"
 )
 
+func TestShippedConfigFiles(t *testing.T) {
+	original, originalPath := GetConfig(), configFile
+	t.Cleanup(func() { mu.Lock(); config, configFile = original, originalPath; mu.Unlock() })
+	t.Setenv("POWERWHOIS_ADMIN_USER", "fixture")
+	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", strings.Repeat("a", 12))
+	t.Setenv("POWERWHOIS_JWT_SECRET", strings.Repeat("b", 32))
+	for _, path := range []string{"../config.yaml", "../../../deploy/backend/config.yaml"} {
+		t.Run(path, func(t *testing.T) {
+			if err := Load(path); err != nil {
+				t.Fatal(err)
+			}
+			c := GetConfig()
+			if c.WebCheckConcurrencyLimit != 15 || c.DnsConcurrency != 15 || c.WhoisConcurrency != 15 {
+				t.Error("shipped config overrides the documented concurrency defaults")
+			}
+			if c.SocketProxyHost != "" || len(c.RegisterApis) != 0 || len(c.WhoisApis) != 0 {
+				t.Error("fresh installation should have no third-party provider configured")
+			}
+		})
+	}
+}
+
 func TestSafeConfigRoundTrip(t *testing.T) {
 	original, originalPath := GetConfig(), configFile
 	t.Cleanup(func() { mu.Lock(); config, configFile = original, originalPath; mu.Unlock() })

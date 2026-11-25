@@ -3,12 +3,12 @@ package rdaplib
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"typonamer/constant"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/utils"
 
-	"github.com/dromara/carbon/v2"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
@@ -67,25 +67,21 @@ func getRegistrar(responseEntities []rdap.Entity) string {
 	return ""
 }
 
-// getDomainDates takes the response events and returns the creation and expiry dates of the domain.
-// It loops through the events and checks if the event action is "registration" or "expiration".
-// If the event action is "registration", it sets the creation date to the date of the event.
-// If the event action is "expiration", it sets the expiry date to the date of the event.
-// The dates are parsed using the Carbon library and set to UTC timezone.
-// The function returns the creation and expiry dates as a tuple.
-func getDomainDates(responseEvents []rdap.Event) (string, string) {
-	var creationDate, expiryDate string
-	for _, event := range responseEvents {
+// RDAP eventDate is an RFC 3339 timestamp. Display each valid event in UTC.
+func getDomainDates(events []rdap.Event) (creation, expiry string) {
+	for _, event := range events {
+		date, err := time.Parse(time.RFC3339, event.Date)
+		if err != nil {
+			continue
+		}
 		switch strings.ToLower(event.Action) {
 		case "registration":
-			// Set the creation date to the date of the event
-			creationDate = carbon.SetTimezone(carbon.UTC).Parse(event.Date).ToDateTimeString()
+			creation = date.UTC().Format(time.DateTime)
 		case "expiration":
-			// Set the expiry date to the date of the event
-			expiryDate = carbon.SetTimezone(carbon.UTC).Parse(event.Date).ToDateTimeString()
+			expiry = date.UTC().Format(time.DateTime)
 		}
 	}
-	return creationDate, expiryDate
+	return creation, expiry
 }
 
 // getNameServer takes the response nameservers and returns the nameservers as a slice of strings.
@@ -107,11 +103,11 @@ func getNameServer(responseNameservers []rdap.Nameserver) []string {
 // The function returns the raw response in whois style.
 func getWhoisStyleRawResponse(response *rdap.Response) string {
 	whoisStyleResponse := response.ToWhoisStyleResponse()
-	rawResponse := ""
+	var rawResponse strings.Builder
 	for key, value := range whoisStyleResponse.Data {
 		for _, line := range value {
-			rawResponse += fmt.Sprintf("%s: %s\n", key, line)
+			fmt.Fprintf(&rawResponse, "%s: %s\n", key, line)
 		}
 	}
-	return rawResponse
+	return rawResponse.String()
 }

@@ -21,19 +21,18 @@ install -m 600 .env.example .env
 ${EDITOR:-vi} .env
 ```
 
-Set all four values in `.env`. Choose an administrator username and a password of at least 12 characters. Generate independent random values of at least 32 characters for `POWERWHOIS_JWT_SECRET` and `POWERWHOIS_QUERY_TOKEN`. Keep `.env` outside version control.
+Leave the fresh-install configuration directory at `./runtime/backend` and set the four credentials in `.env`. Choose an administrator username and a password of at least 12 characters. Generate independent random values of at least 32 characters for `POWERWHOIS_JWT_SECRET` and `POWERWHOIS_QUERY_TOKEN`. Keep `.env` outside version control.
 
 ```sh
-sudo chown 10001:10001 backend backend/config.yaml
-sudo chmod 750 backend
-sudo chmod 600 backend/config.yaml
+sudo install -d -o 10001 -g 10001 -m 750 runtime/backend
+sudo test ! -e runtime/backend/config.yaml && sudo install -o 10001 -g 10001 -m 600 backend/config.yaml runtime/backend/config.yaml
 docker compose config --quiet
 docker compose up -d --build
 docker compose ps
-curl -fsS --retry 12 --retry-connrefused --retry-delay 2 http://127.0.0.1:8080/api/web/setting
+curl -fsS --retry 12 --retry-connrefused --retry-delay 2 http://127.0.0.1:8080/healthz
 ```
 
-The Compose stack builds the backend and Web UI from source. UID 10001 needs write access to the configuration directory because the settings page replaces the file atomically. Redis persists task data under `deploy/redis/redisdata`.
+The Compose stack builds the backend and Web UI from source. UID 10001 needs write access to the configuration directory because the settings page replaces the file atomically. Redis persists task data under `deploy/redis/redisdata`. Existing installations without `POWERWHOIS_CONFIG_DIR` still use `deploy/backend`. Preserve that directory and the existing environment file during upgrades. For a fresh install, configure a SOCKS server or registrar in Settings before selecting it.
 
 Open `http://127.0.0.1:8080` and sign in with the administrator credentials. The port is bound to the host loopback interface. For a remote host, run `ssh -N -L 8080:127.0.0.1:8080 user@server` from your computer and open the same local URL. Use `docker compose logs --tail 100 typonamer caddy redis` to check startup.
 
@@ -43,7 +42,7 @@ On Linux, install Go 1.27.4, Node.js 24, npm, make and Redis. From the repositor
 
 ## Documentation
 
-[Review and feature checklist](docs/REVIEW.md) · [CLI/API/MCP usage and permissions](docs/USAGE.md) · [Test report](docs/TEST-REPORT.md) · [OpenAPI](src/backend/api/openapi.json)
+[Current review, verification and upgrade notes](HANDOFF.md) · [Review and feature checklist](docs/REVIEW.md) · [CLI/API/MCP usage and permissions](docs/USAGE.md) · [Test report](docs/TEST-REPORT.md) · [OpenAPI](src/backend/api/openapi.json)
 
 ![Batch workspace](docs/screenshots/batch-desktop.jpg)
 

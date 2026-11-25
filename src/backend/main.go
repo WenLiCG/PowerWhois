@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -53,27 +54,31 @@ func init() {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	path := os.Getenv("POWERWHOIS_CONFIG")
 	if path == "" {
 		exe, _ := os.Executable()
 		path = filepath.Join(filepath.Dir(exe), "config.yaml")
 	}
 	if err := config.Load(path); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 	register.SetupLimiter()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	r, err := database.GetRedis()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 	defer r.Close()
 	if err := api.InitAuth(ctx, r); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot load administrator sessions:", err)
-		os.Exit(1)
+		return fmt.Errorf("cannot load administrator sessions: %w", err)
 	}
 	register.SetAuditStore(r)
 	scheduler.Init(ctx, r)
@@ -122,34 +127,31 @@ func main() {
 	app.Route("/api", api.ApiRoute, "api.")
 	if webRoot := os.Getenv("POWERWHOIS_WEB_ROOT"); webRoot != "" {
 		if err := api.ServeWeb(app, webRoot); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return err
 		}
 	}
 
 	// ---------- Start Server ----------
-	workerDone := make(chan struct{})
+	workerDone := make(chan error, 1)
 	go func() {
-		defer close(workerDone)
-		if err := scheduler.Tasks.Run(ctx); err != nil {
-			log.Error("Task worker stopped: ", err)
+		err := scheduler.Tasks.Run(ctx)
+		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+			err = nil
 		}
+		workerDone <- err
 		stop()
 	}()
 	select {
 	case <-scheduler.Tasks.Ready:
 	case <-ctx.Done():
-		<-workerDone
-		return
+		return <-workerDone
 	}
 	go func() { <-ctx.Done(); app.Shutdown() }()
 	address := os.Getenv("POWERWHOIS_LISTEN")
 	if address == "" {
 		address = listenPort
 	}
-	if err := app.Listen(address); err != nil {
-		log.Error("HTTP server stopped: ", err)
-	}
+	listenErr := app.Listen(address)
 	stop()
-	<-workerDone
+	return errors.Join(listenErr, <-workerDone)
 }

@@ -54,3 +54,27 @@ func TestLegacyMigrationPreservesOriginalAndIsRepeatable(t *testing.T) {
 		t.Fatal("migration mutated kept results")
 	}
 }
+
+func TestLegacyAliasesCannotMisalignResults(t *testing.T) {
+	ctx := context.Background()
+	r := testutil.Redis(t)
+	s := New(r, "aliases:")
+	pending := `{"Domain":"Example.COM","Order":0}`
+	r.HSet(ctx, constant.BulkCheckUniqueDomainsRedisKey, "Example.COM", pending)
+	raw, _ := json.Marshal(lookupinfo.QueryResult{Domain: "example.com", Order: 1, RegisterStatus: "Taken"})
+	r.RPush(ctx, constant.BulkCheckTakenResultRedisKey, raw)
+	if err := s.ImportLegacy(ctx); err == nil {
+		t.Fatal("ambiguous legacy input was published")
+	}
+	if r.Exists(ctx, s.Prefix+"tasks", s.Prefix+"legacy-imported").Val() != 0 ||
+		r.HGet(ctx, constant.BulkCheckUniqueDomainsRedisKey, "Example.COM").Val() != pending ||
+		r.LIndex(ctx, constant.BulkCheckTakenResultRedisKey, 0).Val() != string(raw) {
+		t.Fatal("ambiguous migration changed the source or published a task")
+	}
+	r.Del(ctx, constant.BulkCheckUniqueDomainsRedisKey)
+	other, _ := json.Marshal(lookupinfo.QueryResult{Domain: "example.com", Order: 1, RegisterStatus: "Free"})
+	r.RPush(ctx, constant.BulkCheckFreeResultRedisKey, other)
+	if err := s.ImportLegacy(ctx); err == nil || r.Exists(ctx, s.Prefix+"tasks").Val() != 0 {
+		t.Fatal("conflicting historical evidence was silently merged")
+	}
+}

@@ -17,7 +17,7 @@ services:
       target: backend
     volumes:
       # Mount the directory so atomic config replacement works.
-      - ./backend:/etc/powerwhois
+      - ${POWERWHOIS_CONFIG_DIR:-./backend}:/etc/powerwhois
       - powerwhois-data:/var/lib/powerwhois
     environment:
       TZ: Asia/Shanghai

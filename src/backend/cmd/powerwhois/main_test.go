@@ -29,8 +29,8 @@ func TestCLIContract(t *testing.T) {
 			if len(body.Domains) != 2 {
 				t.Errorf("stdin parse: %v", body.Domains)
 			}
-			if body.Concurrency != 15 {
-				t.Errorf("default concurrency: %d", body.Concurrency)
+			if body.Concurrency != 0 {
+				t.Errorf("CLI overrode server default concurrency: %d", body.Concurrency)
 			}
 			if r.Header.Get("Idempotency-Key") != "reconnect" {
 				t.Error("lost idempotency key")

@@ -9,20 +9,20 @@
             v-model="domainInput"
             type="textarea"
             placeholder="请输入查询域名, 每行一个域名"
-            :disable="webStore.unCheckDomains > 0"
+            :disable="busy"
         />
     </div>
 
     <q-separator class="q-mt-md" />
 
     <div>
-        <WhoisSelection v-model:queryType="queryType" :disable="webStore.unCheckDomains > 0" />
+        <WhoisSelection v-model:queryType="queryType" :disable="busy" />
     </div>
 
-    <q-separator v-if="tokenStore.token" />
+    <q-separator v-if="tokenStore.token && settingStore.registerApis.length" />
 
-    <div v-if="tokenStore.token">
-        <RegisterSelection v-model:registerType="registerType" :disable="webStore.unCheckDomains > 0" />
+    <div v-if="tokenStore.token && settingStore.registerApis.length">
+        <RegisterSelection v-model:registerType="registerType" :disable="busy" />
     </div>
 
     <q-separator class="q-mb-md" />
@@ -35,7 +35,7 @@
             class="full-width"
             :loading="webCheckDomains.length > 0 && webStore.unCheckDomains > 0"
             :percentage="handleProgress"
-            :disable="webStore.unCheckDomains > 0"
+            :disable="busy"
             @click="queryDomains()"
         >
             <template v-slot:loading>
@@ -74,6 +74,7 @@ const webCheckDomains = ref([]);
 
 const tokenStore = useTokenStore();
 const webStore = useWebStore();
+const busy = computed(() => webStore.unCheckDomains > 0 || webStore.unRegisterDomains > 0);
 const settingStore = useSettingStore();
 
 const domainInput = ref(null);
@@ -103,6 +104,7 @@ function isWebsocketConnected() {
 }
 
 function queryDomains() {
+    if (busy.value) return;
     if (domainInput.value) {
         if (isWebsocketConnected()) {
             let inputDomainList = domainInput.value.split("\n").filter((line) => line.trim() !== "");
