@@ -14,7 +14,7 @@
 
 **本轮实测。** Linux/WSL 使用 Go 1.27.4 通过 `go vet ./...`、全包 race 测试、模块校验和三个程序的构建。常规套件通过 42 个顶层用例，另在独立 Redis 上补跑全部 3 个外部附件用例。全量 TXT 有 563,807 项，逐项核对 554,867 个有效唯一结果，共 555 页。Typo 命中全部 2,234 条有效参考。Node 24 的 15 项测试（含原始附件）、ESLint、生产构建以及完整和生产 npm audit 均通过。前端为 JavaScript，项目没有单独的 TypeScript 检查脚本。govulncheck 的可达调用与导入包结果均为零，依赖模块层仍报告未导入的 OpenPGP 公告 GO-2026-5932。
 
-实际进程通过 API、CLI、stdio/HTTP MCP、并发幂等、暂停/继续/取消、重启和 SIGKILL 后恢复验收。Chromium 对生产 SPA 和本地后端完成登录、设置、即时查询、Typo、上传、任务控制、详情、下载和退出，覆盖桌面及 390/320px 窄屏。注册测试仅使用本地模拟服务。另用真实网络查询 `example.com`，DNS 与 RDAP 均返回已注册。本轮 GitHub 检查包含独立的全新 Compose 构建和网关烟测，运行状态见对应提交的 Checks。
+实际进程通过 API、CLI、stdio/HTTP MCP、并发幂等、暂停/继续/取消、重启和 SIGKILL 后恢复验收。Chromium 对生产 SPA 和本地后端完成登录、设置、即时查询、Typo、上传、任务控制、详情、下载和退出，覆盖桌面及 390/320px 窄屏。注册测试仅使用本地模拟服务。另用真实网络查询 `example.com`，DNS 与 RDAP 均返回已注册。GitHub 的独立 Linux runner 已从源码构建并启动全新 Compose 栈，经 Caddy 验证网页、设置 API 和 Redis 健康探针。本地还验证了两种配置挂载路径、Caddy 与 Nginx 的配置，以及 Windows CLI/MCP 交叉构建和帮助入口。[Compose 验收记录](https://github.com/WenLiCG/PowerWhois/actions/runs/45561447309/job/139025867592)
 
 现场升级前应验证目标机的备份与恢复，另行验收商业代理、注册商沙箱、实际移动设备以及所用 AI 客户端。本轮未部署到生产 VPS。
 
