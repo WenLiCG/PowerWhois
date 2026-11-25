@@ -21,6 +21,8 @@
 
 升级时连同前端一起部署。已有任务无需转换。现场 VPS 部署、商业 SOCKS、付费下单、物理手机及云端 AI 账号本轮均未验收。大量历史查询原文仍占用 Redis 与备份空间。继续使用原有备份和回滚流程。[部署指南](docs/DEPLOYMENT.md)
 
+审查改动已由 PR #14 合入 main（`1e9bb9b`），合并提交的 verify 和 compose 均通过。该次运行提示旧版 checkout/setup Action 使用已弃用的 Node 20，后续工作流已改用声明 Node 24 的官方版本。项目构建仍使用 Go 1.27.4 和 Node 24。[合并记录](https://github.com/WenLiCG/PowerWhois/pull/14) · [主分支验收](https://github.com/WenLiCG/PowerWhois/actions/runs/45631087926)
+
 ## 历史交付 · 2026-11-25 审查与体验优化
 
 前序基线为 GitHub `main@4a646fc`（PR #13 合并提交）。本轮在通读全库源码、测试、部署配置与交接历史的基础上完成端到端审查、根因修复、性能与安全加固、Web UI/UX 打磨及全链路实测。架构保持单租户 Go/Fiber + Redis + Vue/Quasar，Web、CLI、HTTP API（`/api/v1`）与 MCP 共用同一查询核心与持久化任务库，无新增第三方依赖。本节以下按日期保留历史版本的交接记录。
