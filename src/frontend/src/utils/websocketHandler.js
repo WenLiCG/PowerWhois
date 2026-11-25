@@ -46,6 +46,7 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
                 break;
             case "webCheckStopped":
                 webStore.stopQueries();
+                Notify.create({ position: "top", type: "info", message: "已停止查询，已完成的结果已保留" });
                 break;
             case "typoResult":
                 webStore.setCheckingDomains(msgObj.data.domains, "typoCheck", msgObj.data.typoType);
@@ -63,7 +64,7 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
             case "bulkCheckError":
             case "webCheckError":
             case "typoCheckError":
-                webStore.setIsErrorRecheck(false);
+                if (msgObj.event !== "bulkCheckError") webStore.pendingQuery = null;
                 Notify.create({
                     position: "top",
                     type: "negative",
@@ -76,3 +77,19 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
         }
     }
 });
+
+export function submitQuery(event, data, retry = false) {
+    if (webStore.busy) return;
+    if (send(JSON.stringify({ event, data }), false)) {
+        webStore.pendingQuery = retry ? "retry" : event;
+    } else {
+        Notify.create({ position: "top", type: "warning", message: "连接已断开，请重连后再提交查询。" });
+    }
+}
+
+export function stopQuery() {
+    if (webStore.pendingQuery || !webStore.unCheckDomains) return;
+    if (send(JSON.stringify({ event: "webCheckStop", data: null }), false)) {
+        webStore.pendingQuery = "stop";
+    }
+}

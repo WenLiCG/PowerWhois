@@ -49,6 +49,12 @@ type Task struct {
 	UpdatedAt    string         `json:"updatedAt"`
 	Error        string         `json:"error,omitempty"`
 }
+
+func (t *Task) setState(state string) {
+	t.State = state
+	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+}
+
 type Page struct {
 	Items      []lookupinfo.QueryResult `json:"items"`
 	Offset     int                      `json:"offset"`
@@ -266,51 +272,54 @@ func (s *Store) Results(ctx context.Context, id string, offset, limit int, inclu
 		return p, nil
 	}
 	end := offset + min(limit, t.Total-offset)
+	const pageBudget = 8 * 1024 * 1024
+	const recordLimit = 16 * 1024 * 1024
+	summary := len(includeRaw) > 0 && !includeRaw[0]
+	maxRaw := recordLimit
+	if summary {
+		// A legacy record can exceed the raw limit and still have a small summary.
+		maxRaw = 0
+	}
 	used := 1024
-	const chunkSize = 100
-	for base := offset; base < end; base += chunkSize {
-		chunkEnd := min(base+chunkSize, end)
-		fields := make([]string, chunkEnd-base)
-		for i := range fields {
-			fields[i] = strconv.Itoa(base + i)
-		}
-		vals, e := s.Redis.HMGet(ctx, s.key(id, "results"), fields...).Result()
+	for base := offset; base < end; {
+		vals, e := s.Redis.Eval(ctx, resultChunk, []string{s.key(id, "results")}, base, min(base+100, end), pageBudget, maxRaw).Slice()
 		if e != nil {
 			return p, e
 		}
-		stoppedAtBudget := false
 		for i, rawVal := range vals {
 			if rawVal == nil {
 				continue
 			}
 			strVal, ok := rawVal.(string)
 			if !ok {
-				continue
+				// The script returned the size in place of an oversized raw record.
+				if len(p.Items) == 0 {
+					return p, ErrResultTooLarge
+				}
+				p.NextOffset = base + i
+				return p, nil
 			}
 			data := []byte(strVal)
 			var r lookupinfo.QueryResult
 			if e = json.Unmarshal(data, &r); e != nil {
 				return p, e
 			}
-			if len(includeRaw) > 0 && !includeRaw[0] {
+			if summary {
 				r.RawResponseAvailable = r.RawResponse != ""
 				r.RawResponse = ""
 				data, _ = json.Marshal(r)
 			}
-			if used+len(data) > 8*1024*1024 && len(p.Items) > 0 {
-				end = base + i
-				stoppedAtBudget = true
-				break
+			if used+len(data) > pageBudget && len(p.Items) > 0 {
+				p.NextOffset = base + i
+				return p, nil
 			}
-			if len(data) > 16*1024*1024 {
+			if len(data) > recordLimit {
 				return p, ErrResultTooLarge
 			}
 			p.Items = append(p.Items, r)
 			used += len(data)
 		}
-		if stoppedAtBudget {
-			break
-		}
+		base += len(vals)
 	}
 	if end < t.Total {
 		p.NextOffset = end
@@ -334,7 +343,7 @@ func (s *Store) Control(ctx context.Context, id, action string) (Task, error) {
 		if t.State != "running" && t.State != "queued" {
 			return t, ErrConflict
 		}
-		t.State = "paused"
+		t.setState("paused")
 	case "resume":
 		if t.State == "running" || t.State == "queued" {
 			return t, nil
@@ -342,7 +351,7 @@ func (s *Store) Control(ctx context.Context, id, action string) (Task, error) {
 		if t.State != "paused" && t.State != "failed" {
 			return t, ErrConflict
 		}
-		t.State = "queued"
+		t.setState("queued")
 		t.Error = ""
 	case "cancel":
 		if t.State == "canceled" {
@@ -351,7 +360,7 @@ func (s *Store) Control(ctx context.Context, id, action string) (Task, error) {
 		if t.State == "completed" {
 			return t, ErrConflict
 		}
-		t.State = "canceled"
+		t.setState("canceled")
 	default:
 		return t, fmt.Errorf("unknown task action")
 	}
@@ -364,7 +373,6 @@ func (s *Store) Control(ctx context.Context, id, action string) (Task, error) {
 	return t, nil
 }
 func (s *Store) save(ctx context.Context, t Task) error {
-	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	t.Completed = 0
 	t.Counts = nil
 	data, err := json.Marshal(t)
@@ -452,7 +460,7 @@ func (s *Store) Run(ctx context.Context) error {
 			return e
 		}
 		if t.State == "running" {
-			t.State = "queued"
+			t.setState("queued")
 		}
 		// Reconcile the queue from durable metadata after an interrupted state write.
 		if e = s.save(ctx, t); e != nil {
@@ -503,7 +511,7 @@ func (s *Store) runTask(parent context.Context, id string) error {
 		s.mu.Unlock()
 		return nil
 	}
-	t.State = "running"
+	t.setState("running")
 	if err = s.save(parent, t); err != nil {
 		s.mu.Unlock()
 		return err
@@ -608,13 +616,13 @@ feed:
 	}
 	select {
 	case err = <-failures:
-		t.State = "failed"
+		t.setState("failed")
 		t.Error = "task storage or worker failed; completed results retained"
 	default:
 		if t.Completed == t.Total {
-			t.State = "completed"
+			t.setState("completed")
 		} else {
-			t.State = "queued"
+			t.setState("queued")
 		}
 	}
 	return s.save(parent, t)

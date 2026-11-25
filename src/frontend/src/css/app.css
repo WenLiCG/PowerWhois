@@ -74,6 +74,17 @@ h1 {
     justify-content: space-between;
     gap: 8px;
 }
+.workspace-nav-inner .q-tabs,
+.workspace-nav-inner .q-btn-dropdown .q-btn__content {
+    min-width: 0;
+}
+.workspace-nav-inner .q-btn-dropdown {
+    max-width: 40%;
+}
+.workspace-nav-inner .q-btn-dropdown .block {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .q-notifications__list--top {
     padding-top: 10px;
 }
@@ -158,6 +169,20 @@ a {
     border-radius: 8px;
 }
 @media (max-width: 600px) {
+    .workspace-nav-inner {
+        padding: 0 6px;
+        gap: 2px;
+    }
+    .workspace-nav-inner .q-tab,
+    .workspace-nav-inner .q-btn-dropdown {
+        padding: 0 8px;
+    }
+    .workspace-nav-inner .q-tab__icon {
+        display: none;
+    }
+    .workspace-nav-inner .q-tab__icon + .q-tab__label {
+        padding-left: 0;
+    }
     .workspace-header {
         padding: 16px;
         align-items: flex-start;

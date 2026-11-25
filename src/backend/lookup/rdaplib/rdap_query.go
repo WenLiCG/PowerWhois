@@ -98,13 +98,16 @@ func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (l
 }
 
 func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Response, err error) (lookupinfo.DomainInfo, error) {
-	if resp != nil {
-		for _, h := range resp.HTTP {
-			info.Source = h.URL
-			if len(h.Body) > 0 {
-				info.RawResponse = string(h.Body)
+	// The SDK tries alternate registry URLs until one answers. Evidence belongs to the final attempt.
+	if resp != nil && len(resp.HTTP) > 0 {
+		h := resp.HTTP[len(resp.HTTP)-1]
+		info.Source = h.URL
+		info.RawResponse = string(h.Body)
+		if h.Response != nil {
+			if req := h.Response.Request; req != nil && req.URL != nil {
+				info.Source = req.URL.String()
 			}
-			if h.Response != nil && h.Response.StatusCode == 429 {
+			if h.Response.StatusCode == http.StatusTooManyRequests {
 				return info, lookuperror.ErrorRateLimited
 			}
 		}
@@ -128,7 +131,7 @@ func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Respons
 	parsed := ParseRDAPResponseforDomain(d)
 	parsed.Source = info.Source
 	parsed.ViaProxy = info.ViaProxy
-	parsed.RawResponse = getWhoisStyleRawResponse(resp)
+	parsed.RawResponse = info.RawResponse
 	// A valid domain object remains registered even when all contact data is redacted.
 	return parsed, nil
 }

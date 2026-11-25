@@ -4,9 +4,9 @@
 
 保留原有网页域名查询、批量任务、Typo、代理、自定义接口和管理功能，并增加不绑定 AI 厂商的 CLI、OpenAPI HTTP API 与可选 MCP。
 
-- DNS、WHOIS/RDAP、Mixed、代理、自定义查询；结果区分已注册、未找到、未知、超时、错误，识别上游限流并自动退避。
+- DNS、WHOIS/RDAP、Mixed、代理和自定义查询均区分已注册、未找到、未知、超时与错误。国际化后缀支持 Unicode 和 Punycode。新查询的 RDAP 结果保留最后一次请求的来源和上游响应正文。
 - 网页即时查询与 Typo 查询支持输入整理去重、中途停止与续查、点击状态筛选、一键复制域名及防公式注入 CSV 导出；跨规则重复候选自动合并。
-- 批量任务有稳定 ID，支持暂停、继续、取消、重查、生命周期与到期日概览、分页和部分导出；关闭浏览器或 CLI 后仍在服务端执行。
+- 批量任务支持暂停、继续、取消、重查、分页和部分导出，关闭浏览器或 CLI 后仍在服务端执行。CLI 导出 CSV 时向标准错误输出下一页输入位置，可直接将标准输出重定向到文件。
 - Web、CLI、API、MCP 共用查询核心和批量任务库。
 - AI 查询凭据不能注册、删数据或修改管理配置；原手动注册保留在管理员 Web，并要求确认。
 - 默认只监听本机，远程使用 SSH 转发或受保护的 HTTPS 网关。
@@ -51,7 +51,7 @@ Compose 从源码构建后端和网页。后端容器使用 UID 10001，保存�
 - [测试报告及未验证事项](docs/TEST-REPORT.md)
 - [OpenAPI 3.0 文档](src/backend/api/openapi.json)；运行后 `/api/openapi.json`
 
-![批量任务界面](docs/screenshots/batch-desktop.jpg)
+![已完成的批量任务、本页筛选和 CSV 导出](docs/screenshots/batch-workspace.jpg)
 
 沿用原项目 MIT 许可，见 [LICENSE](LICENSE)。
 

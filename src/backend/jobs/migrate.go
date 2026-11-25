@@ -121,7 +121,7 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	t.State = "paused"
+	t.setState("paused")
 	if err = s.save(ctx, t); err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func (s *Store) ImportLegacy(ctx context.Context) error {
 		return err
 	}
 	if t.Completed == t.Total {
-		t.State = "completed"
+		t.setState("completed")
 	}
 	if err = s.save(ctx, t); err != nil {
 		return err

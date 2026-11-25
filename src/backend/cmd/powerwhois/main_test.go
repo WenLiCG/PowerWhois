@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,15 @@ func TestCLIContract(t *testing.T) {
 			t.Error("missing authentication")
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/tasks/exported/export" {
+			w.Header().Set("Content-Type", "text/csv")
+			offset := r.URL.Query().Get("offset")
+			if next, ok := map[string]string{"0": "37", "37": "-1", "38": "oops", "39": "39"}[offset]; ok {
+				w.Header().Set("X-Next-Offset", next)
+			}
+			w.Write([]byte("Domain\nexample.com\n"))
+			return
+		}
 		if r.URL.Path == "/api/v1/tasks/missing" {
 			w.WriteHeader(404)
 			w.Write([]byte(`{"error":{"code":"not_found","message":"task not found"}}`))
@@ -49,5 +59,21 @@ func TestCLIContract(t *testing.T) {
 	errOut.Reset()
 	if code := run([]string{"tasks", "get", "--id", "missing"}, nil, &out, &errOut); code != 4 || out.Len() != 0 || errOut.Len() == 0 {
 		t.Fatal("exit/error contract")
+	}
+	offset := "0"
+	for _, next := range []string{"37", "-1"} {
+		out.Reset()
+		errOut.Reset()
+		if code := run([]string{"tasks", "export", "--id", "exported", "--format", "csv", "--offset", offset}, nil, &out, &errOut); code != 0 || out.String() != "Domain\nexample.com\n" || errOut.String() != "nextOffset="+next+"\n" {
+			t.Fatalf("CSV or cursor differs: exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+		}
+		offset = strings.TrimPrefix(strings.TrimSpace(errOut.String()), "nextOffset=")
+	}
+	for _, bad := range []string{"38", "39", "40"} {
+		out.Reset()
+		errOut.Reset()
+		if code := run([]string{"tasks", "export", "--id", "exported", "--format", "csv", "--offset", bad}, nil, &out, &errOut); code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "cursor") {
+			t.Fatalf("unusable CSV cursor accepted at %s", bad)
+		}
 	}
 }

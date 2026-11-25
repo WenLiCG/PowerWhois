@@ -36,7 +36,9 @@
                             icon="refresh"
                             label="重查错误、超时和未知"
                             @click="requerycheckedErrorDomains()"
-                            v-if="webStore.unCheckDomains < 1 && webStore.unRegisterDomains < 1 && retryableCount > 0"
+                            v-if="retryableCount > 0"
+                            :disable="webStore.busy"
+                            :loading="webStore.pendingQuery === 'retry'"
                         />
                         <q-btn
                             unelevated
@@ -45,7 +47,7 @@
                             color="positive"
                             icon="shopping_cart_checkout"
                             :label="`注册选中 (${selectedDomains.length})`"
-                            :disable="webStore.unRegisterDomains > 0"
+                            :disable="webStore.busy"
                             @click="registerSelectedDomains()"
                             v-if="canRegister && selectedDomains.length > 0 && webStore.unCheckDomains < 1"
                         />
@@ -300,7 +302,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from "vue";
 import { useQuasar, copyToClipboard, date } from "quasar";
-import { status, send } from "src/utils/websocketHandler";
+import { status, send, submitQuery } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useWebStore } from "src/stores/webStore";
 import { useSettingStore } from "src/stores/settingStore";
@@ -498,27 +500,8 @@ function showRegisterRawResponse(data) {
 }
 
 function requerycheckedErrorDomains() {
-    if (isWebsocketConnected()) {
-        const errorDomainList = [];
-        props.domainResults.forEach((domain) => {
-            if (["Error", "Timeout", "Unknown"].includes(domain.status)) {
-                errorDomainList.push(domain.domain);
-            }
-        });
-
-        if (errorDomainList.length > 0) {
-            webStore.setIsErrorRecheck(true);
-            send(
-                JSON.stringify({
-                    event: "webCheck",
-                    data: {
-                        queryType: props.queryType,
-                        domains: errorDomainList
-                    }
-                })
-            );
-        }
-    }
+    const domains = props.domainResults.filter((row) => ["Error", "Timeout", "Unknown"].includes(row.status)).map((row) => row.domain);
+    if (domains.length) submitQuery("webCheck", { queryType: props.queryType, domains }, true);
 }
 
 function registerSelectedDomains() {
@@ -541,25 +524,33 @@ function registerSelectedDomains() {
     }
 
     if (isWebsocketConnected()) {
-        const registerDomainList = [...new Set(selectedDomains.value.map((domain) => domain.domain))];
+        const rows = [...selectedDomains.value];
+        const registerDomainList = [...new Set(rows.map((row) => row.domain))];
+        const registrar = props.registerType;
+        const resultRows = webStore.domains;
+        const token = tokenStore.token;
 
         $q.dialog({
             title: `是否确认要注册选中的 ${registerDomainList.length} 个域名？`,
-            message: `注册接口：${props.registerType}。提交可能产生注册商扣费，已发出的请求无法撤回。若中途断线，请先前往注册商后台核实订单。`,
+            message: `注册接口：${registrar}。域名：${registerDomainList.slice(0, 5).join("、")}${rows.length > 5 ? " 等" : ""}。提交可能扣费且无法撤回，断线后请先向注册商核实订单。`,
             cancel: "取消",
             ok: "确认提交注册",
             persistent: true
         }).onOk(() => {
+            if (!token || tokenStore.token !== token || webStore.busy || webStore.domains !== resultRows || !settingStore.registerApis.includes(registrar)) {
+                $q.notify({ type: "warning", message: "会话、设置或结果已变更，请重新确认注册。" });
+                return;
+            }
             const registerData = {
                 event: "register",
                 data: {
-                    registerType: props.registerType,
+                    registerType: registrar,
                     confirmed: true,
                     domains: registerDomainList
                 }
             };
             if (send(JSON.stringify(registerData), false)) {
-                webStore.setRegisteringDomains(selectedDomains.value);
+                webStore.setRegisteringDomains(rows);
             } else {
                 $q.notify({ type: "warning", message: "连接已中断，注册请求未发送。" });
             }

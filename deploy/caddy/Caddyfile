@@ -5,19 +5,25 @@
 
 :8080 {
     encode zstd gzip
-    @static {
-        path_regexp \.(ico|css|js|gif|jpg|jpeg|png|svg|woff)$
-    }
-    header @static Cache-Control max-age=5184000
-
-    @backend path /healthz /api/* /app/*
+    @backend path /healthz /api /api/* /app /app/*
     handle @backend {
         reverse_proxy typonamer:8080
     }
 
-    handle * {
+    handle {
         root * /typonamer
-        try_files {path} /index.html
+        header {
+            X-Content-Type-Options nosniff
+            X-Frame-Options DENY
+            Referrer-Policy same-origin
+        }
+        @bundle {
+            path /assets/*
+            file
+        }
+        header @bundle Cache-Control "public, max-age=5184000, immutable"
+        @page not path_regexp \.[^/]*$
+        rewrite @page /index.html
         file_server
     }
 }

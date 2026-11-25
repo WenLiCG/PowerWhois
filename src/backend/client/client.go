@@ -53,17 +53,22 @@ func FromEnv() (*Client, error) {
 	return &Client{URL: strings.TrimRight(base, "/"), Token: token, HTTP: &http.Client{Timeout: 125 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (c *Client) Do(ctx context.Context, method, path string, body interface{}, key string) ([]byte, error) {
+	data, _, err := c.DoWithHeaders(ctx, method, path, body, key)
+	return data, err
+}
+
+func (c *Client) DoWithHeaders(ctx context.Context, method, path string, body interface{}, key string) ([]byte, http.Header, error) {
 	var data []byte
 	var err error
 	if body != nil {
 		data, err = json.Marshal(body)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.URL+"/api/v1"+path, bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("invalid API request")
+		return nil, nil, fmt.Errorf("invalid API request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
@@ -72,12 +77,12 @@ func (c *Client) Do(ctx context.Context, method, path string, body interface{}, 
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("API connection failed; for task creation retry using the same idempotency key")
+		return nil, nil, fmt.Errorf("API connection failed; for task creation retry using the same idempotency key")
 	}
 	defer resp.Body.Close()
 	result, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024+1))
 	if err != nil || len(result) > 32*1024*1024 {
-		return nil, fmt.Errorf("API response unreadable or too large")
+		return nil, nil, fmt.Errorf("API response unreadable or too large")
 	}
 	if resp.StatusCode >= 300 {
 		var payload struct {
@@ -87,7 +92,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body interface{}, 
 			} `json:"error"`
 		}
 		json.Unmarshal(result, &payload)
-		return nil, &Error{Status: resp.StatusCode, Code: payload.Error.Code, Message: payload.Error.Message}
+		return nil, nil, &Error{Status: resp.StatusCode, Code: payload.Error.Code, Message: payload.Error.Message}
 	}
-	return result, nil
+	return result, resp.Header, nil
 }

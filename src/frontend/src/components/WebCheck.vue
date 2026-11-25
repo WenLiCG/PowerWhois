@@ -18,7 +18,7 @@
                     icon="auto_fix_high"
                     color="primary"
                     label="整理去重"
-                    :disable="busy || !domainInput"
+                    :disable="webStore.busy || !domainInput"
                     @click="cleanDomainInput"
                 />
                 <q-btn
@@ -29,7 +29,7 @@
                     icon="clear_all"
                     color="grey-7"
                     label="清空"
-                    :disable="busy || !domainInput"
+                    :disable="webStore.busy || !domainInput"
                     @click="domainInput = ''"
                 />
             </div>
@@ -45,18 +45,18 @@
             autogrow
             :input-style="{ minHeight: '110px', maxHeight: '280px' }"
             placeholder="example.com&#10;example.org&#10;例子.中国"
-            :disable="busy"
+            :disable="webStore.busy"
             @keydown.ctrl.enter.prevent="queryDomains()"
             @keydown.meta.enter.prevent="queryDomains()"
         />
 
         <q-separator class="q-mt-md" />
 
-        <WhoisSelection v-model:queryType="queryType" :disable="busy" />
+        <WhoisSelection v-model:queryType="queryType" :disable="webStore.busy" />
 
         <template v-if="tokenStore.token && settingStore.registerApis.length">
             <q-separator />
-            <RegisterSelection v-model:registerType="registerType" :disable="busy" />
+            <RegisterSelection v-model:registerType="registerType" :disable="webStore.busy" />
         </template>
 
         <q-separator class="q-mb-md" />
@@ -70,14 +70,15 @@
                     icon="search"
                     label="开始查询"
                     class="full-width"
-                    :loading="webCheckDomains.length > 0 && webStore.unCheckDomains > 0"
+                    :loading="webStore.pendingQuery === 'webCheck' || (webCheckDomains.length > 0 && webStore.unCheckDomains > 0)"
                     :percentage="handleProgress"
-                    :disable="busy"
+                    :disable="webStore.busy"
                     @click="queryDomains()"
                 >
                     <template v-slot:loading>
                         <q-spinner-bars class="on-left" />
-                        <span class="text-white">正在查询 {{ handleProgress }}%（剩余 {{ webStore.unCheckDomains }}）</span>
+                        <span v-if="webStore.pendingQuery === 'webCheck'">正在提交查询…</span>
+                        <span v-else class="text-white">正在查询 {{ handleProgress }}%（剩余 {{ webStore.unCheckDomains }}）</span>
                     </template>
                 </q-btn>
             </div>
@@ -88,7 +89,8 @@
                     color="negative"
                     icon="stop_circle"
                     label="停止查询"
-                    @click="stopQuery()"
+                    @click="stopQuery"
+                    :loading="webStore.pendingQuery === 'stop'"
                 />
             </div>
         </div>
@@ -106,7 +108,7 @@ defineOptions({
 
 import { ref, computed, watchEffect } from "vue";
 import { useQuasar } from "quasar";
-import { status, send } from "src/utils/websocketHandler";
+import { submitQuery, stopQuery } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useWebStore } from "src/stores/webStore";
 import { useSettingStore } from "src/stores/settingStore";
@@ -121,7 +123,7 @@ const webCheckDomains = ref([]);
 
 const tokenStore = useTokenStore();
 const webStore = useWebStore();
-const busy = computed(() => webStore.unCheckDomains > 0 || webStore.unRegisterDomains > 0);
+
 const settingStore = useSettingStore();
 
 const domainInput = ref("");
@@ -168,23 +170,8 @@ function cleanDomainInput() {
     });
 }
 
-function isWebsocketConnected() {
-    if (status.value == "OPEN") {
-        return true;
-    }
-    $q.notify({
-        position: "top",
-        type: "warning",
-        message: "服务连接已断开，请点击右上角“重连”或刷新页面后重试",
-        progress: true,
-        timeout: 5000,
-        actions: [{ label: "确定", color: "white" }]
-    });
-    return false;
-}
-
 function queryDomains() {
-    if (busy.value) return;
+    if (webStore.busy) return;
     const rawLines = parseRawLines(domainInput.value);
     if (rawLines.length === 0) {
         $q.notify({
@@ -226,26 +213,7 @@ function queryDomains() {
         return;
     }
 
-    if (isWebsocketConnected()) {
-        webStore.clearDomains();
-        send(
-            JSON.stringify({
-                event: "webCheck",
-                data: {
-                    queryType: queryType.value,
-                    domains: dedupedList
-                }
-            })
-        );
-    }
-}
-
-function stopQuery() {
-    if (status.value === "OPEN") {
-        send(JSON.stringify({ event: "webCheckStop", data: null }), false);
-    }
-    webStore.stopQueries();
-    $q.notify({ position: "top", type: "info", message: "已停止当前查询，已完成的结果已保留" });
+    submitQuery("webCheck", { queryType: queryType.value, domains: dedupedList });
 }
 
 const handleProgress = computed(() => {

@@ -4,9 +4,9 @@
 
 Domain research through the existing Web UI, a noninteractive CLI, a documented HTTP API, and an optional MCP adapter. One query core and one durable batch store; no AI vendor dependency.
 
-- DNS, WHOIS/RDAP, Mixed, SOCKS proxy, custom query APIs, typo generation.
+- DNS, WHOIS/RDAP, Mixed, SOCKS proxy, custom query APIs and typo generation. Internationalized suffixes work in Unicode or Punycode. New RDAP results retain the final registry response and its source URL.
 - Instant Web and Typo lookups with input normalization/deduplication, in-flight stop/recheck, clickable status filters, domain copy, and formula-safe CSV export.
-- Durable batches with IDs, pause/resume/cancel, retry, lifecycle/expiry overview, progress and paged exports.
+- Durable batches with IDs, pause/resume/cancel, retry, lifecycle/expiry overview, progress and paged exports. CLI CSV exports print the next input offset to stderr so the CSV can be redirected to a file.
 - Accurate distinctions between registered, not_found, unknown, timeout and error, including WHOIS rate-limit classification and bounded upstream backoff. DNS absence is not availability.
 - Existing Web administration and explicitly confirmed manual registration remain available. Agent query credentials cannot register, delete data or change settings.
 - Loopback binding by default; use SSH forwarding or an authenticated TLS gateway remotely.
@@ -45,6 +45,6 @@ On Linux, install Go 1.27.4, Node.js 24, npm, make and Redis. From the repositor
 
 [Current review, verification and upgrade notes](HANDOFF.md) · [Review and feature checklist](docs/REVIEW.md) · [CLI/API/MCP usage and permissions](docs/USAGE.md) · [Test report](docs/TEST-REPORT.md) · [OpenAPI](src/backend/api/openapi.json)
 
-![Batch workspace](docs/screenshots/batch-desktop.jpg)
+![Completed batch with per-page filters and CSV export](docs/screenshots/batch-workspace.jpg)
 
 Licensed under the original [MIT license](LICENSE).

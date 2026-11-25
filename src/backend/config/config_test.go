@@ -102,3 +102,26 @@ func TestSafeConfigRoundTrip(t *testing.T) {
 		t.Fatal("configuration snapshot aliases live data")
 	}
 }
+
+func TestRoutingSuffixesUseASCIIOnLoadAndSave(t *testing.T) {
+	original, originalPath := GetConfig(), configFile
+	t.Cleanup(func() { mu.Lock(); config, configFile = original, originalPath; mu.Unlock() })
+	t.Setenv("POWERWHOIS_ADMIN_USER", "fixture")
+	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", strings.Repeat("a", 12))
+	t.Setenv("POWERWHOIS_JWT_SECRET", strings.Repeat("b", 32))
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("globalProxyTlds: [.公司.]\nmixedProxyTlds: [XN--55QX5D]\nmixedDnsTlds: [co.uk]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+	c := GetConfig()
+	if c.GlobalProxyTlds[0] != "xn--55qx5d" || c.MixedProxyTlds[0] != "xn--55qx5d" || c.MixedDnsTlds[0] != "co.uk" {
+		t.Fatal("startup rules do not match canonical lookup suffixes")
+	}
+	c.MixedDnsTlds = []string{"公司"}
+	if err := UpdateConfig(c); err != nil || GetConfig().MixedDnsTlds[0] != "xn--55qx5d" {
+		t.Fatal("saved DNS routing rule does not match the lookup suffix", err)
+	}
+}

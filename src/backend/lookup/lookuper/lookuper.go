@@ -35,52 +35,21 @@ func lookup(ctx context.Context, domain string, queryType string) (lookupinfo.Do
 
 	cfg := config.GetConfig()
 
-	domain, err := utils.TrimAndGetMainDomain(domain)
+	mainDomain, err := utils.TrimAndGetMainDomain(domain)
 	if err != nil {
 		return errDomainInfo, lookuperror.ErrorInvalidDomainName
 	}
 	// Get the TLD (Top-Level Domain) of the domain
-	tld, suffix, err := utils.GetTld(domain)
+	tld, suffix, err := utils.GetTld(mainDomain)
 	if err != nil || tld == "" || suffix == "" {
 		log.Error("Invalid domain name: ", domain)
 		return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorInvalidDomainName, err)
 	}
 
-	// Get the main domain
-	mainDomain, err := utils.TrimAndGetMainDomain(domain)
-	if err != nil {
-		log.Error("Invalid domain name: ", domain)
-		return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorInvalidDomainName, err)
-	}
-
 	switch queryType {
-	case constant.WhoisQuery:
-		if !slice.Contain(rdaplib.RdapSupportedTlds, tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld) {
-			log.Error("Not supported TLD: ", tld)
-			return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
-		}
-
-		useProxy := false
-		if !useProxy {
-			if slice.Contain(cfg.GlobalProxyTlds, tld) {
-				log.Debugf("%s is the TLD that needs to go through proxy, forcing the whois query to go through proxy", tld)
-				useProxy = true
-			}
-			if slice.Contain(cfg.GlobalProxyTlds, suffix) {
-				log.Debugf("%s is the TLD that needs to go through proxy, forcing the whois query to go through proxy", suffix)
-				useProxy = true
-			}
-		}
-		domainInfo, err := Whois(ctx, mainDomain, tld, useProxy)
-		return domainInfo, err
-	case constant.WhoisQueryWithProxy:
-		if !slice.Contain(rdaplib.RdapSupportedTlds, tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld) {
-			log.Error("Not supported TLD: ", tld)
-			return errDomainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
-		}
-
-		domainInfo, err := Whois(ctx, mainDomain, tld, true)
-		return domainInfo, err
+	case constant.WhoisQuery, constant.WhoisQueryWithProxy:
+		useProxy := queryType == constant.WhoisQueryWithProxy || slice.Contain(cfg.GlobalProxyTlds, tld) || slice.Contain(cfg.GlobalProxyTlds, suffix)
+		return Whois(ctx, mainDomain, tld, useProxy)
 	case constant.DnsQuery:
 		domainInfo, err := dnslib.NsCheckContext(ctx, mainDomain)
 		return domainInfo, err
@@ -89,7 +58,7 @@ func lookup(ctx context.Context, domain string, queryType string) (lookupinfo.Do
 		case slice.Contain(cfg.MixedDnsTlds, tld) || slice.Contain(cfg.MixedDnsTlds, suffix):
 			domainInfo, err := dnslib.NsCheckContext(ctx, mainDomain)
 			return domainInfo, err
-		case !slice.Contain(rdaplib.RdapSupportedTlds, tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld):
+		case !rdaplib.SupportsTLD(tld) && !maputil.HasKey(whoislib.WhoisSupportedTlds, tld):
 			domainInfo, err := dnslib.NsCheckContext(ctx, mainDomain)
 			return domainInfo, err
 		case slice.Contain(cfg.MixedProxyTlds, tld) || slice.Contain(cfg.MixedProxyTlds, suffix):
@@ -114,8 +83,11 @@ func Whois(ctx context.Context, domain, tld string, viaProxy bool) (lookupinfo.D
 		return lookupinfo.DomainInfo{DomainName: domain, Source: "local-validation"}, fmt.Errorf("%w: ac.uk requires a Jisc registry adapter", lookuperror.ErrorNotSupportedTld)
 	}
 	viaProxy = viaProxy && !network.IsPublic(ctx)
-	if slice.Contain(rdaplib.RdapSupportedTlds, tld) {
+	if rdaplib.SupportsTLD(tld) {
 		return rdaplib.RDAPQueryContext(ctx, domain, tld, viaProxy)
+	}
+	if !maputil.HasKey(whoislib.WhoisSupportedTlds, tld) {
+		return lookupinfo.DomainInfo{DomainName: domain, Source: "local-validation"}, fmt.Errorf("%w: %s", lookuperror.ErrorNotSupportedTld, tld)
 	}
 	return whoislib.WhoisQueryContext(ctx, domain, tld, viaProxy)
 }
@@ -196,6 +168,9 @@ func Result(domain string, info lookupinfo.DomainInfo, err error) lookupinfo.Que
 			r.Status = "unknown"
 			r.RegisterStatus = "Unknown"
 		}
+	case info.CustomizedResult == constant.DomainRegisterStatusFree:
+		r.Status = "not_found"
+		r.RegisterStatus = "NotFound"
 	case info.LookupType == constant.LookupTypeDNS:
 		if len(info.NameServer) > 0 {
 			r.Status = "registered"
@@ -206,9 +181,6 @@ func Result(domain string, info lookupinfo.DomainInfo, err error) lookupinfo.Que
 	case info.LookupType == constant.LookupTypeWhois || info.LookupType == constant.LookupTypeRDAP || info.CustomizedResult == constant.DomainRegisterStatusTaken:
 		r.Status = "registered"
 		r.RegisterStatus = "Taken"
-	case info.CustomizedResult == constant.DomainRegisterStatusFree:
-		r.Status = "not_found"
-		r.RegisterStatus = "NotFound"
 	}
 	r.CreatedDate = info.CreationDate
 	r.ExpiryDate = info.ExpiryDate

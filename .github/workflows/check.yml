@@ -52,3 +52,12 @@ jobs:
           test "$(curl -fsS --retry 20 --retry-all-errors --retry-delay 2 http://127.0.0.1:8080/healthz)" = ok
           curl -fsS http://127.0.0.1:8080/ | grep -qi PowerWhois
           curl -fsS http://127.0.0.1:8080/api/web/setting | jq -e '.webCheckDomainLimit > 0'
+          base=http://127.0.0.1:8080
+          curl -fsS "$base/tasks/example" | grep -qi PowerWhois
+          curl -fsSI "$base/" | grep -iq '^X-Frame-Options: DENY'
+          asset=$(curl -fsS "$base/" | grep -oE 'src="[^"]+\.js"' | head -1 | cut -d'"' -f2)
+          test -n "$asset"
+          curl -fsSI "$base$asset" | grep -iq '^Cache-Control: .*immutable'
+          for path in /assets/missing.js /api /app; do
+            test "$(curl -sS -o /dev/null -w '%{http_code}' "$base$path")" = 404
+          done

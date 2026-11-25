@@ -22,12 +22,17 @@ func TestRegistryResponses(t *testing.T) {
 	}{
 		{"redacted", `{"objectClassName":"domain","ldhName":"example.com"}`, 200, nil},
 		{"missing", `{"errorCode":404}`, 404, lookuperror.ErrorWhoisNotFound},
+		{"empty negative answer", "", 404, lookuperror.ErrorWhoisNotFound},
 		{"wrong domain", `{"objectClassName":"domain","ldhName":"other.com"}`, 200, lookuperror.ErrorParseWhoisResponse},
 		{"server failed", `{"errorCode":500}`, 500, lookuperror.ErrorWhoisServerFailed},
 		{"rate limit", `{"errorCode":429}`, 429, lookuperror.ErrorRateLimited},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/registry" {
+					http.Redirect(w, r, "/registry", http.StatusTemporaryRedirect)
+					return
+				}
 				w.Header().Set("Content-Type", "application/rdap+json")
 				w.WriteHeader(tc.code)
 				w.Write([]byte(tc.body))
@@ -36,12 +41,14 @@ func TestRegistryResponses(t *testing.T) {
 			address, _ := url.Parse(server.URL)
 			rc := rdap.Client{HTTP: &http.Client{Transport: network.Transport{Base: http.DefaultTransport, Protocol: "test-rdap"}}}
 			resp, err := rc.Do(&rdap.Request{Type: rdap.DomainRequest, Query: "example.com", Server: address})
+			// A failed alternate must not replace the next registry's answer, even when its body is empty.
+			resp.HTTP = append([]*rdap.HTTPResponse{{URL: "https://alternate.invalid/", Response: &http.Response{StatusCode: 429}, Body: []byte("slow down")}}, resp.HTTP...)
 			info, err := parseResponse("example.com", lookupinfo.DomainInfo{LookupType: "rdap"}, resp, err)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v want %v", err, tc.want)
 			}
-			if info.Source == "" {
-				t.Fatal("source missing")
+			if info.Source != server.URL+"/registry" || info.RawResponse != tc.body {
+				t.Fatalf("wrong response evidence: %+v", info)
 			}
 		})
 	}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"typonamer/client"
 )
@@ -38,6 +39,7 @@ Examples:
   powerwhois tasks export --id TASK_ID --format csv --offset 0 --limit 1000 > results-page.csv
 Long tasks continue on the server after this process exits. Page cursors use input indexes;
 active pages may be empty. Re-read from offset 0 after completion for a complete export.
+CSV pages write nextOffset=N to stderr. Pass N as --offset; -1 marks the last page.
 Exit: 0 success; 2 usage/input; 3 authentication; 4 not found; 5 conflict; 1 transport/server.
 A successful query can contain timeout/error results; inspect each result's status.
 `
@@ -172,7 +174,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, e)
 		return 2
 	}
-	data, e := c.Do(context.Background(), method, path, body, *key)
+	data, headers, e := c.DoWithHeaders(context.Background(), method, path, body, *key)
 	if e != nil {
 		fmt.Fprintln(errOut, e)
 		var apiErr *client.Error
@@ -190,15 +192,28 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 		}
 		return 1
 	}
-	if !(command == "tasks" && action == "export" && *format == "csv") && !json.Valid(data) {
-		fmt.Fprintln(errOut, "server returned invalid JSON")
-		return 1
+	csv := command == "tasks" && action == "export" && *format == "csv"
+	nextOffset := -1
+	if csv {
+		nextOffset, e = strconv.Atoi(headers.Get("X-Next-Offset"))
+		if e != nil || (nextOffset != -1 && nextOffset <= *offset) {
+			fmt.Fprintln(errOut, "server returned an invalid CSV pagination cursor")
+			return 1
+		}
+	} else {
+		if !json.Valid(data) {
+			fmt.Fprintln(errOut, "server returned invalid JSON")
+			return 1
+		}
+		data = append(data, '\n')
 	}
 	if _, e = out.Write(data); e != nil {
 		fmt.Fprintln(errOut, "output write failed")
 		return 1
 	}
-	fmt.Fprintln(out)
+	if csv {
+		fmt.Fprintf(errOut, "nextOffset=%d\n", nextOffset)
+	}
 	return 0
 }
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
