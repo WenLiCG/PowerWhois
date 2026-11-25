@@ -13,7 +13,6 @@ import (
 	"typonamer/config"
 	"typonamer/constant"
 	"typonamer/jobs"
-	"typonamer/lookup/lookupinfo"
 )
 
 var Tasks *jobs.Store
@@ -230,17 +229,4 @@ func getBulkCheckInfo() (BulkCheckStatusInfo, error) {
 	info.TimeoutDomains = t.Counts["timeout"]
 	info.ErrorDomains = t.Counts["error"]
 	return info, nil
-}
-func BulkResults(ctx context.Context) ([]lookupinfo.QueryResult, error) {
-	id := CurrentTaskID()
-	out := []lookupinfo.QueryResult{}
-	for i := 0; i >= 0; {
-		p, e := Tasks.Results(ctx, id, i, 1000, false)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, p.Items...)
-		i = p.NextOffset
-	}
-	return out, nil
 }

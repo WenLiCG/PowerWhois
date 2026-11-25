@@ -55,3 +55,12 @@ func TestDelegatedAcademicUKDoesNotUseNominetAbsence(t *testing.T) {
 		}
 	}
 }
+
+func TestUnconfiguredProxyReturnsLocalEvidence(t *testing.T) {
+	for _, domain := range []string{"example.cn", "example.com"} {
+		r := Query(context.Background(), domain, constant.WhoisQueryWithProxy, 1, 0)
+		if r.Source != "local-validation" || r.Status != "error" || r.QueryError != lookuperror.ErrorProxyNotConfigured.Error() {
+			t.Fatalf("unexpected proxy result for %s: %+v", domain, r)
+		}
+	}
+}

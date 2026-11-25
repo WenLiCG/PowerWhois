@@ -3,8 +3,6 @@ package whoislib
 // This map is used to determine the whois server for a given TLD.
 var WhoisSupportedTlds = map[string]string{
 	"cn": "whois.cnnic.cn",
-	"中国": "cwhois.cnnic.cn",
-	"中國": "cwhois.cnnic.cn",
 	"hk": "whois.hkirc.hk",
 	"tw": "whois.twnic.net.tw",
 	"so": "whois.nic.so",
@@ -72,6 +70,9 @@ var WhoisSupportedTlds = map[string]string{
 	"pt": "whois.dns.pt",
 	"de": "whois.denic.de",
 	"nz": "whois.irs.net.nz",
+
+	"xn--fiqs8s": "cwhois.cnnic.cn",
+	"xn--fiqz9s": "cwhois.cnnic.cn",
 }
 
 var WhoisTldOptions = map[string]string{

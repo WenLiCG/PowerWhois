@@ -22,7 +22,7 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model="settings.authUsername"
+                                v-model="settings.authUsername" aria-label="管理员用户名"
                                 :rules="[$rules.required('请输入管理员用户名')]"
                             />
                         </q-item-section>
@@ -42,8 +42,9 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model="settings.authPassword"
+                                v-model="settings.authPassword" aria-label="管理员密码"
                                 :disable="settings.secrets?.authPassword?.managed || settings.secretActions.authPassword !== 'set'"
+                                minlength="12"
                                 hint="密码不会回显；更换时输入新密码。环境凭据需在服务端更换。"
                             />
                         </q-item-section>
@@ -63,11 +64,12 @@
                                 round
                                 item-aligned
                                 suffix="天"
-                                v-model.number="settings.authExpireDays"
+                                v-model.number="settings.authExpireDays" aria-label="登录有效期"
                                 :rules="[
                                     $rules.required('请设置登录有效期'),
                                     $rules.numeric('登录有效期必须为数字'),
-                                    $rules.minValue(1, '登录有效期至少为1天')
+                                    $rules.minValue(1, '登录有效期至少为1天'),
+                                    $rules.maxValue(30, '登录有效期最多为30天')
                                 ]"
                             />
                         </q-item-section>
@@ -82,7 +84,7 @@
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section>
-                            <q-select outlined dense round item-aligned v-model="settings.logLevel" :options="logLevelOptions" />
+                            <q-select outlined dense round item-aligned v-model="settings.logLevel" aria-label="日志等级" :options="logLevelOptions" />
                         </q-item-section>
                     </q-item>
                 </q-card-section>
@@ -141,12 +143,12 @@
                                 round
                                 item-aligned
                                 suffix="秒"
-                                v-model.number="settings.whoisTimeout"
+                                v-model.number="settings.whoisTimeout" aria-label="WHOIS 查询超时"
                                 :rules="[
                                     $rules.required('请设置Whois查询超时'),
                                     $rules.numeric('Whois查询超时必须为数字'),
                                     $rules.minValue(1, 'Whois查询超时至少为1秒'),
-                                    $rules.maxValue(60, 'Whois查询超时最多为60秒')
+                                    $rules.maxValue(120, 'Whois查询超时最多为120秒')
                                 ]"
                             />
                         </q-item-section>
@@ -166,12 +168,12 @@
                                 round
                                 item-aligned
                                 suffix="秒"
-                                v-model.number="settings.dnsTimeout"
+                                v-model.number="settings.dnsTimeout" aria-label="DNS 查询超时"
                                 :rules="[
                                     $rules.required('请设置DNS查询超时'),
                                     $rules.numeric('DNS查询超时必须为数字'),
                                     $rules.minValue(1, 'DNS查询超时至少为1秒'),
-                                    $rules.maxValue(60, 'DNS查询超时最多为60秒')
+                                    $rules.maxValue(120, 'DNS查询超时最多为120秒')
                                 ]"
                             />
                         </q-item-section>
@@ -184,7 +186,7 @@
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section class="q-pl-sm">
-                            <q-toggle v-model="settings.retryOnTimeout" checked-icon="check" color="blue" unchecked-icon="clear"></q-toggle>
+                            <q-toggle v-model="settings.retryOnTimeout" aria-label="超时重试" checked-icon="check" color="blue" unchecked-icon="clear"></q-toggle>
                         </q-item-section>
                     </q-item>
                 </q-card-section>
@@ -201,11 +203,11 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model.number="settings.retryMax"
+                                v-model.number="settings.retryMax" aria-label="重试次数"
                                 :rules="[
                                     $rules.required('请设置重试次数'),
                                     $rules.numeric('重试次数必须为数字'),
-                                    $rules.minValue(1, '重试次数至少为1次'),
+                                    $rules.minValue(0, '重试次数不能为负'),
                                     $rules.maxValue(5, '重试次数最多为5次')
                                 ]"
                             />
@@ -226,11 +228,11 @@
                                 round
                                 item-aligned
                                 suffix="秒"
-                                v-model.number="settings.retryInterval"
+                                v-model.number="settings.retryInterval" aria-label="重试间隔"
                                 :rules="[
                                     $rules.required('请设置失败重试间隔'),
                                     $rules.numeric('失败重试间隔必须为数字'),
-                                    $rules.minValue(1, '失败重试间隔至少为1秒'),
+                                    $rules.minValue(0, '失败重试间隔不能为负'),
                                     $rules.maxValue(60, '失败重试间隔最多为60秒')
                                 ]"
                             />
@@ -316,8 +318,8 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model="settings.socketProxyHost"
-                                :rules="[$rules.required('请输入Socks代理地址')]"
+                                v-model="settings.socketProxyHost" aria-label="代理地址"
+                                hint="留空可禁用代理"
                             />
                         </q-item-section>
                     </q-item>
@@ -335,8 +337,9 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model.number="settings.socketProxyPort"
-                                :rules="[
+                                v-model.number="settings.socketProxyPort" aria-label="代理端口"
+                                :disable="!settings.socketProxyHost"
+                                :rules="!settings.socketProxyHost ? [] : [
                                     $rules.required('请设置Socks代理端口'),
                                     $rules.numeric('Socks代理端口必须为数字'),
                                     $rules.minValue(1, 'Socks代理端口错误'),
@@ -353,12 +356,12 @@
                     </q-item>
                     <q-item class="col-8 q-pa-sm">
                         <q-item-section class="q-pl-sm">
-                            <q-toggle v-model="settings.socketProxyAuth" checked-icon="check" color="blue" unchecked-icon="clear"></q-toggle>
+                            <q-toggle v-model="settings.socketProxyAuth" aria-label="代理认证" :disable="!settings.socketProxyHost" checked-icon="check" color="blue" unchecked-icon="clear"></q-toggle>
                         </q-item-section>
                     </q-item>
                 </q-card-section>
 
-                <q-card-section class="row q-pa-sm" v-if="settings.socketProxyAuth">
+                <q-card-section class="row q-pa-sm" v-if="settings.socketProxyHost && settings.socketProxyAuth">
                     <q-item class="col-4 q-pa-sm">
                         <q-item-section class="text-right">Socks代理用户</q-item-section>
                     </q-item>
@@ -370,14 +373,14 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model="settings.socketProxyUser"
+                                v-model="settings.socketProxyUser" aria-label="代理用户名"
                                 :rules="[$rules.required('请设置Socks代理用户')]"
                             />
                         </q-item-section>
                     </q-item>
                 </q-card-section>
 
-                <q-card-section class="row q-pa-sm" v-if="settings.socketProxyAuth">
+                <q-card-section class="row q-pa-sm" v-if="settings.socketProxyHost && settings.socketProxyAuth">
                     <q-item class="col-4 q-pa-sm">
                         <q-item-section class="text-right">Socks代理密码</q-item-section>
                     </q-item>
@@ -390,7 +393,7 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model="settings.socketProxyPassword"
+                                v-model="settings.socketProxyPassword" aria-label="代理密码"
                                 :disable="settings.secretActions.socketProxyPassword !== 'set'"
                                 hint="只有更换时需要填写；清空请选择“清空”"
                                 :rules="[v => settings.secretActions.socketProxyPassword !== 'set' || !!v || '请输入新代理密码']"
@@ -420,12 +423,12 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model.number="settings.bulkCheckConcurrencyLimit"
+                                v-model.number="settings.bulkCheckConcurrencyLimit" aria-label="批量查询并发上限"
                                 :rules="[
                                     $rules.required('请设置并发任务数'),
                                     $rules.numeric('并发任务数必须为数字'),
                                     $rules.minValue(1, '并发任务数最少为1'),
-                                    $rules.maxValue(100, '并发任务数最多为100')
+                                    $rules.maxValue(256, '并发任务数最多为256')
                                 ]"
                             />
                         </q-item-section>
@@ -453,12 +456,12 @@
                                 dense
                                 round
                                 item-aligned
-                                v-model.number="settings.webCheckConcurrencyLimit"
+                                v-model.number="settings.webCheckConcurrencyLimit" aria-label="网页查询并发上限"
                                 :rules="[
                                     $rules.required('请设置并发任务数'),
                                     $rules.numeric('并发任务数必须为数字'),
                                     $rules.minValue(1, '并发任务数最少为1'),
-                                    $rules.maxValue(10, '并发任务数最多为10')
+                                    $rules.maxValue(256, '并发任务数最多为256')
                                 ]"
                             />
                         </q-item-section>
@@ -478,11 +481,12 @@
                                 round
                                 item-aligned
                                 suffix="个"
-                                v-model.number="settings.webCheckDomainLimit"
+                                v-model.number="settings.webCheckDomainLimit" aria-label="单次网页查询域名数量上限"
                                 :rules="[
                                     $rules.required('请设置单次查询域名数量限制'),
                                     $rules.numeric('单次查询域名数量限制必须为数字'),
-                                    $rules.minValue(10, '单次查询域名数量限制最小为10')
+                                    $rules.minValue(1, '至少查询 1 个域名'),
+                                    $rules.maxValue(10000, '每次最多查询 10000 个域名')
                                 ]"
                             />
                         </q-item-section>
@@ -649,23 +653,27 @@
             </div>
         </q-form>
     </div>
-    <div class="q-pa-lg flex flex-center" v-else>
+    <q-banner v-else-if="loadFailed" class="bg-red-1 text-negative" role="alert">
+        无法读取管理设置，请检查连接后重试。
+        <template #action><q-btn flat label="重新加载" @click="getSettings" /></template>
+    </q-banner>
+    <div class="q-pa-lg flex flex-center" v-else role="status" aria-label="正在加载管理设置">
         <q-spinner color="primary" size="3em" :thickness="10" />
     </div>
 
     <q-dialog persistent v-model="displayRegisterApiEditDialog">
-        <q-card>
+        <q-card class="api-editor">
             <q-card-section class="row items-center">
                 <div class="text-subtitle2" v-if="updateRegisterApiItem.apiName">修改注册接口: {{ updateRegisterApiItem.apiName }}</div>
                 <div class="text-subtitle2" v-else>添加注册接口</div>
                 <q-space />
-                <q-btn icon="close" flat round dense v-close-popup />
+                <q-btn icon="close" aria-label="关闭编辑" flat round dense v-close-popup />
             </q-card-section>
 
             <q-separator></q-separator>
 
             <q-card-section>
-                <div class="q-pt-md" style="min-width: 500px">
+                <div class="q-pt-md">
                     <q-markup-table flat separator="cell">
                         <tbody>
                             <tr>
@@ -783,18 +791,18 @@
     </q-dialog>
 
     <q-dialog persistent v-model="displayWhoisApiEditDialog">
-        <q-card>
+        <q-card class="api-editor">
             <q-card-section class="row items-center">
                 <div class="text-subtitle2" v-if="updateWhoisApiItem.apiName">修改Whois接口: {{ updateWhoisApiItem.apiName }}</div>
                 <div class="text-subtitle2" v-else>添加Whois接口</div>
                 <q-space />
-                <q-btn icon="close" flat round dense v-close-popup />
+                <q-btn icon="close" aria-label="关闭编辑" flat round dense v-close-popup />
             </q-card-section>
 
             <q-separator></q-separator>
 
             <q-card-section>
-                <div class="q-pt-md" style="min-width: 500px">
+                <div class="q-pt-md">
                     <q-markup-table flat separator="cell">
                         <tbody>
                             <tr>
@@ -936,6 +944,7 @@ const settingStore = useSettingStore();
 const settingForm = ref(null);
 
 const settings = ref(null);
+const loadFailed = ref(false);
 const logLevelOptions = ["Debug", "Info", "Warn", "Error", "Off"];
 
 const submitting = ref(false);
@@ -982,6 +991,7 @@ const inputWhoisApiData = ref({
 const reservedWhoisApiNames = ref(["whois", "rdap", "whoisQuery", "whoisQueryWithProxy", "dnsQuery", "mixedQuery"]);
 
 function getSettings() {
+    loadFailed.value = false;
     api.get("/admin/setting")
         .then((response) => {
             if (response.data) {
@@ -1025,19 +1035,11 @@ function getSettings() {
                     settings.value.typoCustomizedReplacesInput = "";
                 }
             } else {
-                $q.notify({
-                    position: "top",
-                    type: "info",
-                    message: "服务器未返回配置参数"
-                });
+                loadFailed.value = true;
             }
         })
-        .catch((error) => {
-            this.$q.notify({
-                position: "top",
-                type: "negative",
-                message: "获取数据失败"
-            });
+        .catch(() => {
+            loadFailed.value = true;
         });
 }
 
@@ -1219,18 +1221,12 @@ function addRegisterApi() {
 
 function openUpdateRegisterApiDialog(apiItem) {
     displayRegisterApiEditDialog.value = true;
-    updateRegisterApiItem.value = {
-        apiName: apiItem.apiName,
-        apiUrl: apiItem.apiUrl,
-        successText: apiItem.successText,
-        failText: apiItem.failText,
-        concurrencyLimit: apiItem.concurrencyLimit
-    };
+    updateRegisterApiItem.value = apiItem;
     inputRegisterApiData.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        successText: apiItem.successText,
-        failText: apiItem.failText,
+        successText: [...apiItem.successText],
+        failText: [...apiItem.failText],
         concurrencyLimit: apiItem.concurrencyLimit
     };
 }
@@ -1335,18 +1331,12 @@ function addWhoisApi() {
 
 function openUpdateWhoisApiDialog(apiItem) {
     displayWhoisApiEditDialog.value = true;
-    updateWhoisApiItem.value = {
-        apiName: apiItem.apiName,
-        apiUrl: apiItem.apiUrl,
-        freeText: apiItem.freeText,
-        takenText: apiItem.takenText,
-        concurrencyLimit: apiItem.concurrencyLimit
-    };
+    updateWhoisApiItem.value = apiItem;
     inputWhoisApiData.value = {
         apiName: apiItem.apiName,
         apiUrl: apiItem.apiUrl,
-        freeText: apiItem.freeText,
-        takenText: apiItem.takenText,
+        freeText: [...apiItem.freeText],
+        takenText: [...apiItem.takenText],
         concurrencyLimit: apiItem.concurrencyLimit
     };
 }
@@ -1440,7 +1430,7 @@ function onSubmit() {
                 settings.value.typoCustomizedReplaces = [];
             }
 
-            api.put("/admin/setting", settings.value)
+            api.put("/admin/setting", { ...settings.value, socketProxyPort: settings.value.socketProxyPort || 0 })
                 .then((response) => {
                     $q.notify({
                         position: "top",
@@ -1460,7 +1450,9 @@ function onSubmit() {
                     $q.notify({
                         position: "top",
                         type: "negative",
-                        message: "配置参数保存失败, 请检查服务端日志"
+                        message: error.response?.status === 400 && typeof error.response.data === "string"
+                            ? "保存失败：" + error.response.data
+                            : "配置保存失败，请检查连接后重试"
                     });
                     submitting.value = false;
                 });
@@ -1478,3 +1470,26 @@ onMounted(() => {
     getSettings();
 });
 </script>
+
+<style scoped>
+.api-editor {
+    width: 36rem;
+    max-width: 94vw;
+}
+@media (max-width: 600px) {
+    .api-editor tr {
+        display: grid;
+    }
+    .api-editor td {
+        height: auto;
+        border: 0;
+        padding: 4px 8px 8px;
+        text-align: left;
+        white-space: normal;
+    }
+    .api-editor td:first-child {
+        padding-top: 12px;
+        font-weight: 600;
+    }
+}
+</style>

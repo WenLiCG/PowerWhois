@@ -49,10 +49,13 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
             case "registerResult":
                 webStore.updateRegisterResult(msgObj.data);
                 break;
+            case "registerError":
+                webStore.finishPendingRegistrations("error", msgObj.data);
+                Notify.create({ type: "negative", message: msgObj.data });
+                break;
             case "bulkCheckError":
             case "webCheckError":
             case "typoCheckError":
-            case "registerError":
                 Notify.create({
                     position: "top",
                     type: "negative",

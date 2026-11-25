@@ -26,7 +26,7 @@
                 />
                 <WhoisSelection v-model:queryType="mode" :disable="creating" />
                 <div class="batch-options">
-                    <q-input outlined dense type="number" v-model.number="concurrency" label="并发数" min="1" max="256" />
+                    <q-input outlined dense type="number" v-model.number="concurrency" label="并发数" placeholder="自动（最多 15）" stack-label min="1" max="256" />
                     <q-input outlined dense type="number" v-model.number="timeout" label="每域名时限 / 秒" min="1" max="120" />
                     <q-input outlined dense type="number" v-model.number="retries" label="失败重试次数" min="0" max="5" />
                     <q-btn unelevated color="primary" type="submit" icon="play_arrow" label="开始任务" :disable="!file" :loading="creating" />
@@ -173,7 +173,7 @@ import WhoisSelection from "./modules/WhoisSelection.vue";
 const $q = useQuasar();
 const file = ref(null),
     mode = ref("whoisQuery"),
-    concurrency = ref(15),
+    concurrency = ref(""),
     timeout = ref(30),
     retries = ref(0);
 const tasks = ref([]),
@@ -272,7 +272,7 @@ async function createTask() {
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
-        const body = { domains, mode: mode.value, concurrency: concurrency.value, timeout: timeout.value, retries: retries.value };
+        const body = { domains, mode: mode.value, concurrency: concurrency.value === "" || concurrency.value == null ? undefined : concurrency.value, timeout: timeout.value, retries: retries.value };
         const serialized = JSON.stringify(body);
         if (serialized !== submissionBody) {
             submissionKey = crypto.randomUUID();

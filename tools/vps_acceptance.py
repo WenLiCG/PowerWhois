@@ -131,7 +131,7 @@ def main():
     sock,header=ws('https://untrusted.example');sock.close();check('WebSocket Origin rejected', b'403' in header)
     sock,header=ws();check('WebSocket upgrade',b'101' in header)
     send(sock,'register',{'domains':['example.com'],'registerType':'not-configured','confirmed':True})
-    check('anonymous WebSocket cannot register',receive(sock)['event']=='webCheckError')
+    check('anonymous WebSocket cannot register',receive(sock)['event']=='registerError')
     send(sock,'adminAuth',admin)
     send(sock,'register',{'domains':['example.com'],'registerType':'not-configured','confirmed':False})
     check('registration requires explicit confirmation',receive(sock)['event']=='registerError')

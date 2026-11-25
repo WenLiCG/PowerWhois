@@ -9,5 +9,6 @@
 **/logs
 **/*baseline*
 deploy/backend
+deploy/runtime
 deploy/frontend
 deploy/redis/redisdata

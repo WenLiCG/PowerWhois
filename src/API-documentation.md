@@ -1,4 +1,6 @@
-# Typonamer API 文档
+# Typonamer 原版 API 历史记录
+
+以下内容保留原版接口，供旧客户端迁移时比对。当前分支的 HTTP、WebSocket 及鉴权契约见[现行 API 文档](../API%20documentation.md)和[OpenAPI](backend/api/openapi.json)。连接 `/app/ws` 后使用 `adminAuth` 消息鉴权，禁止将令牌放入 URL。
 
 本文档提供了 Typonamer 应用的 API 接口说明，包括 HTTP API 和 WebSocket API。
 
@@ -342,7 +344,7 @@ POST /api/login
 WebSocket 连接地址：
 
 - 公共连接地址：`/app/ws`
-- 管理员连接地址：`/app/ws?token={JWT 令牌}`
+- 旧版曾使用查询字符串鉴权，此方式已移除。
 
 ### 连接建立
 

@@ -5,7 +5,7 @@
         :columns="tableColumns"
         :visibleColumns="visibleColumns"
         v-model:pagination="tablePagination"
-        :selection="tokenStore.token ? 'multiple' : 'none'"
+        :selection="canRegister ? 'multiple' : 'none'"
         v-model:selected="selectedDomains"
         :rows-per-page-options="[25, 50, 100]"
         class="no-shadow bg-grey-1"
@@ -18,9 +18,9 @@
                 size="sm"
                 color="primary"
                 class="q-mb-sm q-mr-sm"
-                label="重查错误域名"
+                label="重查错误、超时和未知"
                 @click="requerycheckedErrorDomains()"
-                v-if="webStore.unCheckDomains < 1 && (webStore.checkedErrorDomains + webStore.checkedTimeoutDomains + webStore.checkedUnknownDomains) > 0"
+                v-if="webStore.unCheckDomains < 1 && webStore.unRegisterDomains < 1 && (webStore.checkedErrorDomains + webStore.checkedTimeoutDomains + webStore.checkedUnknownDomains) > 0"
             ></q-btn>
 
             <q-btn
@@ -30,7 +30,7 @@
                 label="注册选中域名"
                 :disable="webStore.unRegisterDomains > 0"
                 @click="registerSelectedDomains()"
-                v-if="tokenStore.token && selectedDomains.length > 0 && webStore.unCheckDomains < 1"
+                v-if="canRegister && selectedDomains.length > 0 && webStore.unCheckDomains < 1"
             ></q-btn>
 
             <q-space />
@@ -122,16 +122,14 @@
         <template v-slot:body-cell-registerStatus="props">
             <q-td :props="props">
                 <div>
-                    <span
-                        class="cursor-pointer"
+                    <q-btn
                         v-if="props.row.selectedRegister && props.row.registerStatus"
+                        flat dense no-caps
+                        :label="registrationLabels[props.row.registerStatus] || props.row.registerStatus"
+                        :color="props.row.registerStatus === 'success' ? 'positive' : 'negative'"
+                        :aria-label="`${props.row.domain}，${registrationLabels[props.row.registerStatus]}，查看注册详情`"
                         @click="showRegisterRawResponse(props.row)"
-                    >
-                        <q-chip dense color="green" text-color="white" v-if="props.row.registerStatus == 'success'"> OK </q-chip>
-                        <q-chip dense color="secondary" text-color="white" v-if="props.row.registerStatus == 'failed'"> Failed </q-chip>
-                        <q-chip dense color="negative" text-color="white" v-if="props.row.registerStatus == 'error'"> Error </q-chip>
-                        <q-chip dense color="deep-orange-9" text-color="white" v-if="props.row.registerStatus == 'outcome_unknown'"> 结果待核实，请先查注册商 </q-chip>
-                    </span>
+                    />
                     <span v-else-if="props.row.selectedRegister"><q-spinner-ios color="primary" size="1.8em" /></span>
                     <span v-else></span>
                 </div>
@@ -210,7 +208,14 @@ const tokenStore = useTokenStore();
 const webStore = useWebStore();
 const settingStore = useSettingStore();
 
+const canRegister = computed(() => !!tokenStore.token && settingStore.registerApis.length > 0);
 const selectedDomains = ref([]);
+const registrationLabels = {
+    success: "注册成功",
+    failed: "注册失败",
+    error: "注册出错",
+    outcome_unknown: "结果待核实，请先查注册商"
+};
 
 const showCheckedRawResponseDialog = ref(false);
 const checkedRawResponseDomain = ref(null);
@@ -271,7 +276,7 @@ function updateVisibleColumns() {
         }
     }
 
-    if (tokenStore.token) {
+    if (canRegister.value || (tokenStore.token && props.domainResults.some(row => row.selectedRegister))) {
         visibleColumns.value.push("registerStatus");
     }
 }
@@ -355,8 +360,9 @@ function registerSelectedDomains() {
 
         $q.dialog({
             title: `是否确认要注册选中的 ${registerDomainList.length} 个域名?`,
+            message: `接口 ${props.registerType}。提交可能产生费用，已提交的请求无法撤回。若曾断线，请先向注册商核实订单。`,
             cancel: "取消",
-            ok: "确定",
+            ok: "确认提交注册",
             persistent: true
         }).onOk(() => {
             const registerData = {
@@ -367,9 +373,12 @@ function registerSelectedDomains() {
                     domains: registerDomainList
                 }
             };
-            send(JSON.stringify(registerData));
-
-            webStore.setRegisteringDomains(selectedDomains.value);
+            // A paid operation must never be buffered for automatic replay on reconnect.
+            if (send(JSON.stringify(registerData), false)) {
+                webStore.setRegisteringDomains(selectedDomains.value);
+            } else {
+                $q.notify({ type: "warning", message: "连接已中断，注册请求未发送。" });
+            }
         });
     }
 }
@@ -378,7 +387,7 @@ onMounted(() => {
     updateVisibleColumns();
 });
 
-watch(() => [props.queryType, props.resultType, tokenStore.token], updateVisibleColumns);
+watch(() => [props.queryType, props.resultType, canRegister.value], updateVisibleColumns);
 watch(() => props.domainResults, () => { selectedDomains.value = []; });
 </script>
 

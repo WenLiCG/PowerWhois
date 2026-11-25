@@ -24,6 +24,7 @@ var ErrNotFound = errors.New("task not found")
 var ErrConflict = errors.New("task state or idempotency key conflict")
 var ErrNoRetryResults = errors.New("no failed or unknown results to retry")
 var ErrResultTooLarge = errors.New("stored result exceeds safe response size; use summary results")
+var ErrInvalidRequest = errors.New("invalid task request")
 
 type Request struct {
 	parentID    string
@@ -121,10 +122,10 @@ func Normalize(r Request) (Request, error) {
 func (s *Store) Create(ctx context.Context, r Request, idempotency string) (Task, bool, error) {
 	r, err := Normalize(r)
 	if err != nil {
-		return Task{}, false, err
+		return Task{}, false, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	if len(idempotency) > 128 {
-		return Task{}, false, fmt.Errorf("idempotency key exceeds 128 characters")
+		return Task{}, false, fmt.Errorf("%w: idempotency key exceeds 128 bytes", ErrInvalidRequest)
 	}
 	raw, _ := json.Marshal(r)
 	sum := sha256.Sum256(raw)
@@ -228,7 +229,10 @@ func (s *Store) Results(ctx context.Context, id string, offset, limit int, inclu
 	if err != nil {
 		return p, err
 	}
-	end := min(offset+limit, t.Total)
+	if offset >= t.Total {
+		return p, nil
+	}
+	end := offset + min(limit, t.Total-offset)
 	used := 1024
 	for index := offset; index < end; index++ {
 		data, e := s.Redis.HGet(ctx, s.key(id, "results"), strconv.Itoa(index)).Bytes()
@@ -345,7 +349,8 @@ func (s *Store) RetryFailed(ctx context.Context, id string) (Task, error) {
 	if len(domains) == 0 {
 		return t, ErrNoRetryResults
 	}
-	task, _, err := s.Create(ctx, Request{parentID: id, Domains: domains, Mode: t.Mode, Concurrency: t.Concurrency, Timeout: t.Timeout, Retries: t.Retries}, "")
+	concurrency := min(t.Concurrency, config.GetConfig().BulkCheckConcurrencyLimit)
+	task, _, err := s.Create(ctx, Request{parentID: id, Domains: domains, Mode: t.Mode, Concurrency: concurrency, Timeout: t.Timeout, Retries: t.Retries}, "")
 	return task, err
 }
 

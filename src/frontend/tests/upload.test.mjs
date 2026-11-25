@@ -11,8 +11,7 @@ function fixture(text) {
   const ctx={file:{value:{size:Buffer.byteLength(text),text:async()=>text}},creating:{value:false},error:{value:''},mode:{value:'dnsQuery'},concurrency:{value:15},timeout:{value:30},retries:{value:0},selectedID:{value:'prior-task'},submissionBody:null,submissionKey:null,crypto,loadSelected:async()=>{},showError:e=>{ctx.error.value=e.response.data.error.message},api:{post:async(path,body,options)=>{calls.push({path,body,options});return {data:{id:'created'}}}}};
   vm.createContext(ctx);vm.runInContext(code,ctx);return {ctx,calls};
 }
-test('upload retains first row, trims BOM/whitespace and defaults to 15',async()=>{
-  assert.match(source,/concurrency = ref\(15\)/);
+test('upload retains first row, trims BOM/whitespace and preserves an explicit concurrency',async()=>{
   const {ctx,calls}=fixture('\ufeffEXAMPLE.com\r\n\n example.org \n例子.中国\n');
   await ctx.createTask();
   assert.deepEqual(Array.from(calls[0].body.domains),['EXAMPLE.com','example.org','例子.中国']);
@@ -30,4 +29,12 @@ test('full attachment is parsed without truncation', {skip:!process.env.POWERWHO
   const expected=text.replace(/^\uFEFF/,'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   assert.equal(calls[0].body.domains.length,563807);assert.deepEqual(Array.from(calls[0].body.domains),expected);
   assert.equal(calls[0].body.domains[0],'google.cf');assert.equal(calls[0].body.domains.at(-1),'southampton.ac.uk');
+});
+
+test('blank concurrency uses the server default for small installations', async () => {
+  assert.match(source, /concurrency = ref\(""\)/);
+  const {ctx, calls} = fixture('example.com');
+  ctx.concurrency.value = '';
+  await ctx.createTask();
+  assert.equal('concurrency' in JSON.parse(JSON.stringify(calls[0].body)), false);
 });

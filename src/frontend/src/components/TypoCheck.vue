@@ -1,8 +1,8 @@
 <template>
     <div class="flex justify-center">
-        <q-input outlined autofocus class="full-width" v-model="domainInput" label="原始域名" placeholder="example.com" @keyup.enter="typoCheckDomain()" :disable="webStore.unCheckDomains > 0">
+        <q-input outlined autofocus class="full-width" v-model="domainInput" label="原始域名" placeholder="example.com" @keyup.enter="typoCheckDomain()" :disable="busy">
             <template v-slot:append>
-                <q-btn icon="send" color="primary" label="生成并查询" :disable="webStore.unCheckDomains > 0" @click="typoCheckDomain()" />
+                <q-btn icon="send" color="primary" label="生成并查询" :disable="busy" @click="typoCheckDomain()" />
             </template>
         </q-input>
     </div>
@@ -10,25 +10,25 @@
     <q-separator class="q-mt-md" />
 
     <div>
-        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="webStore.unCheckDomains > 0" />
+        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="busy" />
     </div>
 
     <q-separator />
 
     <div>
-        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="webStore.unCheckDomains > 0" />
+        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="busy" />
     </div>
 
     <q-separator />
 
     <div>
-        <WhoisSelection v-model:queryType="queryType" :disable="webStore.unCheckDomains > 0" />
+        <WhoisSelection v-model:queryType="queryType" :disable="busy" />
     </div>
 
-    <q-separator v-if="tokenStore.token" />
+    <q-separator v-if="tokenStore.token && settingStore.registerApis.length" />
 
-    <div v-if="tokenStore.token">
-        <RegisterSelection v-model:registerType="registerType" :disable="webStore.unCheckDomains > 0" />
+    <div v-if="tokenStore.token && settingStore.registerApis.length">
+        <RegisterSelection v-model:registerType="registerType" :disable="busy" />
     </div>
 
     <q-separator class="q-my-md" />
@@ -65,6 +65,7 @@ const typoCheckDomains = ref([]);
 
 const tokenStore = useTokenStore();
 const webStore = useWebStore();
+const busy = computed(() => webStore.unCheckDomains > 0 || webStore.unRegisterDomains > 0);
 const settingStore = useSettingStore();
 
 const domainInput = ref(null);
@@ -94,6 +95,7 @@ function isWebsocketConnected() {
 }
 
 function typoCheckDomain() {
+    if (busy.value) return;
     if (domainInput.value) {
         if (typoTypeSelected.value.length == 0 && typoSelectedCcTLDs.value.length == 0) {
             $q.notify({

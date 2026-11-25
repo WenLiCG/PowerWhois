@@ -6,6 +6,8 @@
 
 ## 保留的 Web HTTP 接口
 
+- `GET /healthz` 返回 `ok` 表示后端和 Redis 可用。
+- `POST /api/admin/logout` 使用管理员 JWT 撤销所有管理会话。
 - `POST /api/login`：管理员登录，返回 JWT。
 - `GET /api/web/setting`：公开网页查询参数（不含管理秘密）。
 - `GET/PUT /api/admin/setting`：管理配置。

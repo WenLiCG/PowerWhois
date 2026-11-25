@@ -11,6 +11,7 @@ var (
 	ErrorWhoisNotFound            = errors.New("whois not found")
 	ErrorNsNotFound               = errors.New("dns ns record not found")
 	ErrorWhoisServerFailed        = errors.New("whois server failed")
+	ErrorProxyNotConfigured       = errors.New("未配置有效的 SOCKS5 代理主机和端口")
 	ErrorConnectToProxy           = errors.New("connect to proxy failed")
 	ErrorNoContentInWhoisResponse = errors.New("no content in whois response")
 	ErrorNoParseRuleForTld        = errors.New("no parsing rule for tld")

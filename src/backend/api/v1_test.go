@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"io"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/scheduler"
+	"typonamer/utils"
 )
 
 func TestQueryAPIAndTasks(t *testing.T) {
@@ -128,6 +131,9 @@ func TestQueryAPIAndTasks(t *testing.T) {
 	if code, _ := request("POST", "/api/v1/tasks", map[string]interface{}{"domains": []string{"example.com"}, "register": true}, true, ""); code != 400 {
 		t.Fatal("unknown field accepted")
 	}
+	if code, _ := request("POST", "/api/v1/tasks", jobs.Request{Domains: []string{"invalid"}}, true, ""); code != 400 {
+		t.Fatal("invalid domain must return an input error")
+	}
 	if code, _ := request("POST", "/api/v1/typo", map[string]interface{}{"domain": "example.com", "types": []string{"skipLetter"}}, true, ""); code != 200 {
 		t.Fatal("typo failed")
 	}
@@ -151,5 +157,50 @@ func TestQueryAPIAndTasks(t *testing.T) {
 	}
 	if code, _ := request("POST", "/api/v1/query", req, true, ""); code != 413 {
 		t.Fatal("oversized synchronous response accepted", code)
+	}
+}
+
+func TestLegacyCSVExportAcrossPages(t *testing.T) {
+	r := testutil.Redis(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler.Init(ctx, r)
+	domains := make([]string, 1001)
+	for i := range domains {
+		domains[i] = fmt.Sprintf("row%d.com", i)
+	}
+	task, _, err := scheduler.Tasks.Create(ctx, jobs.Request{Domains: domains}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.SelectTask(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	items := []lookupinfo.QueryResult{}
+	key := scheduler.Tasks.Prefix + "task:" + task.ID
+	for _, index := range []int{0, 1000} {
+		item := lookupinfo.QueryResult{Domain: domains[index], Order: index, Status: "error", QueryError: "first line\nsecond line"}
+		data, _ := json.Marshal(item)
+		if err := r.HSet(ctx, key+":results", index, data).Err(); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	app := fiber.New()
+	app.Get("/export", BulkCheckResultDownload)
+	resp, err := app.Test(httptest.NewRequest("GET", "/export", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	want, _ := utils.ConvertQueryResultToCSV(items)
+	if err != nil || resp.StatusCode != 200 || !bytes.Equal(data, append(utf8BomData, want...)) {
+		t.Fatalf("CSV across two pages differs: %d, %v", resp.StatusCode, err)
+	}
+	if files, err := os.ReadDir(dir); err != nil || len(files) != 0 {
+		t.Fatalf("temporary download left behind: %v, %v", files, err)
 	}
 }

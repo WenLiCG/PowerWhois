@@ -9,7 +9,7 @@
                     </div>
                     <div class="connection-state" role="status">
                         <q-icon :name="status === 'OPEN' ? 'cloud_done' : 'cloud_off'" />
-                        {{ status === "OPEN" ? "服务已连接" : "连接中断，正在重连" }}
+                        {{ status === "OPEN" ? "服务已连接" : status === "CONNECTING" ? "正在连接服务" : "连接已断开" }}
                     </div>
                 </header>
                 <div class="full-width">
@@ -43,7 +43,7 @@
                     </q-tabs>
                 </div>
                 <div class="workspace-content">
-                    <q-tab-panels v-model="tab" animated class="full-width bg-grey-1">
+                    <q-tab-panels v-model="tab" class="full-width bg-grey-1">
                         <q-tab-panel name="webCheck">
                             <WebCheck></WebCheck>
                         </q-tab-panel>
@@ -57,7 +57,7 @@
                         </q-tab-panel>
 
                         <q-tab-panel name="login" v-if="!tokenStore.token">
-                            <AdminLogin @login-success="loginedUpdate()"></AdminLogin>
+                            <AdminLogin @login-success="onLogin"></AdminLogin>
                         </q-tab-panel>
 
                         <q-tab-panel name="setting" v-if="tokenStore.token">
@@ -75,11 +75,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useQuasar } from "quasar";
 import { api } from "boot/axios";
 import { removeToken } from "src/utils/tokenHandler";
 import { close, open, status } from "src/utils/websocketHandler";
+import { useWebStore } from "src/stores/webStore";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useSettingStore } from "src/stores/settingStore";
 
@@ -99,9 +100,22 @@ const settingStore = useSettingStore();
 const tab = ref("webCheck");
 const loggingOut = ref(false);
 
-function loginedUpdate() {
-    location.reload();
+function onLogin() {
+    tab.value = "webCheck";
+    getWebSettings();
+    $q.notify({ type: "positive", message: "已登录" });
 }
+
+watch(() => tokenStore.token, (token, previous) => {
+    if (token || !previous) return;
+    useWebStore().clearDomains();
+    settingStore.clearSetting();
+    if (tab.value !== "webCheck") {
+        tab.value = "login";
+        $q.notify({ type: "warning", message: "管理会话已结束，请重新登录" });
+    }
+    getWebSettings();
+});
 
 async function logout() {
     if (loggingOut.value) return;

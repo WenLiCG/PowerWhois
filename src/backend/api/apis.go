@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"typonamer/config"
@@ -82,15 +84,8 @@ func SettingUpdate(c *fiber.Ctx) error {
 }
 
 func DownloadLog(c *fiber.Ctx) error {
-	zipLogFile, err := log.GetZipLogsFile()
-	if err != nil {
-		log.Error("Get zip log file error: ", err)
-		return c.Status(500).SendString(err.Error())
-	}
-
-	log.Info("Download log: ", zipLogFile)
-
-	return c.Download(zipLogFile)
+	filename := fmt.Sprintf("typonamer_logs_%s.zip", carbon.Now().ToShortDateTimeString())
+	return sendDownload(c, filename, log.WriteZipLogs)
 }
 
 func ResetLog(c *fiber.Ctx) error {
@@ -141,27 +136,67 @@ func BulkCheckDomainUpload(c *fiber.Ctx) error {
 }
 
 func BulkCheckResultDownload(c *fiber.Ctx) error {
-	domainResults, err := scheduler.BulkResults(c.UserContext())
+	ctx := c.UserContext()
+	id := scheduler.CurrentTaskID()
+	task, err := scheduler.Tasks.Get(ctx, id)
 	if err != nil {
-		return c.Status(503).SendString("cannot read task results")
+		return taskError(c, err)
 	}
-	csvData, err := utils.ConvertQueryResultToCSV(domainResults)
-	if err != nil {
-		log.Error("Convert query result to csv error: ", err)
-		return c.Status(500).SendString(err.Error())
-	}
-
-	// Add the utf8 bom data to the csv data
-	csvData = append(utf8BomData, csvData...)
-
-	log.Debug("Convert query result to csv success")
-	log.Info("Download query result success")
-
-	// Set the filename and content type
 	filename := fmt.Sprintf("bulk_check_result_%s.csv", carbon.Now().ToShortDateTimeString())
-	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	c.Set("Content-Type", "text/csv")
+	return sendDownload(c, filename, func(w io.Writer) error {
+		if _, err := w.Write(utf8BomData); err != nil {
+			return err
+		}
+		header, err := utils.ConvertQueryResultToCSV(nil)
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(header); err != nil {
+			return err
+		}
+		stable := task.State == "completed" || task.State == "canceled"
+		written := 0
+		for offset := 0; offset >= 0 && !(stable && written == task.Completed); {
+			page, err := scheduler.Tasks.Results(ctx, id, offset, 1000, false)
+			if err != nil {
+				return err
+			}
+			data, err := utils.ConvertQueryResultToCSV(page.Items)
+			if err != nil {
+				return err
+			}
+			if _, err = w.Write(bytes.TrimPrefix(data, header)); err != nil {
+				return err
+			}
+			offset = page.NextOffset
+			written += len(page.Items)
+		}
+		return nil
+	})
+}
 
-	// Send the csv data to the client
-	return c.SendStream(bytes.NewReader(csvData))
+type tempDownload struct{ *os.File }
+
+func (f tempDownload) Close() error {
+	return errors.Join(f.File.Close(), os.Remove(f.Name()))
+}
+
+// Stage a private file so failures can still return an error before HTTP headers are sent.
+func sendDownload(c *fiber.Ctx, name string, write func(io.Writer) error) error {
+	file, err := os.CreateTemp("", "powerwhois-download-*")
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	stream := tempDownload{file}
+	if err = write(file); err == nil {
+		_, err = file.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		stream.Close()
+		log.Error("Cannot prepare download: ", err)
+		return fiber.ErrInternalServerError
+	}
+	c.Attachment(name)
+	c.Set("Cache-Control", "no-store")
+	return c.SendStream(stream)
 }

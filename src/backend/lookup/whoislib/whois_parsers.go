@@ -68,51 +68,8 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 		}
 	}
 
-	// Extract the creation date from the response.
-	if matcher.ReCreationDate != nil {
-		matchCreationDate := matcher.ReCreationDate.FindStringSubmatch(responseContent)
-		if len(matchCreationDate) > 1 {
-			matchCreationDateStr := ordinalDate.ReplaceAllString(strutil.Trim(matchCreationDate[1]), "${1}")
-			if matcher.DateTimeLayoutForCreationDate != "" {
-				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayoutForCreationDate).ToDateTimeString()
-			} else if matcher.DateTimeLayout != "" {
-				domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchCreationDateStr, matcher.DateTimeLayout).ToDateTimeString()
-			} else {
-				creationDate := carbon.SetTimezone(carbon.UTC).Parse(matchCreationDateStr).ToDateTimeString()
-				if creationDate != "" {
-					domainInfo.CreationDate = creationDate
-				} else {
-					if strings.Contains(matchCreationDateStr, "+") {
-						dateTimStrs := strutil.SplitAndTrim(matchCreationDateStr, "+")
-						domainInfo.CreationDate = carbon.SetTimezone(carbon.UTC).Parse(dateTimStrs[0]).ToDateTimeString()
-					}
-				}
-			}
-		}
-	}
-
-	// Extract the expiry date from the response.
-	if matcher.ReExpiryDate != nil {
-		matchExpiryDate := matcher.ReExpiryDate.FindStringSubmatch(responseContent)
-		if len(matchExpiryDate) > 1 {
-			matchExpiryDateStr := ordinalDate.ReplaceAllString(strutil.Trim(matchExpiryDate[1]), "${1}")
-			if matcher.DateTimeLayoutForExpiryDate != "" {
-				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayoutForExpiryDate).ToDateTimeString()
-			} else if matcher.DateTimeLayout != "" {
-				domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).ParseByLayout(matchExpiryDateStr, matcher.DateTimeLayout).ToDateTimeString()
-			} else {
-				expiryDate := carbon.SetTimezone(carbon.UTC).Parse(matchExpiryDateStr).ToDateTimeString()
-				if expiryDate != "" {
-					domainInfo.ExpiryDate = expiryDate
-				} else {
-					if strings.Contains(matchExpiryDateStr, "+") {
-						dateTimStrs := strutil.SplitAndTrim(matchExpiryDateStr, "+")
-						domainInfo.ExpiryDate = carbon.SetTimezone(carbon.UTC).Parse(dateTimStrs[0]).ToDateTimeString()
-					}
-				}
-			}
-		}
-	}
+	domainInfo.CreationDate = whoisDate(responseContent, matcher.ReCreationDate, matcher.DateTimeLayoutForCreationDate, matcher.DateTimeLayout)
+	domainInfo.ExpiryDate = whoisDate(responseContent, matcher.ReExpiryDate, matcher.DateTimeLayoutForExpiryDate, matcher.DateTimeLayout)
 
 	// Extract the nameservers from the response.
 	if matcher.ReNameServer != nil {
@@ -154,4 +111,26 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	}
 
 	return domainInfo, nil
+}
+
+func whoisDate(response string, re *regexp.Regexp, layout, fallbackLayout string) string {
+	if re == nil {
+		return ""
+	}
+	match := re.FindStringSubmatch(response)
+	if len(match) < 2 {
+		return ""
+	}
+	value := ordinalDate.ReplaceAllString(strings.TrimSpace(match[1]), "${1}")
+	if layout == "" {
+		layout = fallbackLayout
+	}
+	if layout != "" {
+		return carbon.ParseByLayout(value, layout, carbon.UTC).ToDateTimeString()
+	}
+	date := carbon.Parse(value, carbon.UTC)
+	if prefix, _, ok := strings.Cut(value, "+"); date.Error != nil && ok {
+		date = carbon.Parse(strings.TrimSpace(prefix), carbon.UTC)
+	}
+	return date.ToDateTimeString()
 }

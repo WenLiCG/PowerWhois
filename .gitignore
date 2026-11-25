@@ -21,6 +21,9 @@
 go.work
 
 .work/
+deploy/runtime/
+deploy/redis/redisdata/*
+!deploy/redis/redisdata/.gitkeep
 dist/
 .env
 logs/

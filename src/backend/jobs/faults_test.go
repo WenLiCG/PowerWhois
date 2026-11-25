@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"typonamer/config"
 	"typonamer/internal/testutil"
 	"typonamer/lookup/lookupinfo"
 )
@@ -172,11 +173,18 @@ func TestResultPaginationBoundsBytesWithoutSkippingInputs(t *testing.T) {
 	if e != nil || len(summary.Items) == 0 || summary.Items[0].RawResponse != "" || !summary.Items[0].RawResponseAvailable {
 		t.Fatal("summary lost evidence reference", e)
 	}
-	if _, e = s.Control(ctx, task.ID, "pause"); e != nil {
+	task, e = s.Control(ctx, task.ID, "pause")
+	if e != nil {
 		t.Fatal(e)
 	}
+	// This task predates a lower concurrency cap in the current configuration.
+	cap := config.GetConfig().BulkCheckConcurrencyLimit
+	task.Concurrency = cap + 1
+	if err := s.save(ctx, task); err != nil {
+		t.Fatal(err)
+	}
 	retry, e := s.RetryFailed(ctx, task.ID)
-	if e != nil || retry.Total != 17 || retry.ParentTaskID != task.ID {
-		t.Fatal("retry skipped a byte-limited page", retry.Total, e)
+	if e != nil || retry.Total != 17 || retry.ParentTaskID != task.ID || retry.Concurrency != cap {
+		t.Fatal("retry lost results or exceeded the current cap", retry.Total, retry.Concurrency, e)
 	}
 }

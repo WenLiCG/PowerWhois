@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"typonamer/config"
@@ -53,6 +52,15 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	cfg := config.GetConfig()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
 	defer cancel()
+	var dialer proxy.ContextDialer = &net.Dialer{}
+	if useProxy {
+		proxyDialer, err := network.SOCKS5Dialer(cfg)
+		if err != nil {
+			domainInfo.Source = "local-validation"
+			return domainInfo, err
+		}
+		dialer = proxyDialer
+	}
 	release, err := network.Acquire(ctx, "whois")
 	if err != nil {
 		return domainInfo, err
@@ -66,84 +74,18 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	// Create the address for the WHOIS server
 	whoisAddr := net.JoinHostPort(whoisServer, "43")
 
-	// Create the connection
-	conn := net.Conn(nil)
-	if useProxy {
-		proxyServer := net.JoinHostPort(cfg.SocketProxyHost, strconv.Itoa(cfg.SocketProxyPort))
-		var proxyDialer proxy.Dialer
-		var err error
-
-		baseTCPDialer := &net.Dialer{
-			Timeout:  time.Second * time.Duration(cfg.WhoisTimeout),
-			Deadline: time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout*2)),
-		}
-
-		if cfg.SocketProxyAuth {
-			proxyAuth := proxy.Auth{
-				User:     cfg.SocketProxyUser,
-				Password: cfg.SocketProxyPassword,
-			}
-
-			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, &proxyAuth, baseTCPDialer)
-			if err != nil {
-				log.Warnf("Failed to connect to the proxy server with auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
-		} else {
-			proxyDialer, err = proxy.SOCKS5("tcp", proxyServer, nil, baseTCPDialer)
-			if err != nil {
-				log.Warnf("Failed to connect to the proxy server without auth: %s", err)
-				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorConnectToProxy, err.Error())
-			}
-		}
-
-		proxyConn, err := proxyDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", whoisAddr)
-		if err != nil {
-			log.Warnf("Failed to connect to the whois server %s via proxy: %s", whoisAddr, err)
-			return domainInfo, whoisTransportError(err)
-		}
-
-		// Set timeouts for the proxy connection
-		err = proxyConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
-		if err != nil {
-			log.Warnf("Failed to set deadline for proxy connection: %s", err)
-			proxyConn.Close()
-			return domainInfo, whoisTransportError(err)
-		}
-
-		conn = proxyConn
-	} else {
-		rawConn, err := (&net.Dialer{Timeout: time.Second * time.Duration(cfg.WhoisTimeout)}).DialContext(ctx, "tcp", whoisAddr)
-		if err != nil {
-			log.Warnf("Failed to connect to the whois server %s: %s", whoisAddr, err)
-			return domainInfo, whoisTransportError(err)
-		}
-
-		// Set timeouts for the direct connection
-		err = rawConn.SetDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
-		if err != nil {
-			log.Warnf("Failed to set deadline for connection: %s", err)
-			rawConn.Close()
-			return domainInfo, whoisTransportError(err)
-		}
-
-		conn = rawConn
-	}
-
-	defer conn.Close()
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-	}
-
-	log.Infof("Querying WHOIS for domain: %s with TLD: %s on server: %s", domain, tld, whoisServer)
-
-	// Set write deadline
-	err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
+	conn, err := dialer.DialContext(ctx, "tcp", whoisAddr)
 	if err != nil {
 		return domainInfo, whoisTransportError(err)
 	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return domainInfo, whoisTransportError(err)
+	}
+	log.Infof("Querying WHOIS for domain: %s with TLD: %s on server: %s", domain, tld, whoisServer)
 
 	queryInfo := fmt.Sprintf("%s\r\n", domain)
 	if maputil.HasKey(WhoisTldOptions, tld) {
@@ -154,12 +96,6 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	_, err = conn.Write([]byte(queryInfo))
 	if err != nil {
 		log.Warnf("Failed to write query: %s", err)
-		return domainInfo, whoisTransportError(err)
-	}
-
-	// Set read deadline
-	err = conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(cfg.WhoisTimeout)))
-	if err != nil {
 		return domainInfo, whoisTransportError(err)
 	}
 

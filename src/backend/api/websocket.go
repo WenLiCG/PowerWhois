@@ -111,7 +111,14 @@ func onMessage(ep *socketio.EventPayload) {
 		scheduler.BulkCheckRemoveKws(ep.Kws)
 	}
 	if m.Event != "webCheck" && !admin {
-		emit(ep.Kws, "webCheckError", "需要管理员登录")
+		event := "webCheckError"
+		switch m.Event {
+		case "register", "typoCheck":
+			event = m.Event + "Error"
+		case "bulkCheckStart", "bulkCheckPause", "bulkCheckResume", "bulkCheckCancel", "bulkCheckClear", "bulkRecheckErrorDomains":
+			event = "bulkCheckError"
+		}
+		emit(ep.Kws, event, "需要管理员登录")
 		return
 	}
 	switch m.Event {

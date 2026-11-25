@@ -53,7 +53,7 @@ func taskError(c *fiber.Ctx, err error) error {
 	if errors.Is(err, jobs.ErrResultTooLarge) {
 		return apiError(c, 413, "result_too_large", err.Error())
 	}
-	if errors.Is(err, jobs.ErrNoRetryResults) {
+	if errors.Is(err, jobs.ErrNoRetryResults) || errors.Is(err, jobs.ErrInvalidRequest) {
 		return apiError(c, 400, "invalid_request", err.Error())
 	}
 	if errors.Is(err, jobs.ErrNotFound) {
@@ -146,15 +146,8 @@ func V1Routes(router fiber.Router) {
 		if err := decode(c, &r); err != nil {
 			return apiError(c, 400, "invalid_request", err.Error())
 		}
-		normalized, err := jobs.Normalize(r)
-		if err != nil {
-			return apiError(c, 400, "invalid_request", err.Error())
-		}
 		key := c.Get("Idempotency-Key")
-		if len(key) > 128 {
-			return apiError(c, 400, "invalid_request", "idempotency key too long")
-		}
-		t, reused, err := scheduler.Tasks.Create(c.UserContext(), normalized, key)
+		t, reused, err := scheduler.Tasks.Create(c.UserContext(), r, key)
 		if err != nil {
 			return taskError(c, err)
 		}

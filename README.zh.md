@@ -23,19 +23,18 @@ install -m 600 .env.example .env
 ${EDITOR:-vi} .env
 ```
 
-填写 `.env` 的四个变量。设置管理员用户名和至少 12 字符的密码，为 `POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN` 分别生成至少 32 字符的随机值。确保 `.env` 不进入 Git。
+新安装保留 `POWERWHOIS_CONFIG_DIR=./runtime/backend`，并填写四项凭据。设置管理员用户名和至少 12 字符的密码，为 `POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN` 分别生成至少 32 字符的随机值。确保 `.env` 不进入 Git。
 
 ```sh
-sudo chown 10001:10001 backend backend/config.yaml
-sudo chmod 750 backend
-sudo chmod 600 backend/config.yaml
+sudo install -d -o 10001 -g 10001 -m 750 runtime/backend
+sudo test ! -e runtime/backend/config.yaml && sudo install -o 10001 -g 10001 -m 600 backend/config.yaml runtime/backend/config.yaml
 docker compose config --quiet
 docker compose up -d --build
 docker compose ps
-curl -fsS --retry 12 --retry-connrefused --retry-delay 2 http://127.0.0.1:8080/api/web/setting
+curl -fsS --retry 12 --retry-connrefused --retry-delay 2 http://127.0.0.1:8080/healthz
 ```
 
-Compose 从源码构建后端和网页。后端容器使用 UID 10001，保存设置时需要写入挂载的配置目录。Redis 任务数据保存在 `deploy/redis/redisdata`。
+Compose 从源码构建后端和网页。后端容器使用 UID 10001，保存设置时需要写入挂载的配置目录。Redis 任务数据保存在 `deploy/redis/redisdata`。升级时保留原 `.env` 和配置目录。未设置 `POWERWHOIS_CONFIG_DIR` 的已有实例继续读取 `deploy/backend`。新安装需要代理或注册商时，在管理设置中填写自己的供应商。
 
 在主机打开 `http://127.0.0.1:8080`，使用配置的管理员账号登录。端口绑定在主机回环地址。部署到远程主机时，在自己的电脑运行 `ssh -N -L 8080:127.0.0.1:8080 user@server`，再打开同一地址。可用 `docker compose logs --tail 100 typonamer caddy redis` 查看启动日志。
 
@@ -45,7 +44,8 @@ Compose 从源码构建后端和网页。后端容器使用 UID 10001，保存�
 
 ## 使用文档
 
-- [完整审查、修复和功能对照](docs/REVIEW.md)
+- [本轮审查、验收与升级注意事项](HANDOFF.md)
+- [历史审查、修复和功能对照](docs/REVIEW.md)
 - [CLI / API / MCP 示例、权限与 AI 环境接入条件](docs/USAGE.md)
 - [测试报告及未验证事项](docs/TEST-REPORT.md)
 - [OpenAPI 3.0 文档](src/backend/api/openapi.json)；运行后 `/api/openapi.json`

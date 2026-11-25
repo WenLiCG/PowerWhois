@@ -46,7 +46,7 @@ export default ({ app }) => {
             return response;
         },
         (error) => {
-            if (error.response && error.response.status === 401) {
+            if (error.response?.status === 401 && error.config?.headers?.Authorization === `Bearer ${getToken()}`) {
                 // 未认证，或认证失败，删除token
                 removeToken();
             }
