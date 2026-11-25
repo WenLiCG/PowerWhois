@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 	"typonamer/constant"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
@@ -13,6 +14,7 @@ import (
 )
 
 var ordinalDate = regexp.MustCompile(`\b([0-9]{1,2})(?:st|nd|rd|th)\b`)
+var whoisRateLimitPattern = regexp.MustCompile(`(?i)(rate\s*limit|query\s*(?:limit|rate)|limit\s*exceeded|too\s*many\s*requests|(?:rate|limit|queries).*exceeded|exceeded.*(?:rate|limit|queries)|connection\s*limit|try\s*again\s*later|queried\s*too\s*fast|number\s*of\s*requests)`)
 
 var whoisResponseReplaceList = map[string]string{
 	"\r\n": "\n",
@@ -107,6 +109,9 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	}
 
 	if domainInfo.Registrar == "" && domainInfo.CreationDate == "" && domainInfo.ExpiryDate == "" && len(domainInfo.NameServer) == 0 {
+		if whoisRateLimitPattern.MatchString(responseContent) {
+			return domainInfo, lookuperror.ErrorRateLimited
+		}
 		return domainInfo, errors.New("no domain info found in whois response")
 	}
 
@@ -126,7 +131,15 @@ func whoisDate(response string, re *regexp.Regexp, layout, fallbackLayout string
 		layout = fallbackLayout
 	}
 	if layout != "" {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC().Format(time.DateTime)
+		}
 		return carbon.ParseByLayout(value, layout, carbon.UTC).ToDateTimeString()
+	}
+	for _, isoLayout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if parsed, err := time.Parse(isoLayout, value); err == nil {
+			return parsed.UTC().Format(time.DateTime)
+		}
 	}
 	date := carbon.Parse(value, carbon.UTC)
 	if prefix, _, ok := strings.Cut(value, "+"); date.Error != nil && ok {

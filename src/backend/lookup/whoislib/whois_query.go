@@ -128,6 +128,10 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 			if errors.Is(err, lookuperror.ErrorReservedDomain) {
 				return domainInfo, err
 			}
+			if errors.Is(err, lookuperror.ErrorRateLimited) {
+				network.RetryAfter("whois", whoisServer, "5")
+				return domainInfo, err
+			}
 			if err.Error() == "domain not found" {
 				log.Infof("Domain %s is not registered", domain)
 				return domainInfo, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisNotFound, domain)

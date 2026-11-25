@@ -71,6 +71,13 @@ func TestSafeConfigRoundTrip(t *testing.T) {
 	}
 	c = GetConfig()
 	public := PublicSettings()
+	secretsMap, ok := public["secrets"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing secrets metadata")
+	}
+	if userMeta, ok := secretsMap["authUsername"].(map[string]bool); !ok || !userMeta["managed"] {
+		t.Fatalf("expected authUsername managed metadata, got %+v", secretsMap["authUsername"])
+	}
 	encoded, _ := json.Marshal(public)
 	for _, secret := range []string{c.AuthPassword, c.JwtSecretKey, c.SocketProxyPassword, c.WhoisApis[0].ApiUrl} {
 		if secret != "" && strings.Contains(string(encoded), secret) {

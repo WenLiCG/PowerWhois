@@ -9,6 +9,7 @@ import (
 	"github.com/openrdap/rdap/bootstrap/cache"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"typonamer/config"
 	"typonamer/constant"
@@ -17,21 +18,63 @@ import (
 	"typonamer/lookup/network"
 )
 
+type safeRegistryCache struct {
+	mu    sync.RWMutex
+	inner *cache.MemoryCache
+}
+
+func (c *safeRegistryCache) Load(filename string) ([]byte, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.inner.Load(filename)
+}
+
+func (c *safeRegistryCache) Save(filename string, data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inner.Save(filename, data)
+}
+
+func (c *safeRegistryCache) State(filename string) cache.FileState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.inner.State(filename)
+}
+
+func (c *safeRegistryCache) SetTimeout(timeout time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inner.SetTimeout(timeout)
+}
+
+var (
+	directRDAPTransport = func() *http.Transport {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.MaxIdleConns = 64
+		tr.MaxIdleConnsPerHost = 8
+		tr.IdleConnTimeout = 60 * time.Second
+		return tr
+	}()
+	sharedBootstrapCache = &safeRegistryCache{inner: cache.NewMemoryCache()}
+)
+
 func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (lookupinfo.DomainInfo, error) {
 	info := lookupinfo.DomainInfo{DomainName: domain, LookupType: constant.LookupTypeRDAP, ViaProxy: useProxy}
 	cfg := config.GetConfig()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.RdapTimeout)*time.Second)
 	defer cancel()
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	defer tr.CloseIdleConnections()
+	tr := directRDAPTransport
 	if useProxy {
 		dialer, err := network.SOCKS5Dialer(cfg)
 		if err != nil {
 			info.Source = "local-validation"
 			return info, err
 		}
-		tr.Proxy = nil
-		tr.DialContext = dialer.DialContext
+		proxyTr := directRDAPTransport.Clone()
+		proxyTr.Proxy = nil
+		proxyTr.DialContext = dialer.DialContext
+		defer proxyTr.CloseIdleConnections()
+		tr = proxyTr
 	}
 	release, err := network.Acquire(ctx, "rdap")
 	if err != nil {
@@ -45,7 +88,7 @@ func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (l
 			}
 			return nil
 		}}
-	rc := &rdap.Client{HTTP: client, Bootstrap: &bootstrap.Client{HTTP: client, Cache: cache.NewDiskCache()}}
+	rc := &rdap.Client{HTTP: client, Bootstrap: &bootstrap.Client{HTTP: client, Cache: sharedBootstrapCache}}
 	resp, err := rc.Do((&rdap.Request{Type: rdap.DomainRequest, Query: domain, Timeout: time.Duration(cfg.RdapTimeout) * time.Second}).WithContext(ctx))
 	parsed, err := parseResponse(domain, info, resp, err)
 	if ctx.Err() != nil {

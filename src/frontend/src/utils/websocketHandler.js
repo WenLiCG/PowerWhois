@@ -4,8 +4,8 @@ import { useBulkStore } from "src/stores/bulkStore";
 import { useWebStore } from "src/stores/webStore";
 import { Notify } from "quasar";
 
-const wsUrl = new URL('/app/ws', window.location.href);
-wsUrl.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = new URL("/app/ws", window.location.href);
+wsUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
 const bulkStore = useBulkStore();
 const webStore = useWebStore();
@@ -15,14 +15,14 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
     heartbeat: {
         message: JSON.stringify({ event: "ping" }),
         responseMessage: JSON.stringify({ event: "pong" }),
-        interval: 60000, //60秒
-        pongTimeout: 5000 //5秒
+        interval: 60000,
+        pongTimeout: 5000
     },
     onConnected: (ws) => {
         const token = getToken();
         if (token) ws.send(JSON.stringify({ event: "adminAuth", data: token }));
     },
-    onDisconnected: (ws, event) => {
+    onDisconnected: () => {
         webStore.interruptQueries();
     },
     onError: (ws, event) => {
@@ -30,7 +30,11 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
     },
     onMessage: (ws, msg) => {
         let msgObj;
-        try { msgObj = JSON.parse(msg.data); } catch { return; }
+        try {
+            msgObj = JSON.parse(msg.data);
+        } catch {
+            return;
+        }
         switch (msgObj.event) {
             case "bulkCheckInfo":
                 bulkStore.setBulkCheckStatus(msgObj.data.Status);
@@ -39,6 +43,9 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
                 break;
             case "webCheckDomains":
                 webStore.setCheckingDomains(msgObj.data, "webCheck", "");
+                break;
+            case "webCheckStopped":
+                webStore.stopQueries();
                 break;
             case "typoResult":
                 webStore.setCheckingDomains(msgObj.data.domains, "typoCheck", msgObj.data.typoType);
@@ -56,6 +63,7 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
             case "bulkCheckError":
             case "webCheckError":
             case "typoCheckError":
+                webStore.setIsErrorRecheck(false);
                 Notify.create({
                     position: "top",
                     type: "negative",

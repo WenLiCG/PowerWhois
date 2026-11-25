@@ -32,6 +32,9 @@ func Init(ctx context.Context, r *redis.Client) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if !hasBulkClients() {
+					continue
+				}
 				info, err := getBulkCheckInfo()
 				if err == nil {
 					message, _ := json.Marshal(map[string]interface{}{"event": "bulkCheckInfo", "data": info})
@@ -40,6 +43,17 @@ func Init(ctx context.Context, r *redis.Client) {
 			}
 		}
 	}()
+}
+func hasBulkClients() bool {
+	bulkMu.Lock()
+	defer bulkMu.Unlock()
+	for k, authorized := range bulkClients {
+		if authorized() {
+			return true
+		}
+		delete(bulkClients, k)
+	}
+	return false
 }
 func BulkCheckAddKws(k *socketio.Websocket, authorized func() bool) {
 	bulkMu.Lock()

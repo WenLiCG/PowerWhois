@@ -1,8 +1,27 @@
 # PowerWhois 程序员交接文档
 
-## 当前交付（2026-11-25）
+## 当前交付（2026-11-25 审查与体验优化）
 
-基线为 `main@ec0af62`。Go/Fiber 服务提供查询、管理接口和 WebSocket，Redis 保存任务、租约、结果与注册审计。Vue/Quasar 网页、CLI 和 MCP 共用这套后端。服务面向个人或信任的小组，同一批量任务库由所有获授权的查询客户端共享。本节以下按日期保留历史版本的交接记录。
+前序基线为 GitHub `main@4a646fc`（PR #13 合并提交）。本轮在通读全库源码、测试、部署配置与交接历史的基础上完成端到端审查、根因修复、性能与安全加固、Web UI/UX 打磨及全链路实测。架构保持单租户 Go/Fiber + Redis + Vue/Quasar，Web、CLI、HTTP API（`/api/v1`）与 MCP 共用同一查询核心与持久化任务库，无新增第三方依赖。本节以下按日期保留历史版本的交接记录。
+
+| 维度 | 本轮根因修复与优化内容 |
+|---|---|
+| 高 · 查询正确性与限流 | `dnslib` 修复大小写敏感的 `ns.Hdr.Name` 匹配导致的已注册域名漏判，统一线程安全的 `TldNsCache` 切片克隆读取并将最大委派层级提升至 5；`whoislib` 新增端口 43 限流文本识别（返回 `ErrorRateLimited` 并触发 5s 退避，同时确保含限流声明页脚的正常已注册响应不受影响），支持带时区偏移的 ISO-8601 时间戳统一转 UTC；`network/limits` 为无 `Retry-After` 头的 HTTP 429 补充默认 2s 退避，并将单次 `Retry-After` 上限封顶为 60s，防止异常上游长时间挂起工作协程。 |
+| 中 · 性能与资源效率 | `rdaplib` 复用直连 HTTP Transport 连接池并使用带读写锁的内存 Bootstrap 缓存替代逐次新建 `DiskCache`，减少重复 TLS 握手与磁盘/只读目录开销；`jobs.Store.List` 改为 Redis Pipeline 批量读取元数据与计数，`Store.Results` 改为 100 条分块的 `HMGet`（保留原有 8 MiB / 16 MiB 字节预算边界）；`scheduler/bulk_check` 在无管理员 WebSocket 订阅时跳过每秒 Redis 轮询；`database/redis` 支持启动期 `ctx` 取消中断并在连接失败时关闭客户端；`BulkCheck.vue` 在浏览器标签页隐藏时暂停轮询、切回时立即刷新。 |
+| 中 · 实用安全加固 | `api/auth` 登录凭据改为固定长度 SHA-256 摘要的 `subtle.ConstantTimeCompare` 常量时间比对；WebSocket `/app/ws` 与 MCP HTTP `/mcp` 收紧 `Origin` 校验（要求合法 `http/https` 且拒绝 `Origin: null` 沙箱内嵌帧）；服务端统一输出 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: same-origin`；清理 `src/frontend/.env` 遗留局域网地址为 `127.0.0.1:8080`。 |
+| 中 · Web 流程与 UI/UX | 重整顶栏、连接状态胶囊（断线支持一键重连）、管理员身份标识与卡片化工作区；网页与 Typo 查询补充前置格式校验（避免误粘 URL 清空已有结果）、一键整理去重（统一小写并去尾点）、`Ctrl+Enter` 快捷键、实时进度展示及中途「停止查询」（新增 WebSocket `webCheckStop` / `webCheckStopped`，未完成项标为未知且支持后续一键续查）；修复跨 Typo 规则生成同域名时的重复行与重复计数问题（合并显示如 `Reverse Letter / ccTLDs`），修复 `isErrorRecheck` 状态残留；结果表支持点击状态标签筛选、一键复制当前筛选域名、导出防公式注入 CSV 及复制原始响应；批量页补充可读模式名、到期日与生命周期列及详情复制；设置页修复环境变量托管 `authUsername` 禁用提示、回车误提交表单、替换词尾空行报错及自定义接口弹窗无表单校验等问题。 |
+
+**本轮实测结果。**
+- **后端（WSL Ubuntu, Go 1.27.4, Redis 8.0.5）**：`gofmt -l .` 无输出、`go mod verify` 通过、`go vet ./...` 零警告、`go test -race -count=1 -v ./...` 全部 13 个测试包 **49 项测试 PASS**（0 失败，3 个需外部大附件环境变量的可选回归按设计 SKIP）。编译 Linux（`typonamer`、`powerwhois`、`powerwhois-mcp`）与 Windows amd64（`powerwhois.exe`、`powerwhois-mcp.exe`）二进制均成功。`GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...` 可达调用与导入包级漏洞均为 **0**（模块层仍仅提示未导入的 `golang.org/x/crypto` OpenPGP 公告）。
+- **跨入口与故障恢复验收**：`python3 tools/acceptance.py --stress` 通过，覆盖单活租约互斥、HTTP API / CLI / stdio MCP / HTTP MCP 四通道任务 ID 与 JSON/CSV 导出一致性、300 域名 32 并发吞吐、暂停/继续/取消部分结果保留、20 并发幂等重放、服务重启与 `SIGKILL` 崩溃后租约恢复，以及日志无凭据泄漏扫描。
+- **前端（Node v24.14.0, npm 11.9.0）**：`npm test` 通过 **16 项单测**（0 失败，1 项外部附件测试按设计 SKIP），`npm run lint`（ESLint）零错误零警告，`npm run build`（Quasar/Vite SPA）构建成功，`npm audit`（完整依赖与 `--omit=dev` 生产依赖）均为 **0 vulnerabilities**。项目前端为纯 JavaScript/Vue 3，无独立 TypeScript 编译检查脚本。
+- **真实浏览器交互验收（Chromium）**：基于生产构建 SPA 与隔离后端/Redis，在桌面端（`1280×800`）与移动端窄屏（`390×844`）完整验证匿名访问、非法 URL 拦截、整理去重、管理员登录（含密码显隐与会话标识）、即时查询、状态筛选、原始证据弹窗与复制、Typo 全选/清空与跨规则去重合并、批量任务进度与详情、系统设置环境变量托管提示与自定义接口弹窗校验、配置保存及退出全部管理会话，全程零控制台报错、窄屏无横向溢出。
+
+**已知边界与后续建议。** 当前架构面向个人或信任的小团队共享使用，无多租户隔离与历史任务自动过期清理；真实商业 SOCKS5 代理、真实付费注册商下单及云端 AI 宿主账号级连接需在现场授权环境另行验收。
+
+## 历史交付（2026-11-25 基线）
+
+基线为 `main@ec0af62`（PR #13 合入后为 `main@4a646fc`）。Go/Fiber 服务提供查询、管理接口和 WebSocket，Redis 保存任务、租约、结果与注册审计。Vue/Quasar 网页、CLI 和 MCP 共用这套后端。服务面向个人或信任的小组，同一批量任务库由所有获授权的查询客户端共享。本节以下按日期保留历史版本的交接记录。
 
 | 影响 | 现行行为与交接事项 |
 |---|---|

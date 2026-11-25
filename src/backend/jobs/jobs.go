@@ -211,11 +211,44 @@ func (s *Store) List(ctx context.Context, offset, limit int) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(ids) == 0 {
+		return []Task{}, nil
+	}
+	pipe := s.Redis.Pipeline()
+	metas := make([]*redis.StringCmd, len(ids))
+	counts := make([]*redis.MapStringStringCmd, len(ids))
+	for i, id := range ids {
+		metas[i] = pipe.Get(ctx, s.key(id, "meta"))
+		counts[i] = pipe.HGetAll(ctx, s.key(id, "counts"))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, err
+	}
 	out := make([]Task, 0, len(ids))
-	for _, id := range ids {
-		t, e := s.Get(ctx, id)
+	for i := range ids {
+		var t Task
+		data, e := metas[i].Bytes()
+		if e == redis.Nil {
+			return nil, ErrNotFound
+		}
 		if e != nil {
 			return nil, e
+		}
+		if e = json.Unmarshal(data, &t); e != nil {
+			return nil, e
+		}
+		rawCounts, e := counts[i].Result()
+		if e != nil {
+			return nil, e
+		}
+		t.Counts = map[string]int{}
+		for k, v := range rawCounts {
+			n, convErr := strconv.Atoi(v)
+			if convErr != nil {
+				return nil, convErr
+			}
+			t.Counts[k] = n
+			t.Completed += n
 		}
 		out = append(out, t)
 	}
@@ -234,32 +267,50 @@ func (s *Store) Results(ctx context.Context, id string, offset, limit int, inclu
 	}
 	end := offset + min(limit, t.Total-offset)
 	used := 1024
-	for index := offset; index < end; index++ {
-		data, e := s.Redis.HGet(ctx, s.key(id, "results"), strconv.Itoa(index)).Bytes()
-		if e == redis.Nil {
-			continue
+	const chunkSize = 100
+	for base := offset; base < end; base += chunkSize {
+		chunkEnd := min(base+chunkSize, end)
+		fields := make([]string, chunkEnd-base)
+		for i := range fields {
+			fields[i] = strconv.Itoa(base + i)
 		}
+		vals, e := s.Redis.HMGet(ctx, s.key(id, "results"), fields...).Result()
 		if e != nil {
 			return p, e
 		}
-		var r lookupinfo.QueryResult
-		if e = json.Unmarshal(data, &r); e != nil {
-			return p, e
+		stoppedAtBudget := false
+		for i, rawVal := range vals {
+			if rawVal == nil {
+				continue
+			}
+			strVal, ok := rawVal.(string)
+			if !ok {
+				continue
+			}
+			data := []byte(strVal)
+			var r lookupinfo.QueryResult
+			if e = json.Unmarshal(data, &r); e != nil {
+				return p, e
+			}
+			if len(includeRaw) > 0 && !includeRaw[0] {
+				r.RawResponseAvailable = r.RawResponse != ""
+				r.RawResponse = ""
+				data, _ = json.Marshal(r)
+			}
+			if used+len(data) > 8*1024*1024 && len(p.Items) > 0 {
+				end = base + i
+				stoppedAtBudget = true
+				break
+			}
+			if len(data) > 16*1024*1024 {
+				return p, ErrResultTooLarge
+			}
+			p.Items = append(p.Items, r)
+			used += len(data)
 		}
-		if len(includeRaw) > 0 && !includeRaw[0] {
-			r.RawResponseAvailable = r.RawResponse != ""
-			r.RawResponse = ""
-			data, _ = json.Marshal(r)
-		}
-		if used+len(data) > 8*1024*1024 && len(p.Items) > 0 {
-			end = index
+		if stoppedAtBudget {
 			break
 		}
-		if len(data) > 16*1024*1024 {
-			return p, ErrResultTooLarge
-		}
-		p.Items = append(p.Items, r)
-		used += len(data)
 	}
 	if end < t.Total {
 		p.NextOffset = end

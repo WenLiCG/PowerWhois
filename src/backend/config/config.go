@@ -138,7 +138,9 @@ func PublicSettings() map[string]interface{} {
 	data, _ := json.Marshal(c)
 	out := map[string]interface{}{}
 	json.Unmarshal(data, &out)
-	status := map[string]interface{}{}
+	status := map[string]interface{}{
+		"authUsername": map[string]bool{"configured": c.AuthUsername != "", "managed": os.Getenv("POWERWHOIS_ADMIN_USER") != ""},
+	}
 	for key, value := range map[string]string{"authPassword": c.AuthPassword, "jwtSecretKey": c.JwtSecretKey, "socketProxyPassword": c.SocketProxyPassword} {
 		env := map[string]string{"authPassword": "POWERWHOIS_ADMIN_PASSWORD", "jwtSecretKey": "POWERWHOIS_JWT_SECRET"}[key]
 		status[key] = map[string]bool{"configured": value != "", "managed": env != "" && os.Getenv(env) != ""}

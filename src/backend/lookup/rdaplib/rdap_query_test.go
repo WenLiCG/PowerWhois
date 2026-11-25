@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
+	"time"
 	"typonamer/lookup/lookuperror"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/lookup/network"
@@ -54,4 +56,19 @@ func TestEventDatesUseUTCAndIgnoreMalformedEvents(t *testing.T) {
 	if created != "2026-01-01 16:00:01" || expires != "2027-01-02 03:04:05" {
 		t.Fatalf("unexpected dates %q, %q", created, expires)
 	}
+}
+
+func TestSharedBootstrapCacheConcurrentAccess(t *testing.T) {
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sharedBootstrapCache.SetTimeout(time.Hour)
+			_ = sharedBootstrapCache.Save("dns.json", []byte(`{"version":"1.0"}`))
+			_ = sharedBootstrapCache.State("dns.json")
+			_, _ = sharedBootstrapCache.Load("dns.json")
+		}()
+	}
+	wg.Wait()
 }

@@ -1,52 +1,103 @@
-/* Keep the original light, blue Quasar workspace; make dense operations legible. */
+/* Keep the original light, blue Quasar workspace; make dense operations legible and polished. */
 :root {
     --q-primary: #1766b1;
-    --q-secondary: #237d73;
+    --q-secondary: #1e7b70;
     --q-accent: #52698c;
     --q-negative: #b82e3d;
 }
 body {
-    color: #203249;
-    background: #f5f7fa;
-    font-family: system-ui, "Microsoft YaHei", sans-serif;
+    color: #1e2f44;
+    background: #f3f6fa;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.workspace-header-wrap {
+    background: #ffffff;
+    border-bottom: 1px solid #dde5ef;
 }
 .workspace-header {
     max-width: 1200px;
     margin: auto;
-    padding: 28px 24px 22px;
+    padding: 20px 24px 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 20px;
 }
 h1 {
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 700;
     line-height: 1.25;
+    letter-spacing: -0.01em;
+    color: #14365d;
     margin: 0;
 }
 .workspace-header p {
-    color: #546779;
-    margin: 8px 0 0;
+    color: #54677b;
+    font-size: 14px;
+    margin: 4px 0 0;
 }
 .connection-state {
-    display: flex;
-    gap: 8px;
+    display: inline-flex;
+    gap: 6px;
     align-items: center;
-    color: #435d75;
+    padding: 6px 12px;
+    border-radius: 999px;
     font-size: 13px;
+    font-weight: 500;
+    border: 1px solid transparent;
+}
+.connection-state--open {
+    background: #edf8f4;
+    color: #166a54;
+    border-color: #c5e8db;
+}
+.connection-state--connecting {
+    background: #fff8eb;
+    color: #946200;
+    border-color: #f4dca6;
+}
+.connection-state--closed {
+    background: #fdf0f1;
+    color: #a12331;
+    border-color: #f3c4c9;
+}
+.workspace-nav-bar {
+    background: #eaf3fc;
+    border-bottom: 1px solid #d4e4f4;
+}
+.workspace-nav-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.q-notifications__list--top {
+    padding-top: 10px;
+}
+.q-notifications__list--bottom {
+    padding-bottom: 10px;
 }
 .workspace-content {
     max-width: 1200px;
-    margin: 20px auto 0;
+    margin: 12px auto 0;
 }
 .workspace-content .q-tab-panel {
-    padding: 24px;
+    padding: 16px 24px 24px;
+}
+.workspace-card {
+    background: #ffffff;
+    border: 1px solid #dce5f0;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(18, 42, 70, 0.04);
 }
 .workspace-footer {
     max-width: 1200px;
-    margin: 28px auto;
-    padding: 0 24px;
+    margin: 24px auto 32px;
+    padding: 16px 24px 0;
+    border-top: 1px solid #e1e8f0;
     color: #53677b;
     font-size: 13px;
     line-height: 1.8;
@@ -60,7 +111,7 @@ a {
     text-underline-offset: 3px;
 }
 .q-btn {
-    min-height: 40px;
+    min-height: 36px;
 }
 .q-field__native {
     caret-color: #1766b1;
@@ -69,15 +120,30 @@ a {
     font-variant-numeric: tabular-nums;
 }
 .q-table th {
-    color: #435d75;
+    color: #3a526a;
     font-weight: 600;
+    background: #f8fafd;
 }
 .status-filter {
-    min-width: 150px;
+    min-width: 148px;
+}
+.raw-response-box {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    margin: 0;
+    padding: 12px 14px;
+    background-color: #f6f8fb;
+    border: 1px solid #e1e8f0;
+    border-radius: 6px;
+    max-height: 58vh;
+    overflow-y: auto;
 }
 :focus-visible {
-    outline: 3px solid #1766b1;
-    outline-offset: 3px;
+    outline: 2px solid #1766b1;
+    outline-offset: 2px;
 }
 ::selection {
     background: #c9e5ff;
@@ -88,28 +154,28 @@ a {
     height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-    background: #8496a9;
+    background: #8e9fb1;
     border-radius: 8px;
 }
 @media (max-width: 600px) {
     .workspace-header {
-        padding: 20px 16px;
+        padding: 16px;
         align-items: flex-start;
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
     }
     .workspace-content {
         margin-top: 4px;
     }
     .workspace-content .q-tab-panel {
-        padding: 16px;
+        padding: 12px;
     }
     .q-table__top {
         gap: 8px;
-        padding: 12px 0;
+        padding: 12px 8px;
     }
     .q-dialog__inner > .q-card {
-        min-width: 90vw !important;
+        min-width: 92vw !important;
     }
 }
 @media (prefers-reduced-motion: reduce) {

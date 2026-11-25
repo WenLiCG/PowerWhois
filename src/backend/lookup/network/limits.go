@@ -111,14 +111,19 @@ func Wait(ctx context.Context, protocol, host string) error {
 	}
 }
 
+const maxRetryAfter = 60 * time.Second
+
 func RetryAfter(protocol, host, value string) {
 	until, err := http.ParseTime(value)
-	if seconds, e := strconv.Atoi(value); e == nil && seconds >= 0 {
+	if seconds, e := strconv.Atoi(strings.TrimSpace(value)); e == nil && seconds >= 0 {
 		until = time.Now().Add(time.Duration(seconds) * time.Second)
 		err = nil
 	}
 	if err != nil {
 		return
+	}
+	if capUntil := time.Now().Add(maxRetryAfter); until.After(capUntil) {
+		until = capUntil
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -142,7 +147,11 @@ func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 		resp.Body = http.MaxBytesReader(nil, resp.Body, 2*1024*1024)
 	}
 	if err == nil && (resp.StatusCode == 429 || resp.StatusCode == 503) {
-		RetryAfter(t.Protocol, r.URL.Host, resp.Header.Get("Retry-After"))
+		retryHeader := strings.TrimSpace(resp.Header.Get("Retry-After"))
+		if retryHeader == "" && resp.StatusCode == 429 {
+			retryHeader = "2"
+		}
+		RetryAfter(t.Protocol, r.URL.Host, retryHeader)
 	}
 	return resp, err
 }

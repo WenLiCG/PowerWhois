@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"strings"
@@ -77,8 +79,14 @@ func Login(c *fiber.Ctx) error {
 	// Get the config information.
 	cfg := config.GetConfig()
 
-	// Compare the username and password in the request body with the config values.
-	if (login.Username != cfg.AuthUsername) || (login.Password != cfg.AuthPassword) {
+	// Compare fixed-size digests in constant time to avoid leaking credential length or prefix.
+	userDigest := sha256.Sum256([]byte(login.Username))
+	expectedUser := sha256.Sum256([]byte(cfg.AuthUsername))
+	passDigest := sha256.Sum256([]byte(login.Password))
+	expectedPass := sha256.Sum256([]byte(cfg.AuthPassword))
+	userMatch := subtle.ConstantTimeCompare(userDigest[:], expectedUser[:]) == 1
+	passMatch := subtle.ConstantTimeCompare(passDigest[:], expectedPass[:]) == 1
+	if !userMatch || !passMatch {
 		log.Warn("Login failed")
 		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the username or password is incorrect.
 	}

@@ -49,3 +49,23 @@ func TestCNRegistrationDatesIgnoreUnavailableProcessTimezone(t *testing.T) {
 		}
 	}
 }
+
+func TestRateLimitedWhoisResponsesAndISOTimezoneOffsets(t *testing.T) {
+	for _, sample := range []string{
+		"Query rate of 100 queries per hour exceeded for your IP.",
+		"% Error: Too many requests, please try again later.",
+		"WHOIS limit exceeded",
+	} {
+		_, err := ParseWhoisResponse(sample, "example.cn", WhoisMatchers["cn"])
+		if !errors.Is(err, lookuperror.ErrorRateLimited) {
+			t.Fatalf("rate limit text %q misclassified as %v", sample, err)
+		}
+	}
+
+	// Registered domains whose footers mention rate limits must remain registered.
+	registeredWithFooter := "Sponsoring Registrar: Example Corp\nRegistration Time: 2025-05-01T08:00:00+08:00\nExpiration Time: 2027-05-01T08:00:00+08:00\nName Server: ns1.example.cn\n% Notice: query rate limit applies."
+	info, err := ParseWhoisResponse(registeredWithFooter, "example.cn", WhoisMatchers["cn"])
+	if err != nil || info.CreationDate != "2025-05-01 00:00:00" || info.ExpiryDate != "2027-05-01 00:00:00" {
+		t.Fatalf("registered domain with footer or +08:00 offset failed: %+v, %v", info, err)
+	}
+}

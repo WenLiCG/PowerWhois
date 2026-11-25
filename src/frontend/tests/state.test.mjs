@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createPinia,setActivePinia} from 'pinia';
 import {useWebStore} from '../src/stores/webStore.js';
 import {rules} from '../src/boot/rules.js';
+import {buildWebResultsCsv,sanitizeCsvCell} from '../src/utils/exportCsv.js';
 test('duplicate responses never corrupt counts; disconnect and retry remain usable',()=>{
  setActivePinia(createPinia());const s=useWebStore();s.setCheckingDomains(['example.com','example.org'],'webCheck','');
  const r={domain:'example.com',registerStatus:'NotFound',status:'not_found',lookupType:'rdap',queriedAt:'2026-11-03T00:00:00Z',source:'fixture'};
@@ -33,4 +34,38 @@ test('disconnect preserves finished registrations and marks unresolved orders fo
   store.setCheckingDomains(['ONE.COM', 'one.com', 'two.com'], 'webCheck', '');
   assert.equal(store.unCheckDomains, 2);
   assert.deepEqual(store.domains.map(d => d.registerStatus), ['success', 'outcome_unknown']);
+});
+
+test('typo duplicate candidates across groups merge without inflating counts or sticking recheck flag', () => {
+  setActivePinia(createPinia());
+  const store = useWebStore();
+  store.setCheckingDomains(['google.com', 'gogle.com'], 'typoCheck', 'reverseLetter');
+  store.setCheckingDomains(['GOOGLE.COM', 'google.net'], 'typoCheck', 'wrongTlds');
+  assert.equal(store.domains.length, 3);
+  assert.equal(store.unCheckDomains, 3);
+  assert.deepEqual(store.domains[0].typoTypes, ['reverseLetter', 'wrongTlds']);
+
+  store.updateCheckResult({domain: 'google.com', registerStatus: 'Taken', lookupType: 'rdap'});
+  assert.equal(store.checkedTakenDomains, 1);
+  assert.equal(store.unCheckDomains, 2);
+
+  store.stopQueries();
+  assert.equal(store.unCheckDomains, 0);
+  assert.equal(store.checkedUnknownDomains, 2);
+
+  store.setIsErrorRecheck(true);
+  store.setCheckingDomains(['gogle.com'], 'webCheck', '');
+  assert.equal(store.isErrorRecheck, false);
+  assert.equal(store.unCheckDomains, 1);
+});
+
+test('web CSV export escapes formulas and preserves merged typo labels', () => {
+  assert.equal(sanitizeCsvCell('=SUM(A1)'), "'=SUM(A1)");
+  assert.equal(sanitizeCsvCell('  +cmd'), "'  +cmd");
+  const csv = buildWebResultsCsv([
+    {domain: 'example.com', typoTypes: ['reverseLetter', 'wrongTlds'], status: 'Taken', lookupType: 'rdap', errorInfo: '=injected'}
+  ], true);
+  assert.match(csv, /^\ufeffDomain,Typo Type,Status/);
+  assert.match(csv, /reverseLetter\/wrongTlds/);
+  assert.match(csv, /'=injected/);
 });

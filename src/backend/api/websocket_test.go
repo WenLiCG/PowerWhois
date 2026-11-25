@@ -41,6 +41,12 @@ func TestWebSocketAuthorizationAndLimits(t *testing.T) {
 	} else if resp == nil || resp.StatusCode != 403 {
 		t.Fatal("origin check", e)
 	}
+	if conn, resp, e := ws.DefaultDialer.Dial(address, http.Header{"Origin": []string{"null"}}); e == nil {
+		conn.Close()
+		t.Fatal("null origin accepted")
+	} else if resp == nil || resp.StatusCode != 403 {
+		t.Fatal("null origin check", e)
+	}
 	conn, _, e := ws.DefaultDialer.Dial(address, nil)
 	if e != nil {
 		t.Fatal(e)
@@ -84,6 +90,8 @@ func TestWebSocketAuthorizationAndLimits(t *testing.T) {
 	expect("webCheckError", "第 2 项")
 	send("webCheck", WebCheck{QueryType: "dnsQuery", Domains: make([]string, 501)})
 	expect("webCheckError", "数量超过")
+	send("webCheckStop", nil)
+	expect("webCheckStopped", "")
 	send("ping", nil)
 	expect("pong", "")
 }

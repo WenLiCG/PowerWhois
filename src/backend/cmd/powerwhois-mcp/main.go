@@ -123,7 +123,7 @@ func main() {
 			}
 			if origin := r.Header.Get("Origin"); origin != "" {
 				u, err := url.Parse(origin)
-				if err != nil || u.Host != r.Host {
+				if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || !strings.EqualFold(u.Host, r.Host) {
 					http.Error(w, "origin forbidden", 403)
 					return
 				}

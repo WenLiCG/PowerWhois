@@ -1,8 +1,8 @@
 <template>
-    <q-item class="q-py-none">
-        <q-item-section side class="text-weight-bolder"> 注册接口 </q-item-section>
+    <q-item class="q-py-sm q-px-none">
+        <q-item-section side class="text-weight-bold text-grey-9" style="min-width: 84px">注册接口</q-item-section>
         <q-item-section>
-            <div class="flex justify-left q-gutter-sm q-py-md">
+            <div class="flex justify-left items-center q-gutter-sm">
                 <q-radio
                     v-model="registerType"
                     checked-icon="check_circle"
@@ -13,19 +13,31 @@
                     v-for="api in settingStore.registerApis"
                     :key="api"
                 />
+                <q-btn
+                    v-if="registerType"
+                    flat
+                    dense
+                    no-caps
+                    size="xs"
+                    color="grey-7"
+                    label="取消选择"
+                    :disable="disable"
+                    @click="registerType = null"
+                />
             </div>
         </q-item-section>
     </q-item>
 </template>
 
 <script setup>
+import { watch } from "vue";
 import { useSettingStore } from "src/stores/settingStore";
 
 defineOptions({
     name: "RegisterSelection"
 });
 
-const props = defineProps({
+defineProps({
     disable: {
         type: Boolean,
         default: false
@@ -35,4 +47,13 @@ const props = defineProps({
 const registerType = defineModel("registerType");
 
 const settingStore = useSettingStore();
+
+watch(
+    () => settingStore.registerApis,
+    (apis) => {
+        if (registerType.value && !apis.includes(registerType.value)) {
+            registerType.value = null;
+        }
+    }
+);
 </script>

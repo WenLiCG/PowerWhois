@@ -5,8 +5,9 @@
 Domain research through the existing Web UI, a noninteractive CLI, a documented HTTP API, and an optional MCP adapter. One query core and one durable batch store; no AI vendor dependency.
 
 - DNS, WHOIS/RDAP, Mixed, SOCKS proxy, custom query APIs, typo generation.
-- Durable batches with IDs, pause/resume/cancel, retry, progress and paged exports.
-- Accurate distinctions between registered, not_found, unknown, timeout and error. DNS absence is not availability.
+- Instant Web and Typo lookups with input normalization/deduplication, in-flight stop/recheck, clickable status filters, domain copy, and formula-safe CSV export.
+- Durable batches with IDs, pause/resume/cancel, retry, lifecycle/expiry overview, progress and paged exports.
+- Accurate distinctions between registered, not_found, unknown, timeout and error, including WHOIS rate-limit classification and bounded upstream backoff. DNS absence is not availability.
 - Existing Web administration and explicitly confirmed manual registration remain available. Agent query credentials cannot register, delete data or change settings.
 - Loopback binding by default; use SSH forwarding or an authenticated TLS gateway remotely.
 

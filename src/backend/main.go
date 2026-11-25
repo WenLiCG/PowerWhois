@@ -72,7 +72,7 @@ func run() error {
 	register.SetupLimiter()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	r, err := database.GetRedis()
+	r, err := database.GetRedisContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func run() error {
 	// ---------- Init Fiber App ----------
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
-		ReadTimeout:           30 * time.Second,
+		ReadTimeout:           60 * time.Second,
 		IdleTimeout:           60 * time.Second,
 		AppName:               fmt.Sprintf("%s v%s", appName, appVersion),
 		BodyLimit:             100 * 1024 * 1024, // 100MB
@@ -96,6 +96,12 @@ func run() error {
 	// 延迟同步日志
 	defer log.Sync()
 
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("X-Frame-Options", "DENY")
+		c.Set("Referrer-Policy", "same-origin")
+		return c.Next()
+	})
 	app.Use(compress.New())
 	app.Use(recover.New())
 	app.Get("/healthz", func(c *fiber.Ctx) error {

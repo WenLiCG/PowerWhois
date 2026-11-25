@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"typonamer/jobs"
 	"typonamer/lookup/lookupinfo"
 	"typonamer/scheduler"
@@ -91,7 +92,7 @@ func V1Routes(router fiber.Router) {
 			return apiError(c, 400, "invalid_request", err.Error())
 		}
 		r = normalized
-		ctx, cancel := context.WithTimeout(c.UserContext(), 120*1000000000)
+		ctx, cancel := context.WithTimeout(c.UserContext(), 120*time.Second)
 		defer cancel()
 		result := make([]lookupinfo.QueryResult, len(r.Domains))
 		var responseBytes atomic.Int64

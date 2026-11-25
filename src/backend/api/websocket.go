@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"typonamer/config"
@@ -110,7 +111,7 @@ func onMessage(ep *socketio.EventPayload) {
 	if !admin {
 		scheduler.BulkCheckRemoveKws(ep.Kws)
 	}
-	if m.Event != "webCheck" && !admin {
+	if m.Event != "webCheck" && m.Event != "webCheckStop" && !admin {
 		event := "webCheckError"
 		switch m.Event {
 		case "register", "typoCheck":
@@ -129,6 +130,12 @@ func onMessage(ep *socketio.EventPayload) {
 			return
 		}
 		runWeb(c, req.Domains, req.QueryType, "webCheck", !admin)
+	case "webCheckStop":
+		if c.WebCheckTask != nil {
+			c.WebCheckTask.Stop()
+			c.WebCheckTask = nil
+		}
+		emit(ep.Kws, "webCheckStopped", nil)
 	case "typoCheck":
 		var req TypoCheck
 		if json.Unmarshal(m.Data, &req) != nil {
@@ -148,8 +155,13 @@ func onMessage(ep *socketio.EventPayload) {
 			emit(ep.Kws, "typoCheckError", "无效查询类型")
 			return
 		}
-		for kind, domains := range generated.Groups {
-			emit(ep.Kws, "typoResult", map[string]interface{}{"typoType": kind, "domains": domains})
+		kinds := make([]string, 0, len(generated.Groups))
+		for kind := range generated.Groups {
+			kinds = append(kinds, kind)
+		}
+		sort.Strings(kinds)
+		for _, kind := range kinds {
+			emit(ep.Kws, "typoResult", map[string]interface{}{"typoType": kind, "domains": generated.Groups[kind]})
 		}
 		runWeb(c, generated.Domains, req.QueryType, "typoCheck", false)
 	case "bulkCheckStart":
@@ -238,7 +250,7 @@ func runWeb(c *clientInfo, input []string, mode, kind string, public bool) {
 func WebSocketUpgrade(c *fiber.Ctx) error {
 	if origin := c.Get("Origin"); origin != "" {
 		u, e := url.Parse(origin)
-		if e != nil || !strings.EqualFold(u.Host, c.Hostname()) {
+		if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || !strings.EqualFold(u.Host, string(c.Request().Host())) {
 			return c.SendStatus(403)
 		}
 	}

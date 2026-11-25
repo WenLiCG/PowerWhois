@@ -56,6 +56,16 @@ func TestRetryAfterAndCancellation(t *testing.T) {
 	if Wait(ctx2, "rdap", "date-fixture") != context.Canceled {
 		t.Fatal("ignored cancellation")
 	}
+
+	// Oversized Retry-After headers are capped so an upstream cannot stall workers indefinitely.
+	RetryAfter("rdap", "capped-fixture", "86400")
+	mu.Lock()
+	remaining := time.Until(next["rdap:capped-fixture"])
+	delete(next, "rdap:capped-fixture")
+	mu.Unlock()
+	if remaining <= 0 || remaining > maxRetryAfter+time.Second {
+		t.Fatalf("RetryAfter was not bounded: %v", remaining)
+	}
 }
 
 func TestResponseBoundaries(t *testing.T) {

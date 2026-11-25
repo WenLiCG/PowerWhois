@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,27 +48,32 @@ var (
 )
 
 func HasTldNsCache(tld string) bool {
-	TldNsCache.mux.RLock()
-	defer TldNsCache.mux.RUnlock()
-	if _, ok := TldNsCache.TldNsMap[tld]; ok {
-		return true
-	}
-	return false
+	_, ok := lookupTldNsCache(tld)
+	return ok
 }
 
 func AddTldNsCache(tld string, nameServers []string) {
+	if len(nameServers) == 0 {
+		return
+	}
 	TldNsCache.mux.Lock()
 	defer TldNsCache.mux.Unlock()
-	TldNsCache.TldNsMap[tld] = nameServers
+	TldNsCache.TldNsMap[strings.ToLower(tld)] = slices.Clone(nameServers)
 }
 
 func GetTldNsCache(tld string) []string {
+	ns, _ := lookupTldNsCache(tld)
+	return ns
+}
+
+func lookupTldNsCache(tld string) ([]string, bool) {
 	TldNsCache.mux.RLock()
 	defer TldNsCache.mux.RUnlock()
-	if _, ok := TldNsCache.TldNsMap[tld]; ok {
-		return TldNsCache.TldNsMap[tld]
+	ns, ok := TldNsCache.TldNsMap[strings.ToLower(tld)]
+	if !ok || len(ns) == 0 {
+		return []string{}, false
 	}
-	return []string{}
+	return slices.Clone(ns), true
 }
 
 func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, error) {
@@ -117,9 +123,9 @@ func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, 
 	}
 
 	nextNameservers := rootServers
-	if HasTldNsCache(tld) {
-		log.Debugf("Using cached NS records for '%s': %v", tld, GetTldNsCache(tld))
-		nextNameservers = GetTldNsCache(tld)
+	if cachedNs, ok := lookupTldNsCache(tld); ok {
+		log.Debugf("Using cached NS records for '%s': %v", tld, cachedNs)
+		nextNameservers = cachedNs
 
 		rawTrace += "│\n"
 		indent := strings.Repeat("│  ", level)
@@ -184,9 +190,9 @@ func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, 
 								foundNS = true
 								responseNS = append(responseNS, ns.Ns)
 								hdrName = strutil.Trim(ns.Hdr.Name, ".")
-								if hdrName == domain {
+								if strings.EqualFold(hdrName, domain) {
 									nsRecords = append(nsRecords, strutil.Trim(ns.Ns, "."))
-								} else if hdrName == tld {
+								} else if strings.EqualFold(hdrName, tld) {
 									isTldNs = true
 								}
 								log.Debugf("Found NS record for domain %s from nameserver %s is: %v", ns.Hdr.Name, nameserver, ns.Ns)
@@ -232,7 +238,7 @@ func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, 
 		nextNameservers = responseNS
 		level++
 
-		if level > 3 {
+		if level > 5 {
 			log.Warnf("Failed to resolve NS record for domain %s", domain)
 			break
 		}

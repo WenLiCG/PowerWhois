@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"typonamer/config"
+	"typonamer/jobs"
 	"typonamer/log"
 	"typonamer/lookup/customize"
 	"typonamer/register"
@@ -105,7 +106,7 @@ func BulkCheckDomainUpload(c *fiber.Ctx) error {
 	uploadFile, err := c.FormFile("file")
 	if err != nil {
 		log.Error("Get file error: ", err)
-		return c.Status(500).SendString(err.Error())
+		return c.Status(400).SendString("missing upload file")
 	}
 
 	log.Info("Bulk check domain upload: ", uploadFile.Filename)
@@ -127,6 +128,9 @@ func BulkCheckDomainUpload(c *fiber.Ctx) error {
 	err = scheduler.BulkCheckAddRawDomains(buffer)
 	if err != nil {
 		log.Error("Bulk check domain save error: ", err)
+		if errors.Is(err, jobs.ErrConflict) {
+			return c.Status(409).SendString(err.Error())
+		}
 		return c.Status(500).SendString(err.Error())
 	}
 

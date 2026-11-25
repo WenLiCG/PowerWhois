@@ -20,7 +20,7 @@ export const useWebStore = defineStore("web", {
         },
         setCheckingDomains(newDomains, checkType, typoType) {
             if (this.isErrorRecheck) {
-                const retryDomains = new Set(newDomains.map(domain => domain.toLowerCase()));
+                const retryDomains = new Set(newDomains.map((domain) => domain.toLowerCase()));
                 for (const row of this.domains) {
                     if (!retryDomains.has(row.domain)) continue;
                     row.lookupType = null;
@@ -33,15 +33,31 @@ export const useWebStore = defineStore("web", {
                     row.checkedRawResponse = null;
                     row.isChecked = false;
                 }
+                this.isErrorRecheck = false;
                 this.recount();
             } else {
+                const existingByDomain = new Map(this.domains.map((row) => [row.domain, row]));
                 let domainID = this.domains.length + 1;
                 newDomains.forEach((domain) => {
-                    this.domains.push({
+                    const normalized = domain.toLowerCase();
+                    const existing = existingByDomain.get(normalized);
+                    if (existing) {
+                        if (typoType) {
+                            if (!Array.isArray(existing.typoTypes)) {
+                                existing.typoTypes = existing.typoType ? [existing.typoType] : [];
+                            }
+                            if (!existing.typoTypes.includes(typoType)) {
+                                existing.typoTypes.push(typoType);
+                            }
+                        }
+                        return;
+                    }
+                    const created = {
                         domainID: domainID,
-                        domain: domain.toLowerCase(),
+                        domain: normalized,
                         checkType: checkType,
                         typoType: typoType,
+                        typoTypes: typoType ? [typoType] : [],
                         lookupType: null,
                         status: null,
                         errorInfo: "",
@@ -54,7 +70,9 @@ export const useWebStore = defineStore("web", {
                         selectedRegister: false,
                         registerStatus: null,
                         registerRawResponse: null
-                    });
+                    };
+                    this.domains.push(created);
+                    existingByDomain.set(normalized, created);
                     domainID++;
                     this.unCheckDomains++;
                 });
@@ -65,7 +83,14 @@ export const useWebStore = defineStore("web", {
                 if (this.domains[i].domain == domainResult.domain.toLowerCase() && !this.domains[i].isChecked) {
                     this.domains[i].status = domainResult.registerStatus;
                     this.domains[i].lookupType = domainResult.lookupType;
-                    this.domains[i].checkedRawResponse = [domainResult.source && `来源: ${domainResult.source}`, domainResult.queriedAt && `查询时间: ${domainResult.queriedAt}`, domainResult.queryError, domainResult.rawResponse].filter(Boolean).join("\n");
+                    this.domains[i].checkedRawResponse = [
+                        domainResult.source && `来源: ${domainResult.source}`,
+                        domainResult.queriedAt && `查询时间: ${domainResult.queriedAt}`,
+                        domainResult.queryError,
+                        domainResult.rawResponse
+                    ]
+                        .filter(Boolean)
+                        .join("\n");
                     this.domains[i].errorInfo = domainResult.queryError;
 
                     if (domainResult.registerStatus == "Taken") {
@@ -122,12 +147,12 @@ export const useWebStore = defineStore("web", {
             }
         },
         recount() {
-            this.unCheckDomains = this.domains.filter(d => !d.isChecked).length;
-            this.checkedTakenDomains = this.domains.filter(d => d.status === 'Taken').length;
-            this.checkedFreeDomains = this.domains.filter(d => ['NotFound','Free'].includes(d.status)).length;
-            this.checkedUnknownDomains = this.domains.filter(d => d.status === 'Unknown').length;
-            this.checkedTimeoutDomains = this.domains.filter(d => d.status === 'Timeout').length;
-            this.checkedErrorDomains = this.domains.filter(d => d.status === 'Error').length;
+            this.unCheckDomains = this.domains.filter((d) => !d.isChecked).length;
+            this.checkedTakenDomains = this.domains.filter((d) => d.status === "Taken").length;
+            this.checkedFreeDomains = this.domains.filter((d) => ["NotFound", "Free"].includes(d.status)).length;
+            this.checkedUnknownDomains = this.domains.filter((d) => d.status === "Unknown").length;
+            this.checkedTimeoutDomains = this.domains.filter((d) => d.status === "Timeout").length;
+            this.checkedErrorDomains = this.domains.filter((d) => d.status === "Error").length;
         },
         finishPendingRegistrations(status, message) {
             for (const domain of this.domains) {
@@ -138,11 +163,28 @@ export const useWebStore = defineStore("web", {
             }
             this.unRegisterDomains = 0;
         },
+        stopQueries() {
+            for (const d of this.domains) {
+                if (!d.isChecked) {
+                    d.status = "Unknown";
+                    d.errorInfo = "已停止查询，可点击重查";
+                    d.checkedRawResponse = "查询已手动停止，可点击“重查错误、超时和未知”继续查询剩余域名。";
+                    d.isChecked = true;
+                }
+            }
+            this.isErrorRecheck = false;
+            this.recount();
+        },
         interruptQueries() {
             this.finishPendingRegistrations("outcome_unknown", "连接中断，无法确认是否已提交。请先向注册商核实订单。");
             for (const d of this.domains) {
-                if (!d.isChecked) { d.status = 'Error'; d.errorInfo = d.checkedRawResponse = '连接中断，请重查'; d.isChecked = true; }
+                if (!d.isChecked) {
+                    d.status = "Error";
+                    d.errorInfo = d.checkedRawResponse = "连接中断，请重查";
+                    d.isChecked = true;
+                }
             }
+            this.isErrorRecheck = false;
             this.recount();
         },
         clearDomains() {
