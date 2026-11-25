@@ -1,5 +1,23 @@
 package jobs
 
+// Keep large evidence in Redis until it fits the reply. Missing slots retain their indices.
+const resultChunk = `
+local rows, bytes = {}, 0
+local budget, maxRecord = tonumber(ARGV[3]), tonumber(ARGV[4])
+for index=tonumber(ARGV[1]),tonumber(ARGV[2])-1 do
+ local raw=redis.call('HGET',KEYS[1],index)
+ local size=raw and #raw or 0
+ if bytes>0 and bytes+size>budget then break end
+ if maxRecord>0 and size>maxRecord then
+  rows[#rows+1]=size
+  break
+ end
+ rows[#rows+1]=raw
+ bytes=bytes+size
+end
+return rows
+`
+
 // Every published task mutation checks ownership in Redis, not only in the local mutex.
 const writeGuard = `
 local owner=redis.call('GET',KEYS[1])

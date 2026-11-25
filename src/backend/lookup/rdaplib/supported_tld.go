@@ -1,5 +1,22 @@
 package rdaplib
 
+import "golang.org/x/net/idna"
+
+// Lookup inputs and IANA bootstrap keys use ASCII labels, including IDN suffixes.
+var supportedTLDs = func() map[string]bool {
+	labels := make(map[string]bool, len(RdapSupportedTlds))
+	for _, tld := range RdapSupportedTlds {
+		label, err := idna.Lookup.ToASCII(tld)
+		if err != nil {
+			panic("invalid built-in RDAP suffix: " + tld)
+		}
+		labels[label] = true
+	}
+	return labels
+}()
+
+func SupportsTLD(asciiLabel string) bool { return supportedTLDs[asciiLabel] }
+
 var RdapSupportedTlds = []string{
 	"aaa",
 	"aarp",

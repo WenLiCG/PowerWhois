@@ -11,15 +11,17 @@ export const useWebStore = defineStore("web", {
         checkedUnknownDomains: 0,
         checkedTimeoutDomains: 0,
         checkedErrorDomains: 0,
-        isErrorRecheck: false
+        pendingQuery: null
     }),
 
+    getters: {
+        busy: (state) => !!state.pendingQuery || state.unCheckDomains > 0 || state.unRegisterDomains > 0
+    },
+
     actions: {
-        setIsErrorRecheck(isErrorRecheck) {
-            this.isErrorRecheck = isErrorRecheck;
-        },
         setCheckingDomains(newDomains, checkType, typoType) {
-            if (this.isErrorRecheck) {
+            if (!newDomains.length) return;
+            if (this.pendingQuery === "retry") {
                 const retryDomains = new Set(newDomains.map((domain) => domain.toLowerCase()));
                 for (const row of this.domains) {
                     if (!retryDomains.has(row.domain)) continue;
@@ -33,9 +35,10 @@ export const useWebStore = defineStore("web", {
                     row.checkedRawResponse = null;
                     row.isChecked = false;
                 }
-                this.isErrorRecheck = false;
+                this.pendingQuery = null;
                 this.recount();
             } else {
+                if (this.pendingQuery === checkType) this.clearDomains();
                 const existingByDomain = new Map(this.domains.map((row) => [row.domain, row]));
                 let domainID = this.domains.length + 1;
                 newDomains.forEach((domain) => {
@@ -172,7 +175,7 @@ export const useWebStore = defineStore("web", {
                     d.isChecked = true;
                 }
             }
-            this.isErrorRecheck = false;
+            this.pendingQuery = null;
             this.recount();
         },
         interruptQueries() {
@@ -184,7 +187,7 @@ export const useWebStore = defineStore("web", {
                     d.isChecked = true;
                 }
             }
-            this.isErrorRecheck = false;
+            this.pendingQuery = null;
             this.recount();
         },
         clearDomains() {
@@ -196,7 +199,7 @@ export const useWebStore = defineStore("web", {
             this.checkedUnknownDomains = 0;
             this.checkedTimeoutDomains = 0;
             this.checkedErrorDomains = 0;
-            this.isErrorRecheck = false;
+            this.pendingQuery = null;
         }
     }
 });

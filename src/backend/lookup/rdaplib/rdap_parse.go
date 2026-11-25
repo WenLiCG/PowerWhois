@@ -1,7 +1,6 @@
 package rdaplib
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -96,18 +95,4 @@ func getNameServer(responseNameservers []rdap.Nameserver) []string {
 	}
 
 	return slice.Map(nameServers, utils.LowerString)
-}
-
-// getWhoisStyleRawResponse takes the response and returns the raw response in whois style.
-// It loops through the http responses and appends the body of each http response to the raw response.
-// The function returns the raw response in whois style.
-func getWhoisStyleRawResponse(response *rdap.Response) string {
-	whoisStyleResponse := response.ToWhoisStyleResponse()
-	var rawResponse strings.Builder
-	for key, value := range whoisStyleResponse.Data {
-		for _, line := range value {
-			fmt.Fprintf(&rawResponse, "%s: %s\n", key, line)
-		}
-	}
-	return rawResponse.String()
 }

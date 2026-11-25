@@ -76,8 +76,13 @@ func TestLostLeaseFencesControlsCreationAndFinalState(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.Control(ctx, task.ID, "pause"); e != nil {
+	paused, e := s.Control(ctx, task.ID, "pause")
+	if e != nil {
 		t.Fatal(e)
+	}
+	stored, e := s.Get(ctx, task.ID)
+	if e != nil || paused.UpdatedAt != stored.UpdatedAt || paused.UpdatedAt == task.UpdatedAt {
+		t.Fatal("pause did not return its persisted transition timestamp")
 	}
 	runctx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -88,6 +93,10 @@ func TestLostLeaseFencesControlsCreationAndFinalState(t *testing.T) {
 		t.Fatal("startup")
 	}
 	defer func() { cancel(); <-done }()
+	stored, e = s.Get(ctx, task.ID)
+	if e != nil || stored.UpdatedAt != paused.UpdatedAt {
+		t.Fatal("restart changed an untouched task timestamp")
+	}
 	r.Set(ctx, s.Prefix+"worker", "new-owner", time.Minute)
 	if _, e = s.Control(ctx, task.ID, "resume"); e == nil {
 		t.Fatal("stale control accepted")
@@ -146,6 +155,14 @@ func TestResultPaginationBoundsBytesWithoutSkippingInputs(t *testing.T) {
 		data, _ := json.Marshal(lookupinfo.QueryResult{Order: i, Domain: name, Status: "error", NameServer: []string{strings.Repeat("x", 600000)}, RawResponse: strings.Repeat("x", 2*1024*1024)})
 		r.HSet(ctx, s.key(task.ID, "results"), i, data)
 	}
+	// The 17 records total over 40 MiB. The server will drop a client that
+	// buffers them in one reply, even if the HTTP page itself is later trimmed.
+	if e := r.ConfigSet(ctx, "client-output-buffer-limit", "normal 16mb 0 0").Err(); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Do(ctx, "ACL", "SETUSER", "default", "-evalsha", "-hstrlen").Err(); e != nil {
+		t.Fatal(e)
+	}
 	seen := map[int]bool{}
 	pages := 0
 	for offset := 0; offset >= 0; {
@@ -186,5 +203,30 @@ func TestResultPaginationBoundsBytesWithoutSkippingInputs(t *testing.T) {
 	retry, e := s.RetryFailed(ctx, task.ID)
 	if e != nil || retry.Total != 17 || retry.ParentTaskID != task.ID || retry.Concurrency != cap {
 		t.Fatal("retry lost results or exceeded the current cap", retry.Total, retry.Concurrency, e)
+	}
+	// Legacy evidence can exceed the raw limit while its summary remains readable.
+	huge, _ := json.Marshal(lookupinfo.QueryResult{Domain: names[1], Order: 1, RawResponse: strings.Repeat("x", 16*1024*1024)})
+	if e := r.HSet(ctx, s.key(task.ID, "results"), 1, huge).Err(); e != nil {
+		t.Fatal(e)
+	}
+	first, e := s.Results(ctx, task.ID, 0, 3)
+	if e != nil || len(first.Items) != 1 || first.NextOffset != 1 {
+		t.Fatal("oversized legacy result hid the preceding row", e)
+	}
+	if _, e := s.Results(ctx, task.ID, 1, 1); !errors.Is(e, ErrResultTooLarge) {
+		t.Fatal("expected a size error for full legacy evidence", e)
+	}
+	if e := r.ConfigSet(ctx, "client-output-buffer-limit", "normal 0 0 0").Err(); e != nil {
+		t.Fatal(e)
+	}
+	tiny, e := s.Results(ctx, task.ID, 1, 2, false)
+	if e != nil || len(tiny.Items) != 2 || !tiny.Items[0].RawResponseAvailable || tiny.NextOffset != 3 {
+		t.Fatal("oversized raw evidence blocked its summary or the following row", e)
+	}
+	if e := r.HSet(ctx, s.key(task.ID, "results"), 1, "").Err(); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := s.Results(ctx, task.ID, 1, 1, false); e == nil {
+		t.Fatal("empty stored result silently treated as an unfinished input")
 	}
 }

@@ -69,10 +69,7 @@
                     icon="chevron_left"
                     aria-label="上一页任务"
                     :disable="historyOffset === 0"
-                    @click="
-                        historyOffset -= 100;
-                        refresh();
-                    "
+                    @click="changeHistoryPage(historyOffset - 100)"
                 />
                 <q-btn
                     flat
@@ -80,10 +77,7 @@
                     icon="chevron_right"
                     aria-label="下一页任务"
                     :disable="tasks.length < 100"
-                    @click="
-                        historyOffset += 100;
-                        refresh();
-                    "
+                    @click="changeHistoryPage(historyOffset + 100)"
                 />
             </div>
 
@@ -106,7 +100,11 @@
                 </p>
                 <q-linear-progress :value="task.total ? task.completed / task.total : 0" size="10px" rounded color="primary" aria-label="批量查询进度" />
 
-                <div class="result-counts" role="status">
+                <div v-if="resultOffset > 0 || nextResultOffset >= 0" class="row q-gutter-x-sm text-caption text-grey-8 q-mt-sm">
+                    <strong>整个任务</strong>
+                    <span v-for="(label, key) in resultLabels" :key="key">{{ label }} {{ task.counts[key] || 0 }}</span>
+                </div>
+                <div class="result-counts" role="group" aria-label="筛选本页结果">
                     <q-chip
                         clickable
                         dense
@@ -129,7 +127,7 @@
                         text-color="white"
                         @click="pageStatusFilter = pageStatusFilter === key ? 'all' : key"
                     >
-                        {{ label }} {{ task.counts[key] || 0 }}
+                        {{ label }} {{ pageCounts[key] || 0 }}
                     </q-chip>
                 </div>
 
@@ -200,8 +198,10 @@
                     row-key="domain"
                     :pagination="{ rowsPerPage: 0 }"
                     hide-pagination
-                    hide-bottom
-                    no-data-label="当前输入区间暂无匹配结果（运行中任务可稍候或翻页查看）"
+                    :hide-bottom="filteredPageResults.length > 0"
+                    :loading="loadingResults"
+                    loading-label="正在读取本页结果…"
+                    :no-data-label="refreshError ? '本页结果未能加载，请重试刷新。' : '当前输入区间暂无匹配结果，可切换筛选或翻页查看。'"
                 >
                     <template #body-cell-domain="props">
                         <q-td :props="props">
@@ -239,28 +239,22 @@
                         icon="chevron_left"
                         label="上一页结果"
                         :disable="resultOffset === 0"
-                        @click="
-                            resultOffsets.pop();
-                            resultOffset = resultOffsets[resultOffsets.length - 1];
-                            loadResults();
-                        "
+                        @click="changeResultPage(false)"
                     />
-                    <span class="text-grey-8">输入序号 {{ resultOffset + 1 }}–{{ Math.min(resultOffset + 100, task.total) }} / 共 {{ task.total }}</span>
+                    <span class="text-grey-8">输入序号 {{ resultOffset + 1 }}–{{ nextResultOffset > resultOffset ? nextResultOffset : Math.min(resultOffset + 100, task.total) }} / 共 {{ task.total }}</span>
                     <q-btn
                         flat
                         no-caps
                         icon-right="chevron_right"
                         label="下一页结果"
                         :disable="nextResultOffset < 0"
-                        @click="
-                            resultOffsets.push(nextResultOffset);
-                            resultOffset = nextResultOffset;
-                            loadResults();
-                        "
+                        @click="changeResultPage(true)"
                     />
                 </div>
             </div>
-            <p v-else-if="!refreshing" class="empty-state">还没有批量任务。请在上方上传 TXT 文件创建任务，或通过 CLI / API / MCP 提交后在此查看。</p>
+            <p v-else-if="!refreshing && !refreshError" class="empty-state">
+                {{ historyOffset ? "本页没有更多任务，请返回上一页。" : "还没有批量任务。请上传 TXT 文件创建任务，或通过 CLI / API / MCP 提交后在此查看。" }}
+            </p>
         </q-card>
 
         <q-dialog :model-value="!!details" @update:model-value="details = null">
@@ -330,7 +324,8 @@ const error = ref(""),
     exporting = ref(false);
 const resultOffsets = ref([0]),
     nextResultOffset = ref(-1);
-let resultRequest = 0;
+const loadingResults = ref(false);
+let resultRequest = 0, refreshRequest = 0;
 const historyOffset = ref(0),
     resultOffset = ref(0);
 let timer,
@@ -344,6 +339,11 @@ const resultLabels = { registered: "已注册", not_found: "未找到", unknown:
 const resultColors = { registered: "blue-8", not_found: "teal-8", unknown: "blue-grey-7", timeout: "deep-orange-8", error: "negative" };
 const failedCount = computed(() => ["error", "timeout", "unknown"].reduce((n, k) => n + (task.value?.counts[k] || 0), 0));
 const progressPercent = computed(() => (task.value?.total ? Math.round((task.value.completed / task.value.total) * 100) : 0));
+const pageCounts = computed(() => {
+    const counts = {};
+    for (const row of results.value) counts[row.status] = (counts[row.status] || 0) + 1;
+    return counts;
+});
 const filteredPageResults = computed(() =>
     pageStatusFilter.value === "all" ? results.value : results.value.filter((r) => r.status === pageStatusFilter.value)
 );
@@ -364,11 +364,26 @@ const columns = [
 function showError(e, target = error) {
     target.value = e.response?.data?.error?.message || "连接失败，请重试。已有任务和结果保留在服务器。";
 }
+function changeResultPage(forward) {
+    if (forward) resultOffsets.value.push(nextResultOffset.value);
+    else resultOffsets.value.pop();
+    resultOffset.value = resultOffsets.value[resultOffsets.value.length - 1];
+    results.value = [];
+    nextResultOffset.value = -1;
+    loadResults();
+}
+function changeHistoryPage(offset) {
+    historyOffset.value = offset;
+    tasks.value = [];
+    selectedID.value = null;
+    loadSelected();
+}
 async function loadResults() {
     if (!selectedID.value) return;
     const id = selectedID.value,
         offset = resultOffset.value,
         request = ++resultRequest;
+    loadingResults.value = results.value.length === 0;
     try {
         const { data } = await api.get(`/v1/tasks/${id}/results`, { params: { offset, limit: 100, includeRaw: false } });
         if (!stopped && selectedID.value === id && resultOffset.value === offset && request === resultRequest) {
@@ -379,6 +394,8 @@ async function loadResults() {
     } catch (e) {
         if (!stopped && selectedID.value === id && resultOffset.value === offset && request === resultRequest) showError(e, refreshError);
         return false;
+    } finally {
+        if (request === resultRequest) loadingResults.value = false;
     }
 }
 async function loadSelected() {
@@ -388,23 +405,31 @@ async function loadSelected() {
     results.value = [];
     task.value = null;
     if (selectedID.value) localStorage.setItem("powerwhois-task", selectedID.value);
-    await refresh();
+    pageStatusFilter.value = "all";
+    await refresh(true);
 }
-async function refresh() {
-    if (refreshing.value || stopped) return;
+async function refresh(force = false) {
+    if ((refreshing.value && force !== true) || stopped) return;
+    const request = ++refreshRequest;
     refreshing.value = true;
     try {
         const { data } = await api.get("/v1/tasks", { params: { offset: historyOffset.value, limit: 100 } });
+        if (request !== refreshRequest || stopped) return;
         tasks.value = data.items;
-        if (!selectedID.value && tasks.value.length) selectedID.value = tasks.value[0].id;
+        if (!selectedID.value && tasks.value.length) {
+            selectedID.value = tasks.value[0].id;
+            localStorage.setItem("powerwhois-task", selectedID.value);
+        }
         if (selectedID.value) {
             const id = selectedID.value;
             const response = await api.get(`/v1/tasks/${id}`);
-            if (selectedID.value === id) task.value = response.data;
+            if (request !== refreshRequest || stopped || selectedID.value !== id) return;
+            task.value = response.data;
             if (!(await loadResults())) return;
         }
-        refreshError.value = "";
+        if (request === refreshRequest) refreshError.value = "";
     } catch (e) {
+        if (request !== refreshRequest || stopped) return;
         if (e.response?.status === 404) {
             selectedID.value = null;
             task.value = null;
@@ -413,7 +438,7 @@ async function refresh() {
         }
         showError(e, refreshError);
     } finally {
-        refreshing.value = false;
+        if (request === refreshRequest) refreshing.value = false;
     }
 }
 async function createTask() {
@@ -454,15 +479,14 @@ async function createTask() {
         creating.value = false;
     }
 }
-async function control(action) {
+async function control(action, id = selectedID.value) {
+    if (acting.value || stopped || id !== selectedID.value) return;
     acting.value = true;
-    const id = selectedID.value;
     try {
         const { data } = await api.post(`/v1/tasks/${id}/${action}`);
         if (selectedID.value !== id || stopped) return;
         task.value = data;
         if (action === "retry") {
-            pageStatusFilter.value = "all";
             selectedID.value = data.id;
             await loadSelected();
         } else await refresh();
@@ -473,8 +497,9 @@ async function control(action) {
     }
 }
 function confirmCancel() {
+    const id = selectedID.value;
     $q.dialog({ title: "取消这个任务？", message: "已完成的结果会完整保留。取消后不可继续，但可随时导出已有结果。", cancel: "保留任务", ok: "确认取消" }).onOk(
-        () => control("cancel")
+        () => control("cancel", id)
     );
 }
 async function copyID() {

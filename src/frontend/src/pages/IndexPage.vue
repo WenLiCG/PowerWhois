@@ -61,11 +61,13 @@
                             flat
                             no-caps
                             icon="manage_accounts"
-                            :label="adminLabel"
+                            :label="$q.screen.lt.sm ? undefined : adminLabel"
+                            :aria-label="adminLabel"
                             :class="{ 'bg-light-blue-2 text-primary text-weight-medium': tab === 'setting' }"
                             v-if="tokenStore.token"
                         >
-                            <q-list style="min-width: 190px">
+                            <q-list style="min-width: 190px; max-width: 90vw">
+                                <q-item-label v-if="$q.screen.lt.sm" header style="overflow-wrap: anywhere">{{ adminLabel }}</q-item-label>
                                 <q-item clickable @click="tab = 'setting'" :active="tab === 'setting'" active-class="text-primary bg-blue-1">
                                     <q-item-section avatar style="min-width: 32px"><q-icon name="tune" size="18px" /></q-item-section>
                                     <q-item-section>系统设置</q-item-section>

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/spf13/viper"
+	"golang.org/x/net/idna"
 	"gopkg.in/yaml.v3"
 	"net/url"
 	"os"
@@ -102,6 +103,7 @@ func Load(path string) error {
 			*dst = value
 		}
 	}
+	next.normalizeRoutingTLDs()
 	if err := Validate(next); err != nil {
 		return err
 	}
@@ -286,9 +288,7 @@ func UpdateConfig(next Config, secretActions ...map[string]string) error {
 	if next.RdapRate == 0 {
 		next.RdapRate = config.RdapRate
 	}
-	next.GlobalProxyTlds = trimTlds(next.GlobalProxyTlds)
-	next.MixedProxyTlds = trimTlds(next.MixedProxyTlds)
-	next.MixedDnsTlds = trimTlds(next.MixedDnsTlds)
+	next.normalizeRoutingTLDs()
 	if err := Validate(next); err != nil {
 		return err
 	}
@@ -338,10 +338,22 @@ func WriteConfig(next Config) error {
 	}
 	return os.Rename(f.Name(), configFile)
 }
+func (c *Config) normalizeRoutingTLDs() {
+	c.GlobalProxyTlds = trimTlds(c.GlobalProxyTlds)
+	c.MixedProxyTlds = trimTlds(c.MixedProxyTlds)
+	c.MixedDnsTlds = trimTlds(c.MixedDnsTlds)
+}
+
 func trimTlds(tlds []string) []string {
+	if len(tlds) == 0 {
+		return tlds
+	}
 	out := make([]string, 0, len(tlds))
 	for _, tld := range tlds {
 		if tld = strings.Trim(strings.ToLower(strings.TrimSpace(tld)), "."); tld != "" {
+			if ascii, err := idna.Lookup.ToASCII(tld); err == nil {
+				tld = strings.Trim(ascii, ".")
+			}
 			out = append(out, tld)
 		}
 	}

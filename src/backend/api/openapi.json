@@ -107,7 +107,10 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/QueryRequest"
+                "allOf": [
+                  { "$ref": "#/components/schemas/QueryRequest" },
+                  { "type": "object", "properties": { "domains": { "type": "array", "items": { "type": "string" }, "maxItems": 100 } } }
+                ]
               }
             }
           }

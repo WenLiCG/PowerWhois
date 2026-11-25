@@ -44,6 +44,27 @@ func TestUnsupportedTLDKeepsLocalEvidence(t *testing.T) {
 	}
 }
 
+func TestInternationalizedTLDsRouteToRDAP(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Exercise route selection without contacting a registry.
+	for _, domain := range []string{"example.公司", "example.xn--55qx5d", "example.みんな"} {
+		for _, mode := range []string{constant.WhoisQuery, constant.MixedQuery} {
+			info, err := lookup(ctx, domain, mode)
+			if info.LookupType != constant.LookupTypeRDAP || !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s (%s) did not select RDAP: %+v, %v", domain, mode, info, err)
+			}
+		}
+	}
+}
+
+func TestCustomRDAPProviderPreservesExplicitFreeMarker(t *testing.T) {
+	info := lookupinfo.DomainInfo{LookupType: "rdap", Source: "custom:rdap", CustomizedResult: constant.DomainRegisterStatusFree}
+	r := Result("example.com", info, nil)
+	if r.Status != "not_found" || r.RegisterStatus != "NotFound" {
+		t.Fatalf("provider's explicit absence was lost: %+v", r)
+	}
+}
+
 func TestDelegatedAcademicUKDoesNotUseNominetAbsence(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // A local coverage decision must not require any network request.

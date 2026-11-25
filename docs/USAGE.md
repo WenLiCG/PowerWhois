@@ -18,6 +18,8 @@
 
 `whois` 模式沿用原项目的 RDAP 优先路由；`dns`、`mixed`、`proxy` 也保留。自定义 WHOIS API 使用配置中的名称。原长名称 `whoisQuery/dnsQuery/mixedQuery/whoisQueryWithProxy` 继续有效。输入须为纯域名，支持 IDN，转换为小写 ASCII；子域名按原项目规则归并到注册域名，自动去重。后缀使用仓库维护的列表，不保证所有未来新后缀立即可用。
 
+新 RDAP 查询的 `rawResponse` 保存最终上游响应正文（成功的 RDAP 域名记录为 JSON，错误正文可能为空或使用其他格式），`source` 记录最终请求 URL。旧任务保留当时存储的原文格式。自动化读取日期、状态或 NS 时应使用相应的结构化字段。配置代理和 Mixed 路由时，Unicode 后缀与其 Punycode 写法等效。
+
 ## 权限与凭据
 
 - Web 管理员登录后可使用原有设置、代理、自定义 API、日志、手动注册。注册必须在 Web 明确确认；已发给注册商的请求无法撤回，失败或取消后先查注册商订单再重试。
@@ -88,6 +90,8 @@ with urllib.request.urlopen(request, timeout=60) as response:
 错误结构为 `{"error":{"code":"invalid_request","message":"..."}}`：400 输入不合法，401 未认证，404 不存在，409 状态/幂等冲突，429 请求过快（读取 `Retry-After`），503 存储暂不可用。服务限制每来源 IP 每分钟 30 次同步查询、60 次创建任务、1200 次 v1 请求；登录 5 次。反向代理默认不信任任意来源转发的 IP，多个远程客户端可能共用代理侧计数。
 
 结果列表默认不返回原文（`includeRaw=false`），需要原文时使用 `GET /api/v1/tasks/{id}/results/{index}`，其中 index 是结果的 order；也可显式 `includeRaw=true`。同步 `/query` 原文预览上限为每域名 64 KiB，截断时 `rawResponseTruncated=true`；需要完整证据请先创建持久任务。同步总结果超过 8 MiB 返回 413，请改为任务分页。
+
+CLI 导出 CSV 时，标准输出只包含 CSV。标准错误中的 `nextOffset=N` 可作为下一次导出的 `--offset N`，值为 `-1` 时结束。缺失或无效的游标会使该次导出失败，调用脚本应检查退出码。
 
 ### 任务与分页规则
 

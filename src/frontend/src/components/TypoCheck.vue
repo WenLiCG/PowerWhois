@@ -13,7 +13,7 @@
                     hint="输入单个基准域名（如 example.com），自动生成拼写变体并查询注册状态"
                     placeholder="example.com"
                     @keyup.enter="typoCheckDomain()"
-                    :disable="busy"
+                    :disable="webStore.busy"
                 />
             </div>
             <div class="col-12 col-sm-auto">
@@ -26,14 +26,15 @@
                         label="生成并查询"
                         style="height: 56px"
                         class="q-px-lg full-width"
-                        :loading="typoCheckDomains.length > 0 && webStore.unCheckDomains > 0"
+                        :loading="webStore.pendingQuery === 'typoCheck' || (typoCheckDomains.length > 0 && webStore.unCheckDomains > 0)"
                         :percentage="handleProgress"
-                        :disable="busy"
+                        :disable="webStore.busy"
                         @click="typoCheckDomain()"
                     >
                         <template v-slot:loading>
                             <q-spinner-bars class="on-left" />
-                            <span>{{ handleProgress }}%</span>
+                            <span v-if="webStore.pendingQuery === 'typoCheck'">正在提交变体查询…</span>
+                            <span v-else>{{ handleProgress }}%</span>
                         </template>
                     </q-btn>
                     <q-btn
@@ -44,7 +45,8 @@
                         icon="stop_circle"
                         label="停止"
                         style="height: 56px"
-                        @click="stopTypoQuery()"
+                        @click="stopQuery"
+                        :loading="webStore.pendingQuery === 'stop'"
                     />
                 </div>
             </div>
@@ -52,19 +54,19 @@
 
         <q-separator class="q-mt-md" />
 
-        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="busy" />
+        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="webStore.busy" />
 
         <q-separator />
 
-        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="busy" />
+        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="webStore.busy" />
 
         <q-separator />
 
-        <WhoisSelection v-model:queryType="queryType" :disable="busy" />
+        <WhoisSelection v-model:queryType="queryType" :disable="webStore.busy" />
 
         <template v-if="tokenStore.token && settingStore.registerApis.length">
             <q-separator />
-            <RegisterSelection v-model:registerType="registerType" :disable="busy" />
+            <RegisterSelection v-model:registerType="registerType" :disable="webStore.busy" />
         </template>
     </q-card>
 
@@ -80,7 +82,7 @@ defineOptions({
 
 import { ref, computed, watchEffect } from "vue";
 import { useQuasar } from "quasar";
-import { status, send } from "src/utils/websocketHandler";
+import { submitQuery, stopQuery } from "src/utils/websocketHandler";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useWebStore } from "src/stores/webStore";
 import { useSettingStore } from "src/stores/settingStore";
@@ -100,7 +102,7 @@ const typoCheckDomains = ref([]);
 
 const tokenStore = useTokenStore();
 const webStore = useWebStore();
-const busy = computed(() => webStore.unCheckDomains > 0 || webStore.unRegisterDomains > 0);
+
 const settingStore = useSettingStore();
 
 const domainInput = ref("");
@@ -113,23 +115,8 @@ watchEffect(() => {
     typoCheckDomains.value = webStore.domains.filter((domain) => domain.checkType == "typoCheck");
 });
 
-function isWebsocketConnected() {
-    if (status.value == "OPEN") {
-        return true;
-    }
-    $q.notify({
-        position: "top",
-        type: "warning",
-        message: "服务连接已断开，请点击右上角“重连”或刷新页面后重试",
-        progress: true,
-        timeout: 5000,
-        actions: [{ label: "确定", color: "white" }]
-    });
-    return false;
-}
-
 function typoCheckDomain() {
-    if (busy.value) return;
+    if (webStore.busy) return;
     const target = (domainInput.value || "").trim().replace(/\.+$/, "");
     if (!target) {
         $q.notify({
@@ -164,28 +151,9 @@ function typoCheckDomain() {
         return;
     }
 
-    if (isWebsocketConnected()) {
-        webStore.clearDomains();
-        send(
-            JSON.stringify({
-                event: "typoCheck",
-                data: {
-                    domain: target,
-                    typoType: typoTypeSelected.value,
-                    ccTlds: typoSelectedCcTLDs.value,
-                    queryType: queryType.value
-                }
-            })
-        );
-    }
-}
-
-function stopTypoQuery() {
-    if (status.value === "OPEN") {
-        send(JSON.stringify({ event: "webCheckStop", data: null }), false);
-    }
-    webStore.stopQueries();
-    $q.notify({ position: "top", type: "info", message: "已停止当前 Typo 查询，已完成的结果已保留" });
+    submitQuery("typoCheck", {
+        domain: target, typoType: typoTypeSelected.value, ccTlds: typoSelectedCcTLDs.value, queryType: queryType.value
+    });
 }
 
 const handleProgress = computed(() => {
