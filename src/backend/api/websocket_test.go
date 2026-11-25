@@ -90,6 +90,9 @@ func TestWebSocketAuthorizationAndLimits(t *testing.T) {
 	expect("webCheckError", "第 2 项")
 	send("webCheck", WebCheck{QueryType: "dnsQuery", Domains: make([]string, 501)})
 	expect("webCheckError", "数量超过")
+	// Swapping "aa" and selecting the source suffix only reproduce the source domain.
+	send("typoCheck", TypoCheck{Domain: "aa.com", TypoType: []string{"reverseLetter"}, CcTlds: []string{"com"}, QueryType: "dnsQuery"})
+	expect("typoCheckError", "没有生成")
 	send("webCheckStop", nil)
 	expect("webCheckStopped", "")
 	send("ping", nil)

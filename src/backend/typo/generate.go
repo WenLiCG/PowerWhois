@@ -48,13 +48,14 @@ func Generate(r Request) (Result, error) {
 		}
 		out.Groups["wrongTlds"] = t.TypeWrongTlds(r.TLDs)
 	}
-	seen := map[string]bool{}
+	// The source domain is not a variant of itself; swapping doubled letters or selecting its own suffix reproduces it.
+	seen := map[string]bool{domain: true}
 	for kind, domains := range out.Groups {
 		valid := []string{}
 		groupSeen := map[string]bool{}
 		for _, d := range domains {
 			n, e := utils.TrimAndGetMainDomain(d)
-			if e != nil {
+			if e != nil || n == domain {
 				continue
 			}
 			if !groupSeen[n] {

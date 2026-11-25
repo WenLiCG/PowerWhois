@@ -25,7 +25,7 @@
 - `ping` → `pong`。
 - `webCheck`：`{queryType,domains}`；响应 `webCheckDomains` 和每域名 `webCheckResult`。
 - `webCheckStop`：停止当前连接正在执行的网页或 Typo 即时查询，响应 `webCheckStopped`，已完成结果保留。
-- `typoCheck`：`{domain,typoType,ccTlds,queryType}`；需要管理员，按稳定顺序返回 `typoResult` 分组及去重后的 `webCheckResult`。
+- `typoCheck`：`{domain,typoType,ccTlds,queryType}`；需要管理员，按稳定顺序返回 `typoResult` 分组及去重后的 `webCheckResult`。候选不含原域名本身（如 `google.com` 互换 `oo` 或选中自身后缀）；没有可查询候选时返回 `typoCheckError`。
 - 旧版批量消息 `bulkCheckStart`（`{queryType}`）、`bulkCheckPause`、`bulkCheckResume`、`bulkCheckCancel`、`bulkCheckClear`、`bulkRecheckErrorDomains` 继续保留，需要管理员。clear 只解除当前 Web 批量选择及上传，不再 FLUSHDB。
 - `register`：`{registerType,domains,confirmed:true}`；需要管理员及明确确认，只用于人工 Web 操作。没有注册 MCP/CLI 工具。
 

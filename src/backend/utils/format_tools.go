@@ -45,12 +45,31 @@ func GetDomainHumanStatus(domainStatus []string) string {
 			return constant.DomainStatusRedemptionPeriod
 		} else if slice.Contain(noSpaceDomainStatus, "ok") || slice.Contain(noSpaceDomainStatus, "active") || slice.Contain(noSpaceDomainStatus, "delegated") {
 			return constant.DomainStatusActive
+		} else if onlyTransactionLocks(noSpaceDomainStatus) {
+			// RFC 5731 prohibitions restrict changes to a registered domain; they are not a lifecycle stage.
+			// Registries omit "ok" whenever such a lock is present, as for example.com and example.org.
+			return constant.DomainStatusActive
 		} else {
 			return constant.DomainStatusUnknown
 		}
 	} else {
 		return constant.DomainStatusUnknown
 	}
+}
+
+// onlyTransactionLocks reports whether every status is a client/server delete, renew, transfer or update prohibition.
+func onlyTransactionLocks(statuses []string) bool {
+	for _, status := range statuses {
+		action, ok := strings.CutPrefix(status, "client")
+		if !ok {
+			action, ok = strings.CutPrefix(status, "server")
+		}
+		action, prohibited := strings.CutSuffix(action, "prohibited")
+		if !ok || !prohibited || (action != "delete" && action != "renew" && action != "transfer" && action != "update") {
+			return false
+		}
+	}
+	return len(statuses) > 0
 }
 
 // GetDomainHumanError takes an error and returns the human-readable error message.

@@ -440,20 +440,28 @@ function exportFilteredCsv() {
     downloadCsvContent(csv, `powerwhois-${props.resultType}-${stamp}.csv`);
 }
 
+// Columns follow the modes that produced these rows, not the selector the user may have changed since.
+const resultMode = computed(() => {
+    const modes = webStore.resultModes[props.resultType] || [];
+    if (modes.length === 1) return modes[0];
+    return modes.length > 1 ? "mixedQuery" : props.queryType;
+});
+
 function updateVisibleColumns() {
-    if (props.queryType == "whoisQuery" || props.queryType == "whoisQueryWithProxy") {
+    const mode = resultMode.value;
+    if (mode == "whoisQuery" || mode == "whoisQueryWithProxy") {
         if (props.resultType == "webCheck") {
             visibleColumns.value = ["domain", "status", "createdDate", "expiryDate", "nameServer", "domainStatus"];
         } else if (props.resultType == "typoCheck") {
             visibleColumns.value = ["domain", "typoType", "status", "createdDate", "expiryDate", "nameServer", "domainStatus"];
         }
-    } else if (props.queryType == "dnsQuery") {
+    } else if (mode == "dnsQuery") {
         if (props.resultType == "webCheck") {
             visibleColumns.value = ["domain", "status", "nameServer"];
         } else if (props.resultType == "typoCheck") {
             visibleColumns.value = ["domain", "typoType", "status", "nameServer"];
         }
-    } else if (props.queryType == "mixedQuery") {
+    } else if (mode == "mixedQuery") {
         if (props.resultType == "webCheck") {
             visibleColumns.value = ["domain", "status", "lookupType", "createdDate", "expiryDate", "nameServer", "domainStatus"];
         } else if (props.resultType == "typoCheck") {
@@ -501,7 +509,8 @@ function showRegisterRawResponse(data) {
 
 function requerycheckedErrorDomains() {
     const domains = props.domainResults.filter((row) => ["Error", "Timeout", "Unknown"].includes(row.status)).map((row) => row.domain);
-    if (domains.length) submitQuery("webCheck", { queryType: props.queryType, domains }, true);
+    // The retry uses the currently selected mode (e.g. switch to the proxy) and replaces rows of this tab only.
+    if (domains.length) submitQuery("webCheck", { queryType: props.queryType, domains }, props.resultType);
 }
 
 function registerSelectedDomains() {
@@ -562,7 +571,7 @@ onMounted(() => {
     updateVisibleColumns();
 });
 
-watch(() => [props.queryType, props.resultType, canRegister.value], updateVisibleColumns);
+watch(() => [resultMode.value, props.resultType, canRegister.value], updateVisibleColumns);
 watch(
     () => props.domainResults,
     () => {

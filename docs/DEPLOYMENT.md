@@ -17,7 +17,7 @@ make all
 
 后端输出到 `dist/backend/`；网页在 `src/frontend/dist/spa/`。Makefile 不覆盖现有部署目录。非 make 环境可以在 `src/backend` 分别运行 `go build`、`go build ./cmd/powerwhois`、`go build ./cmd/powerwhois-mcp`。
 
-启动时配置 `POWERWHOIS_CONFIG` 为 YAML 路径（未设置则读取可执行文件同目录 config.yaml），提供 `POWERWHOIS_ADMIN_USER`、`POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN`。密码至少 12 字符，密钥/token 至少 32 字符并使用密码学随机值。不要放入 shell 命令参数、Git、截图或共享日志。默认监听 `127.0.0.1:8080`；`REDIS_HOST/REDIS_PORT/REDIS_DB/REDIS_PASSWORD` 可配置数据库。只读二进制目录部署时，将 `POWERWHOIS_LOG_DIR` 指向服务可写的日志目录；日志 ZIP 和旧批量 CSV 按请求写入系统临时目录，下载结束时清理。临时目录需有足够可写空间，异常中止后可在停机时核对遗留的 powerwhois-download-* 文件。
+启动时配置 `POWERWHOIS_CONFIG` 为 YAML 路径（未设置则读取可执行文件同目录 config.yaml），提供 `POWERWHOIS_ADMIN_USER`、`POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN`。密码至少 12 字符，密钥/token 至少 32 字符并使用密码学随机值。不要放入 shell 命令参数、Git、截图或共享日志。默认监听 `127.0.0.1:8080`；`REDIS_HOST/REDIS_PORT/REDIS_DB/REDIS_PASSWORD` 可配置数据库。只读二进制目录部署时，将 `POWERWHOIS_LOG_DIR` 指向服务可写的日志目录；日志 ZIP 和旧批量 CSV 按请求写入系统临时目录，下载结束时清理。临时目录需有足够可写空间，异常中止后可在停机时核对遗留的 powerwhois-download-* 文件。`POWERWHOIS_LOG_STDOUT=true` 时日志同时写到标准输出（Compose 默认开启，`docker compose logs typonamer` 可见），文件日志仍供网页下载。后端内置 Go 时区库，精简镜像或缺少 `/usr/share/zoneinfo` 的主机上 `TZ` 设置与下载文件名中的时间同样有效。
 
 环境管理的管理员凭据不能在 Web 修改；配置保存不会把这些秘密落到 YAML。其他设置仍从 Web 修改并原子写入 YAML。配置目录必须可写（需要创建临时文件并替换原文件），仅挂载只读单文件会导致保存失败。自定义注册/API URL 可能包含秘密，配置文件应为 0600，目录限制访问；备份也要同等保护。
 

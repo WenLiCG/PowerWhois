@@ -82,16 +82,13 @@ func init() {
 		Compress: logFileCompress, // 是否压缩
 	})
 
-	// 创建同步器
-	var syncer zapcore.WriteSyncer
-	if appDev != "" && strings.ToLower(appDev) == "true" {
-		// 创建控制台输出
-		consoleSyncer := zapcore.AddSync(os.Stderr)
-
-		// 创建多输出
-		syncer = zapcore.NewMultiWriteSyncer(consoleSyncer, fileWriteSyncer)
-	} else {
-		syncer = fileWriteSyncer
+	// 创建同步器. The file stays the source for the Web log download; containers also set
+	// POWERWHOIS_LOG_STDOUT=true so `docker compose logs typonamer` shows the application log.
+	var syncer zapcore.WriteSyncer = fileWriteSyncer
+	if strings.EqualFold(appDev, "true") {
+		syncer = zapcore.NewMultiWriteSyncer(zapcore.AddSync(os.Stderr), fileWriteSyncer)
+	} else if strings.EqualFold(os.Getenv("POWERWHOIS_LOG_STDOUT"), "true") {
+		syncer = zapcore.NewMultiWriteSyncer(zapcore.AddSync(os.Stdout), fileWriteSyncer)
 	}
 
 	// 创建核心

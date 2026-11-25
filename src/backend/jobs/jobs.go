@@ -114,7 +114,11 @@ func Normalize(r Request) (Request, error) {
 	for i, d := range r.Domains {
 		n, err := utils.TrimAndGetMainDomain(d)
 		if err != nil {
-			return r, fmt.Errorf("invalid domain at line %d", i+1)
+			// Clients drop blank lines before submitting, so name the value as well as its position.
+			if preview := []rune(d); len(preview) > 80 {
+				d = string(preview[:80]) + "…"
+			}
+			return r, fmt.Errorf("invalid domain at line %d: %q", i+1, d)
 		}
 		if !seen[n] {
 			seen[n] = true

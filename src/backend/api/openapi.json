@@ -1332,7 +1332,8 @@
             "type": "string"
           },
           "domainStatus": {
-            "type": "string"
+            "type": "string",
+            "description": "Lifecycle summary of rawDomainStatus: Active, Hold, Inactive, PendingDelete, RedemptionPeriod or Unknown. Statuses that are only client/server delete, renew, transfer or update prohibitions count as Active. Meaningful for registered results only."
           },
           "rawResponse": {
             "type": "string"

@@ -23,6 +23,8 @@ services:
       TZ: Asia/Shanghai
       REDIS_HOST: redis
       POWERWHOIS_LISTEN: "0.0.0.0:8080"
+      # Also write the application log to stdout for `docker compose logs typonamer`.
+      POWERWHOIS_LOG_STDOUT: "true"
       POWERWHOIS_ADMIN_USER: "${POWERWHOIS_ADMIN_USER:?set administrator user}"
       POWERWHOIS_ADMIN_PASSWORD: "${POWERWHOIS_ADMIN_PASSWORD:?set administrator password}"
       POWERWHOIS_JWT_SECRET: "${POWERWHOIS_JWT_SECRET:?set random JWT secret}"

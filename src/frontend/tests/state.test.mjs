@@ -73,7 +73,8 @@ test('web CSV export escapes formulas and preserves merged typo labels', () => {
 test('query submissions retain prior evidence until the server accepts candidates', () => {
   setActivePinia(createPinia());
   const store = useWebStore();
-  store.setCheckingDomains(['prior.com'], 'webCheck', '');
+  // The prior evidence belongs to the same tab: a new Typo query replaces earlier Typo rows only.
+  store.setCheckingDomains(['prior.com'], 'typoCheck', 'skipLetter');
   store.updateCheckResult({domain: 'prior.com', registerStatus: 'Taken', lookupType: 'dns'});
   store.pendingQuery = 'typoCheck';
   assert.equal(store.busy, true);
@@ -104,4 +105,51 @@ test('late Typo groups arriving before stop acknowledgment keep evidence and the
   assert.deepEqual(store.domains.map(row => row.domain), ['one.com', 'two.com']);
   assert.equal(store.checkedUnknownDomains, 2);
   assert.equal(store.busy, false);
+});
+
+test('each tab keeps its own results, row IDs stay unique and retries stay in their tab', () => {
+  setActivePinia(createPinia());
+  const store = useWebStore();
+  const result = (domain, registerStatus) => ({domain, registerStatus, lookupType: 'rdap'});
+  store.pendingQuery = 'webCheck'; store.pendingMode = 'whoisQuery';
+  store.setCheckingDomains(['example.com', 'shared.com'], 'webCheck', '');
+  store.updateCheckResult(result('example.com', 'Taken'));
+  store.updateCheckResult(result('shared.com', 'Error'));
+  assert.deepEqual(store.resultModes.webCheck, ['whoisQuery']);
+
+  store.pendingQuery = 'typoCheck'; store.pendingMode = 'dnsQuery';
+  assert.equal(store.activeCheckType, 'typoCheck');
+  store.setCheckingDomains(['shared.com', 'exampel.com'], 'typoCheck', 'reverseLetter');
+  assert.deepEqual(store.domains.map(r => `${r.checkType}:${r.domain}`),
+    ['webCheck:example.com', 'webCheck:shared.com', 'typoCheck:shared.com', 'typoCheck:exampel.com']);
+  assert.equal(new Set(store.domains.map(r => r.domainID)).size, 4);
+  assert.equal(store.activeCheckType, 'typoCheck');
+  store.updateCheckResult(result('shared.com', 'Timeout'));
+  store.updateCheckResult(result('exampel.com', 'NotFound'));
+  assert.equal(store.busy, false);
+  assert.equal(store.domains[1].status, 'Error', 'the instant-lookup row keeps its own evidence');
+
+  // A Typo retry of shared.com must not reset the instant-lookup row with the same name.
+  store.pendingQuery = 'retry'; store.pendingScope = 'typoCheck'; store.pendingMode = 'whoisQuery';
+  assert.equal(store.activeCheckType, 'typoCheck');
+  store.setCheckingDomains(['shared.com'], 'webCheck', '');
+  assert.equal(store.domains[1].isChecked, true);
+  assert.equal(store.domains[2].isChecked, false);
+  assert.deepEqual(store.resultModes.typoCheck, ['dnsQuery', 'whoisQuery']);
+  store.updateCheckResult(result('shared.com', 'Taken'));
+  assert.equal(store.domains[1].status, 'Error');
+  assert.equal(store.domains[2].status, 'Taken');
+
+  // A new instant lookup replaces only the instant-lookup rows; new IDs never reuse Typo IDs.
+  const typoIDs = store.domains.filter(r => r.checkType === 'typoCheck').map(r => r.domainID);
+  store.pendingQuery = 'webCheck'; store.pendingMode = 'dnsQuery';
+  store.setCheckingDomains(['new.com'], 'webCheck', '');
+  assert.deepEqual(store.domains.map(r => r.domain), ['shared.com', 'exampel.com', 'new.com']);
+  assert.ok(!typoIDs.includes(store.domains[2].domainID));
+  assert.deepEqual(store.resultModes.webCheck, ['dnsQuery']);
+  assert.equal(store.checkedTakenDomains, 1);
+
+  store.clearDomains();
+  assert.deepEqual(store.domains, []);
+  assert.deepEqual(store.resultModes, {webCheck: [], typoCheck: []});
 });

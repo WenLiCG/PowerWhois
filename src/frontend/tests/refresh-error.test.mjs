@@ -28,7 +28,7 @@ test('background polls preserve a rejected upload message, file and previous tas
   const ctx = fixture(); await ctx.createTask();
   const file = ctx.file.value, key = ctx.submissionKey;
   for (let poll = 0; poll < 3; poll++) await ctx.refresh();
-  assert.equal(ctx.error.value, 'invalid domain at line 2');
+  assert.equal(ctx.error.value, '文件第 2 行不是有效的纯域名。整批未创建，请修正或删除该行后重新上传。');
   assert.equal(ctx.file.value, file); assert.equal(ctx.selectedID.value, 'prior-task');
   assert.equal(ctx.submissionKey, key);
 });
@@ -37,11 +37,11 @@ test('refresh failures recover without hiding the separate upload error', async 
   const ctx = fixture(); await ctx.createTask(); const get = ctx.api.get;
   ctx.api.get = async () => {throw {response: {data: {error: {message: 'refresh unavailable'}}}};};
   await ctx.refresh();
-  assert.equal(ctx.error.value, 'invalid domain at line 2');
+  assert.equal(ctx.error.value, '文件第 2 行不是有效的纯域名。整批未创建，请修正或删除该行后重新上传。');
   assert.equal(ctx.refreshError.value, 'refresh unavailable');
   ctx.api.get = get; await ctx.refresh();
   assert.equal(ctx.refreshError.value, '');
-  assert.equal(ctx.error.value, 'invalid domain at line 2');
+  assert.equal(ctx.error.value, '文件第 2 行不是有效的纯域名。整批未创建，请修正或删除该行后重新上传。');
   ctx.api.post = async () => ({data: {id: 'created-task'}});
   await ctx.createTask();
   assert.equal(ctx.error.value, ''); assert.equal(ctx.file.value, null);

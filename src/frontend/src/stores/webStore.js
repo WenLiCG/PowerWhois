@@ -11,20 +11,39 @@ export const useWebStore = defineStore("web", {
         checkedUnknownDomains: 0,
         checkedTimeoutDomains: 0,
         checkedErrorDomains: 0,
-        pendingQuery: null
+        pendingQuery: null,
+        // Tab whose rows a pending retry replaces; both tabs send retries as webCheck events.
+        pendingScope: null,
+        pendingMode: null,
+        // Query modes behind each tab's current rows, so result columns do not follow the live selector.
+        resultModes: { webCheck: [], typoCheck: [] },
+        // Row IDs stay unique across tabs because registration selects rows by ID.
+        nextDomainID: 1
     }),
 
     getters: {
-        busy: (state) => !!state.pendingQuery || state.unCheckDomains > 0 || state.unRegisterDomains > 0
+        busy: (state) => !!state.pendingQuery || state.unCheckDomains > 0 || state.unRegisterDomains > 0,
+        // The tab that owns the running query or registration; the other tab explains why it is locked.
+        activeCheckType: (state) => {
+            if (state.pendingQuery === "retry") return state.pendingScope;
+            if (state.pendingQuery === "webCheck" || state.pendingQuery === "typoCheck") return state.pendingQuery;
+            const row = state.domains.find((d) => !d.isChecked || (d.selectedRegister && d.registerStatus == null));
+            return row ? row.checkType : null;
+        }
     },
 
     actions: {
+        rememberMode(checkType, mode) {
+            if (!mode || !this.resultModes[checkType]) return;
+            if (!this.resultModes[checkType].includes(mode)) this.resultModes[checkType].push(mode);
+        },
         setCheckingDomains(newDomains, checkType, typoType) {
             if (!newDomains.length) return;
             if (this.pendingQuery === "retry") {
+                const scope = this.pendingScope;
                 const retryDomains = new Set(newDomains.map((domain) => domain.toLowerCase()));
                 for (const row of this.domains) {
-                    if (!retryDomains.has(row.domain)) continue;
+                    if ((scope && row.checkType !== scope) || !retryDomains.has(row.domain)) continue;
                     row.lookupType = null;
                     row.status = null;
                     row.errorInfo = "";
@@ -35,12 +54,17 @@ export const useWebStore = defineStore("web", {
                     row.checkedRawResponse = null;
                     row.isChecked = false;
                 }
+                if (scope) this.rememberMode(scope, this.pendingMode);
                 this.pendingQuery = null;
+                this.pendingScope = null;
                 this.recount();
             } else {
-                if (this.pendingQuery === checkType) this.clearDomains();
-                const existingByDomain = new Map(this.domains.map((row) => [row.domain, row]));
-                let domainID = this.domains.length + 1;
+                // A new query replaces only its own tab's results; the other tab keeps its evidence.
+                if (this.pendingQuery === checkType) {
+                    this.clearDomains(checkType);
+                    this.rememberMode(checkType, this.pendingMode);
+                }
+                const existingByDomain = new Map(this.domains.filter((row) => row.checkType === checkType).map((row) => [row.domain, row]));
                 newDomains.forEach((domain) => {
                     const normalized = domain.toLowerCase();
                     const existing = existingByDomain.get(normalized);
@@ -56,7 +80,7 @@ export const useWebStore = defineStore("web", {
                         return;
                     }
                     const created = {
-                        domainID: domainID,
+                        domainID: this.nextDomainID++,
                         domain: normalized,
                         checkType: checkType,
                         typoType: typoType,
@@ -76,7 +100,6 @@ export const useWebStore = defineStore("web", {
                     };
                     this.domains.push(created);
                     existingByDomain.set(normalized, created);
-                    domainID++;
                     this.unCheckDomains++;
                 });
             }
@@ -176,6 +199,7 @@ export const useWebStore = defineStore("web", {
                 }
             }
             this.pendingQuery = null;
+            this.pendingScope = null;
             this.recount();
         },
         interruptQueries() {
@@ -188,18 +212,18 @@ export const useWebStore = defineStore("web", {
                 }
             }
             this.pendingQuery = null;
+            this.pendingScope = null;
             this.recount();
         },
-        clearDomains() {
-            this.domains = [];
-            this.unCheckDomains = 0;
-            this.unRegisterDomains = 0;
-            this.checkedTakenDomains = 0;
-            this.checkedFreeDomains = 0;
-            this.checkedUnknownDomains = 0;
-            this.checkedTimeoutDomains = 0;
-            this.checkedErrorDomains = 0;
+        // Without a tab, clear everything (logout); with one, keep the other tab's results.
+        clearDomains(checkType = null) {
+            this.domains = checkType ? this.domains.filter((row) => row.checkType !== checkType) : [];
+            if (checkType) this.resultModes[checkType] = [];
+            else this.resultModes = { webCheck: [], typoCheck: [] };
+            this.unRegisterDomains = this.domains.filter((row) => row.selectedRegister && row.registerStatus == null).length;
             this.pendingQuery = null;
+            this.pendingScope = null;
+            this.recount();
         }
     }
 });

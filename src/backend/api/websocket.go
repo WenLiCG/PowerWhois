@@ -147,6 +147,10 @@ func onMessage(ep *socketio.EventPayload) {
 			emit(ep.Kws, "typoCheckError", err.Error())
 			return
 		}
+		if len(generated.Domains) == 0 {
+			emit(ep.Kws, "typoCheckError", "所选类型和后缀没有生成与原域名不同的变体，请增加 Typo 类型或后缀")
+			return
+		}
 		if len(generated.Domains) > config.GetConfig().WebCheckDomainLimit {
 			emit(ep.Kws, "typoCheckError", "生成数量超过网页查询上限，请减少类型或通过 API 分批查询")
 			return
