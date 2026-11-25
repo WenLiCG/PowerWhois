@@ -1,13 +1,11 @@
 import { useWebSocket } from "@vueuse/core";
 import { getToken } from "./tokenHandler";
-import { useBulkStore } from "src/stores/bulkStore";
 import { useWebStore } from "src/stores/webStore";
 import { Notify } from "quasar";
 
 const wsUrl = new URL("/app/ws", window.location.href);
 wsUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
-const bulkStore = useBulkStore();
 const webStore = useWebStore();
 
 export const { status, send, open, close } = useWebSocket(wsUrl.href, {
@@ -35,12 +33,8 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
         } catch {
             return;
         }
+        // The batch page reads durable tasks over HTTP; the legacy per-second bulkCheckInfo push is ignored.
         switch (msgObj.event) {
-            case "bulkCheckInfo":
-                bulkStore.setBulkCheckStatus(msgObj.data.Status);
-                bulkStore.setBulkCheckQueryType(msgObj.data.QueryType);
-                bulkStore.updateBulkCheckInfo(msgObj.data);
-                break;
             case "webCheckDomains":
                 webStore.setCheckingDomains(msgObj.data, "webCheck", "");
                 break;
@@ -64,7 +58,10 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
             case "bulkCheckError":
             case "webCheckError":
             case "typoCheckError":
-                if (msgObj.event !== "bulkCheckError") webStore.pendingQuery = null;
+                if (msgObj.event !== "bulkCheckError") {
+                    webStore.pendingQuery = null;
+                    webStore.pendingScope = null;
+                }
                 Notify.create({
                     position: "top",
                     type: "negative",
@@ -78,10 +75,13 @@ export const { status, send, open, close } = useWebSocket(wsUrl.href, {
     }
 });
 
-export function submitQuery(event, data, retry = false) {
+// retryScope names the tab ("webCheck" or "typoCheck") whose rows a retry replaces.
+export function submitQuery(event, data, retryScope = null) {
     if (webStore.busy) return;
     if (send(JSON.stringify({ event, data }), false)) {
-        webStore.pendingQuery = retry ? "retry" : event;
+        webStore.pendingQuery = retryScope ? "retry" : event;
+        webStore.pendingScope = retryScope || event;
+        webStore.pendingMode = data.queryType || null;
     } else {
         Notify.create({ position: "top", type: "warning", message: "连接已断开，请重连后再提交查询。" });
     }

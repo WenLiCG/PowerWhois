@@ -26,7 +26,7 @@
                         label="生成并查询"
                         style="height: 56px"
                         class="q-px-lg full-width"
-                        :loading="webStore.pendingQuery === 'typoCheck' || (typoCheckDomains.length > 0 && webStore.unCheckDomains > 0)"
+                        :loading="webStore.pendingQuery === 'typoCheck' || pendingCount > 0"
                         :percentage="handleProgress"
                         :disable="webStore.busy"
                         @click="typoCheckDomain()"
@@ -38,7 +38,7 @@
                         </template>
                     </q-btn>
                     <q-btn
-                        v-if="webStore.unCheckDomains > 0"
+                        v-if="pendingCount > 0"
                         outline
                         no-caps
                         color="negative"
@@ -50,6 +50,10 @@
                     />
                 </div>
             </div>
+        </div>
+        <div v-if="otherTabBusy" class="busy-elsewhere q-mt-sm" role="status">
+            <q-icon name="hourglass_top" size="16px" />
+            网页查询页面有查询或注册正在进行；完成或在该页面停止后可开始新的变体查询，本页结果会保留。
         </div>
 
         <q-separator class="q-mt-md" />
@@ -156,8 +160,22 @@ function typoCheckDomain() {
     });
 }
 
+// Progress and the stop button describe this tab only; the store also holds instant-lookup rows.
+const pendingCount = computed(() => typoCheckDomains.value.filter((row) => !row.isChecked).length);
+const otherTabBusy = computed(() => webStore.busy && webStore.activeCheckType === "webCheck");
+
 const handleProgress = computed(() => {
     if (typoCheckDomains.value.length === 0) return 0;
-    return Math.round(((typoCheckDomains.value.length - webStore.unCheckDomains) / typoCheckDomains.value.length) * 100);
+    return Math.round(((typoCheckDomains.value.length - pendingCount.value) / typoCheckDomains.value.length) * 100);
 });
 </script>
+
+<style scoped>
+.busy-elsewhere {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #8a5a00;
+    font-size: 13px;
+}
+</style>

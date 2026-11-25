@@ -22,7 +22,20 @@ test('rejected upload retains input, previous task and idempotency key',async()=
   ctx.api.post=async(path,body,options)=>{calls.push({body,options});throw {response:{data:{error:{message:'invalid domain at line 2'}}}}};
   await ctx.createTask();await ctx.createTask();
   assert.equal(ctx.selectedID.value,'prior-task');assert.ok(ctx.file.value);assert.equal(ctx.creating.value,false);
-  assert.equal(ctx.error.value,'invalid domain at line 2');assert.equal(calls[0].options.headers['Idempotency-Key'],calls[1].options.headers['Idempotency-Key']);
+  assert.equal(ctx.error.value, '文件第 2 行不是有效的纯域名。整批未创建，请修正或删除该行后重新上传。');assert.equal(calls[0].options.headers['Idempotency-Key'],calls[1].options.headers['Idempotency-Key']);
+});
+test('validation errors name the file line even when blank lines were skipped', async () => {
+  const {ctx, calls} = fixture('example.com\n\nexample.org\n\n\nbad_domain!.com\nexample.net\n');
+  ctx.api.post = async (path, body) => {
+    calls.push({body});
+    throw {response: {data: {error: {message: 'invalid task request: invalid domain at line 3: "bad_domain!.com"'}}}};
+  };
+  await ctx.createTask();
+  assert.equal(calls[0].body.domains[2], 'bad_domain!.com');
+  assert.equal(ctx.error.value, '文件第 6 行不是有效的纯域名：“bad_domain!.com”。整批未创建，请修正或删除该行后重新上传。');
+  ctx.api.post = async () => {throw {response: {data: {error: {message: 'task storage unavailable'}}}};};
+  await ctx.createTask();
+  assert.equal(ctx.error.value, 'task storage unavailable', 'other errors pass through unchanged');
 });
 test('full attachment is parsed without truncation', {skip:!process.env.POWERWHOIS_ATTACHMENT_TXT},async()=>{
   const text=fs.readFileSync(process.env.POWERWHOIS_ATTACHMENT_TXT,'utf8');const {ctx,calls}=fixture(text);await ctx.createTask();

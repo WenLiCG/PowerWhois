@@ -10,6 +10,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// Release builds use -trimpath and slim images without /usr/share/zoneinfo; embed the zone database
+	// so download timestamps and the container TZ setting work everywhere.
+	_ "time/tzdata"
 	"typonamer/database"
 	"typonamer/register"
 	"typonamer/scheduler"
@@ -42,7 +45,7 @@ func init() {
 	// init carbon config
 	carbon.SetDefault(carbon.Default{
 		Layout:       carbon.DateTimeLayout,
-		Timezone:     carbon.PRC,
+		Timezone:     carbon.Shanghai, // canonical name; the legacy "PRC" alias is absent from current Debian tzdata
 		WeekStartsAt: carbon.Monday,
 		Locale:       "zh-CN",
 	})

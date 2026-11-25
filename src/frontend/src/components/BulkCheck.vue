@@ -228,7 +228,7 @@
                         <q-td :props="props">{{ props.row.expiryDate ? props.row.expiryDate.slice(0, 10) : "—" }}</q-td>
                     </template>
                     <template #body-cell-domainStatus="props">
-                        <q-td :props="props">{{ props.row.domainStatus || "—" }}</q-td>
+                        <q-td :props="props">{{ lifecycle(props.row) }}</q-td>
                     </template>
                 </q-table>
 
@@ -286,7 +286,10 @@
                         <div v-if="details?.createdDate || details?.expiryDate">
                             <strong>注册 / 到期：</strong>{{ details?.createdDate || "—" }} → {{ details?.expiryDate || "—" }}
                         </div>
-                        <div v-if="details?.domainStatus"><strong>域名状态：</strong>{{ details.domainStatus }}</div>
+                        <div v-if="details && lifecycle(details) !== '—'">
+                            <strong>域名状态：</strong>{{ lifecycle(details) }}
+                            <span v-if="details.rawDomainStatus?.length" class="text-grey-7">（{{ details.rawDomainStatus.join(", ") }}）</span>
+                        </div>
                         <div v-if="details?.nameServer?.length"><strong>权威 DNS：</strong>{{ details.nameServer.join(", ") }}</div>
                     </div>
                     <q-banner v-if="details?.queryError" dense class="bg-orange-1 text-deep-orange-10 q-mb-sm rounded-borders">
@@ -361,6 +364,10 @@ const columns = [
     { name: "domainStatus", label: "生命周期", field: "domainStatus", align: "left" },
     { name: "queryError", label: "说明", field: "queryError", align: "left" }
 ];
+// Only registered results carry registry lifecycle statuses; "Unknown" on a timeout or not_found row is noise.
+function lifecycle(row) {
+    return row.status === "registered" && row.domainStatus ? row.domainStatus : "—";
+}
 function showError(e, target = error) {
     target.value = e.response?.data?.error?.message || "连接失败，请重试。已有任务和结果保留在服务器。";
 }
@@ -449,12 +456,19 @@ async function createTask() {
     }
     creating.value = true;
     error.value = "";
+    // Blank lines are not submitted; keep each domain's file line so server errors point at the right line.
+    const fileLines = [];
     try {
-        const domains = (await file.value.text())
+        const domains = [];
+        (await file.value.text())
             .replace(/^\uFEFF/, "")
             .split(/\r?\n/)
-            .map((s) => s.trim())
-            .filter(Boolean);
+            .forEach((line, index) => {
+                const value = line.trim();
+                if (!value) return;
+                domains.push(value);
+                fileLines.push(index + 1);
+            });
         const body = {
             domains,
             mode: mode.value,
@@ -475,9 +489,22 @@ async function createTask() {
         await loadSelected();
     } catch (e) {
         showError(e);
+        error.value = describeUploadError(error.value, fileLines);
     } finally {
         creating.value = false;
     }
+}
+function describeUploadError(message, fileLines) {
+    const match = /invalid domain at line (\d+)(?::\s*(".*"))?/.exec(message || "");
+    if (!match) return message;
+    const item = Number(match[1]);
+    let value = match[2] || "";
+    try {
+        value = value ? JSON.parse(value) : "";
+    } catch {
+        value = value.slice(1, -1);
+    }
+    return `文件第 ${fileLines[item - 1] || item} 行不是有效的纯域名${value ? `：“${value}”` : ""}。整批未创建，请修正或删除该行后重新上传。`;
 }
 async function control(action, id = selectedID.value) {
     if (acting.value || stopped || id !== selectedID.value) return;
@@ -570,10 +597,16 @@ async function exportResults() {
         exporting.value = false;
     }
 }
+// Poll every 2 s while a listed task can still change; otherwise every 15 s to pick up CLI/API/MCP tasks.
+const isActive = (t) => t?.state === "queued" || t?.state === "running";
+let lastPoll = 0;
 onMounted(() => {
     refresh();
     timer = setInterval(() => {
-        if (!document.hidden) refresh();
+        if (document.hidden) return;
+        if (!isActive(task.value) && !tasks.value.some(isActive) && Date.now() - lastPoll < 15000) return;
+        lastPoll = Date.now();
+        refresh();
     }, 2000);
     document.addEventListener("visibilitychange", onVisibilityChange);
 });

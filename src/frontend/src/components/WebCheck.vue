@@ -70,7 +70,7 @@
                     icon="search"
                     label="开始查询"
                     class="full-width"
-                    :loading="webStore.pendingQuery === 'webCheck' || (webCheckDomains.length > 0 && webStore.unCheckDomains > 0)"
+                    :loading="webStore.pendingQuery === 'webCheck' || pendingCount > 0"
                     :percentage="handleProgress"
                     :disable="webStore.busy"
                     @click="queryDomains()"
@@ -78,11 +78,11 @@
                     <template v-slot:loading>
                         <q-spinner-bars class="on-left" />
                         <span v-if="webStore.pendingQuery === 'webCheck'">正在提交查询…</span>
-                        <span v-else class="text-white">正在查询 {{ handleProgress }}%（剩余 {{ webStore.unCheckDomains }}）</span>
+                        <span v-else class="text-white">正在查询 {{ handleProgress }}%（剩余 {{ pendingCount }}）</span>
                     </template>
                 </q-btn>
             </div>
-            <div class="col-auto" v-if="webStore.unCheckDomains > 0">
+            <div class="col-auto" v-if="pendingCount > 0">
                 <q-btn
                     outline
                     no-caps
@@ -93,6 +93,10 @@
                     :loading="webStore.pendingQuery === 'stop'"
                 />
             </div>
+        </div>
+        <div v-if="otherTabBusy" class="busy-elsewhere q-mt-sm" role="status">
+            <q-icon name="hourglass_top" size="16px" />
+            Typo 页面有查询或注册正在进行；完成或在 Typo 页面停止后可开始新的查询，本页结果会保留。
         </div>
     </q-card>
 
@@ -216,8 +220,22 @@ function queryDomains() {
     submitQuery("webCheck", { queryType: queryType.value, domains: dedupedList });
 }
 
+// Progress and the stop button describe this tab only; the store also holds Typo rows.
+const pendingCount = computed(() => webCheckDomains.value.filter((row) => !row.isChecked).length);
+const otherTabBusy = computed(() => webStore.busy && webStore.activeCheckType === "typoCheck");
+
 const handleProgress = computed(() => {
     if (webCheckDomains.value.length === 0) return 0;
-    return Math.round(((webCheckDomains.value.length - webStore.unCheckDomains) / webCheckDomains.value.length) * 100);
+    return Math.round(((webCheckDomains.value.length - pendingCount.value) / webCheckDomains.value.length) * 100);
 });
 </script>
+
+<style scoped>
+.busy-elsewhere {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #8a5a00;
+    font-size: 13px;
+}
+</style>

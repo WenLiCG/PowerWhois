@@ -33,6 +33,22 @@ func TestLifecycleNeverCallsHeldOrUnknownDomainsActive(t *testing.T) {
 			t.Fatalf("%s became %s", state, got)
 		}
 	}
+	for _, c := range []struct {
+		statuses []string
+		want     string
+	}{
+		// Verisign and PIR RDAP report only lock statuses for example.com and example.org.
+		{[]string{"client delete prohibited", "client transfer prohibited", "client update prohibited"}, "Active"},
+		{[]string{"serverDeleteProhibited", "serverTransferProhibited", "serverUpdateProhibited", "clientRenewProhibited"}, "Active"},
+		{[]string{"clientTransferProhibited", "clientHold"}, "Hold"},
+		{[]string{"clientTransferProhibited", "pendingDelete"}, "PendingDelete"},
+		{[]string{"clientTransferProhibited", "autoRenewPeriod"}, "Unknown"},
+		{[]string{"clientFutureProhibited"}, "Unknown"},
+	} {
+		if got := GetDomainHumanStatus(c.statuses); got != c.want {
+			t.Fatalf("%v became %s, want %s", c.statuses, got, c.want)
+		}
+	}
 }
 
 func TestCSVNeutralizesUpstreamFormulas(t *testing.T) {
