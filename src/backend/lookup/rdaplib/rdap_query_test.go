@@ -58,6 +58,36 @@ func TestRegistryResponses(t *testing.T) {
 	}
 }
 
+func TestHTTP404RequiresRegistryEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		mediaType, body string
+		want            error
+	}{
+		{"text/html", "<html>Page not found</html>", lookuperror.ErrorWhoisServerFailed},
+		{"application/json", `{"message":"unknown route"}`, lookuperror.ErrorWhoisServerFailed},
+		{"application/json", "", lookuperror.ErrorWhoisServerFailed},
+		{"application/rdap+json", `{"errorCode":500}`, lookuperror.ErrorWhoisServerFailed},
+		{"application/jsonp", "", lookuperror.ErrorWhoisServerFailed},
+		{"application/json; charset=utf-8", `{"errorCode":404}`, lookuperror.ErrorWhoisNotFound},
+	} {
+		t.Run(tc.mediaType, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tc.mediaType)
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			address, _ := url.Parse(server.URL)
+			rc := rdap.Client{HTTP: server.Client()}
+			resp, err := rc.Do(&rdap.Request{Type: rdap.DomainRequest, Query: "example.com", Server: address})
+			info, err := parseResponse("example.com", lookupinfo.DomainInfo{}, resp, err)
+			if !errors.Is(err, tc.want) || info.RawResponse != tc.body {
+				t.Fatalf("got %v, body %q; want %v, %q", err, info.RawResponse, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 func TestEventDatesUseUTCAndIgnoreMalformedEvents(t *testing.T) {
 	created, expires := getDomainDates([]rdap.Event{
 		{Action: "registration", Date: "2026-01-02T00:00:01.123+08:00"},

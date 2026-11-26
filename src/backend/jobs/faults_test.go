@@ -139,6 +139,62 @@ func TestResultFailureDoesNotLeaveResultWithoutCount(t *testing.T) {
 	}
 }
 
+func TestInconsistentTaskKeepsEvidenceAndYieldsQueue(t *testing.T) {
+	for _, missing := range []string{"input", "counts"} {
+		t.Run(missing, func(t *testing.T) {
+			ctx := context.Background()
+			r := testutil.Redis(t)
+			s := New(r, "restore:")
+			s.Query = func(_ context.Context, domain, _ string, _, _ int) lookupinfo.QueryResult {
+				return lookupinfo.QueryResult{Domain: domain, Status: "registered"}
+			}
+			task, _, err := s.Create(ctx, Request{Domains: []string{"first.com", "second.com"}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, results, counts := s.key(task.ID, "input"), s.key(task.ID, "results"), s.key(task.ID, "counts")
+			saved := `{"domain":"first.com","status":"unknown","source":"original"}`
+			if err := r.HSet(ctx, results, "0", saved).Err(); err != nil {
+				t.Fatal(err)
+			}
+			if missing == "input" {
+				if err := r.HSet(ctx, counts, "unknown", 1).Err(); err != nil {
+					t.Fatal(err)
+				}
+				if first, err := r.LPop(ctx, input).Result(); err != nil || first != "first.com" {
+					t.Fatal(first, err)
+				}
+			}
+			stop := start(t, s)
+			defer stop()
+			failed := waitTask(t, s, task.ID, func(t Task) bool { return t.State == "failed" })
+			if failed.Error == "" || r.HLen(ctx, results).Val() != 1 || r.HGet(ctx, results, "0").Val() != saved {
+				t.Fatal("worker changed results before detecting inconsistent storage")
+			}
+			next, _, err := s.Create(ctx, Request{Domains: []string{"next.com"}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitTask(t, s, next.ID, func(t Task) bool { return t.State == "completed" })
+			if missing == "input" {
+				err = r.LPush(ctx, input, "first.com").Err()
+			} else {
+				err = r.HSet(ctx, counts, "unknown", 1).Err()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Control(ctx, task.ID, "resume"); err != nil {
+				t.Fatal(err)
+			}
+			finished := waitTask(t, s, task.ID, func(t Task) bool { return t.State == "completed" })
+			if finished.Completed != 2 || finished.Counts["registered"] != 1 || r.HGet(ctx, results, "0").Val() != saved {
+				t.Fatal("resumed task did not retain its original result", finished)
+			}
+		})
+	}
+}
+
 func TestResultPaginationBoundsBytesWithoutSkippingInputs(t *testing.T) {
 	r := testutil.Redis(t)
 	s := New(r, "pages:")

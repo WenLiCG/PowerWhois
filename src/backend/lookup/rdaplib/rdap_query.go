@@ -2,11 +2,13 @@ package rdaplib
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/openrdap/rdap"
 	"github.com/openrdap/rdap/bootstrap"
 	"github.com/openrdap/rdap/bootstrap/cache"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
@@ -112,9 +114,19 @@ func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (l
 	return parsed, err
 }
 
-func isRDAPContentType(contentType string) bool {
-	ct := strings.ToLower(strings.TrimSpace(contentType))
-	return strings.HasPrefix(ct, "application/rdap+json") || strings.HasPrefix(ct, "application/json")
+func registryNotFound(h *rdap.HTTPResponse) bool {
+	mediaType, _, err := mime.ParseMediaType(h.Response.Header.Get("Content-Type"))
+	if err != nil || (mediaType != "application/rdap+json" && mediaType != "application/json") {
+		return false
+	}
+	// Some registries send an empty RDAP 404 and close the stream with a TLS error.
+	if len(h.Body) == 0 {
+		return mediaType == "application/rdap+json"
+	}
+	var reply struct {
+		ErrorCode int `json:"errorCode"`
+	}
+	return json.Unmarshal(h.Body, &reply) == nil && reply.ErrorCode == http.StatusNotFound
 }
 
 func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Response, err error) (lookupinfo.DomainInfo, error) {
@@ -132,11 +144,11 @@ func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Respons
 			if h.Response.StatusCode == http.StatusTooManyRequests {
 				return info, lookuperror.ErrorRateLimited
 			}
-			// Some authoritative RDAP responders (e.g. Verisign .com/.net) send a valid
-			// TLS-authenticated 404 with application/rdap+json and no Content-Length, then abort
-			// the TLS stream when closing the empty body. Treat a verified RDAP 404 as not_found.
-			if h.Response.StatusCode == http.StatusNotFound && h.Error != nil && isRDAPContentType(h.Response.Header.Get("Content-Type")) {
-				return info, lookuperror.ErrorWhoisNotFound
+			if h.Response.StatusCode == http.StatusNotFound {
+				if registryNotFound(h) {
+					return info, lookuperror.ErrorWhoisNotFound
+				}
+				return info, fmt.Errorf("%w: HTTP 404 without an RDAP negative response", lookuperror.ErrorWhoisServerFailed)
 			}
 		}
 		if lastHTTPErr != nil && errors.Is(lastHTTPErr, lookuperror.ErrorConnectToProxy) {
@@ -150,8 +162,6 @@ func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Respons
 		var ce *rdap.ClientError
 		if errors.As(err, &ce) {
 			switch ce.Type {
-			case rdap.ObjectDoesNotExist:
-				return info, lookuperror.ErrorWhoisNotFound
 			case rdap.BootstrapNoMatch, rdap.BootstrapNotSupported:
 				return info, lookuperror.ErrorNotSupportedTld
 			case rdap.NoWorkingServers:

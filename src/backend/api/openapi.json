@@ -1346,12 +1346,14 @@
           },
           "nameServer": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "rawDomainStatus": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }

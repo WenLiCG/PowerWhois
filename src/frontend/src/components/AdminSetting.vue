@@ -899,6 +899,7 @@ const settingStore = useSettingStore();
 const settingForm = ref(null);
 
 const settings = ref(null);
+let savedProxyHost = "";
 const loadFailed = ref(false);
 const logLevelOptions = ["Debug", "Info", "Warn", "Error", "Off"];
 
@@ -967,6 +968,7 @@ function getSettings() {
         .then((response) => {
             if (response.data) {
                 settings.value = response.data;
+                savedProxyHost = response.data.socketProxyHost || "";
                 settings.value.secretActions = { authPassword: "keep", jwtSecretKey: "keep", socketProxyPassword: "keep" };
                 settings.value.globalProxyTldsInput = settings.value.globalProxyTlds ? settings.value.globalProxyTlds.join("\n") : "";
                 settings.value.mixedProxyTldsInput = settings.value.mixedProxyTlds ? settings.value.mixedProxyTlds.join("\n") : "";
@@ -1035,6 +1037,25 @@ function onProxyAuthToggle(enabled) {
     }
 }
 
+function confirmProxyPasswordReuse(payload, testing) {
+    const host = payload.socketProxyHost;
+    if (!host || host.toLowerCase() === savedProxyHost.toLowerCase() || payload.secretActions.socketProxyPassword !== "keep" ||
+        !settings.value.secrets?.socketProxyPassword?.configured || (testing && !payload.socketProxyAuth)) return true;
+
+    const destination = host.includes(":") && !host.startsWith("[") ? `[${host}]:${payload.socketProxyPort}` : `${host}:${payload.socketProxyPort}`;
+    return new Promise((resolve) => {
+        $q.dialog({
+            title: "向新的代理主机沿用已存密码？",
+            message: testing
+                ? `测试连接会向 ${destination} 发送已保存的代理密码。`
+                : `保存后，启用代理认证的连接会向 ${destination} 发送已保存的密码。`,
+            cancel: "返回修改",
+            ok: testing ? "沿用密码并测试" : "沿用密码并保存",
+            focus: "cancel"
+        }).onOk(() => resolve(true)).onDismiss(() => resolve(false));
+    });
+}
+
 function validateProxyHost(value) {
     const host = (value || "").trim();
     if (!host) return true;
@@ -1068,18 +1089,16 @@ async function testProxy() {
     testingProxy.value = true;
     proxyTestResult.value = null;
     try {
-        const { data } = await api.post(
-            "/admin/proxy/test",
-            {
-                socketProxyHost: host,
-                socketProxyPort: port,
-                socketProxyAuth: Boolean(settings.value.socketProxyAuth),
-                socketProxyUser: (settings.value.socketProxyUser || "").trim(),
-                socketProxyPassword: settings.value.socketProxyPassword || "",
-                secretActions: { socketProxyPassword: settings.value.secretActions.socketProxyPassword }
-            },
-            { timeout: 18000 }
-        );
+        const payload = {
+            socketProxyHost: host,
+            socketProxyPort: port,
+            socketProxyAuth: Boolean(settings.value.socketProxyAuth),
+            socketProxyUser: (settings.value.socketProxyUser || "").trim(),
+            socketProxyPassword: settings.value.socketProxyPassword || "",
+            secretActions: { socketProxyPassword: settings.value.secretActions.socketProxyPassword }
+        };
+        if (!(await confirmProxyPasswordReuse(payload, true))) return;
+        const { data } = await api.post("/admin/proxy/test", payload, { timeout: 18000 });
         proxyTestResult.value = {
             ok: true,
             message: `SOCKS5 代理连通测试成功（耗时 ${data.latencyMs} ms，已验证目标 ${data.target} TLS 握手）。别忘了保存系统配置使其生效。`
@@ -1439,8 +1458,9 @@ function splitNonEmptyLines(text) {
 }
 
 function onSubmit() {
-    settingForm.value.validate().then((success) => {
+    settingForm.value.validate().then(async (success) => {
         if (success) {
+            if (submitting.value) return;
             submitting.value = true;
 
             if (!settings.value.retryOnTimeout) {
@@ -1464,12 +1484,18 @@ function onSubmit() {
             settings.value.typoCustomizedReplaces = splitNonEmptyLines(settings.value.typoCustomizedReplacesInput);
 
             const cleanHost = (settings.value.socketProxyHost || "").trim();
-            api.put("/admin/setting", {
+            const payload = {
                 ...settings.value,
+                secretActions: { ...settings.value.secretActions },
                 socketProxyHost: cleanHost,
                 socketProxyPort: cleanHost ? settings.value.socketProxyPort || 0 : 0,
                 socketProxyAuth: cleanHost ? Boolean(settings.value.socketProxyAuth) : false
-            })
+            };
+            if (!(await confirmProxyPasswordReuse(payload, false))) {
+                submitting.value = false;
+                return;
+            }
+            api.put("/admin/setting", payload)
                 .then((response) => {
                     $q.notify({
                         position: "top",
@@ -1478,6 +1504,7 @@ function onSubmit() {
                     });
                     submitting.value = false;
                     settings.value.socketProxyHost = response.data.socketProxyHost || "";
+                    savedProxyHost = settings.value.socketProxyHost;
                     settings.value.socketProxyPort = response.data.socketProxyPort || 0;
                     settings.value.socketProxyAuth = Boolean(response.data.socketProxyAuth);
                     settings.value.authPassword = "";

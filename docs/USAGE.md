@@ -26,6 +26,8 @@ Typo 生成结果不包含原域名本身。批量或同步查询中有无效域
 
 ## 权限与凭据
 
+管理页更换 SOCKS5 主机并沿用已存密码时，测试或保存前会显示新目的地址供确认。直接调用管理 API 的客户端应自行确认目标主机再使用 `secretActions.socketProxyPassword=keep`。管理员下载和清空日志仅处理 `typonamer.log` 及本服务按时间轮转的日志文件。
+
 - Web 管理员登录后可使用原有设置、代理、自定义 API、日志、手动注册。注册必须在 Web 明确确认；已发给注册商的请求无法撤回，失败或取消后先查注册商订单再重试。
 - `POWERWHOIS_QUERY_TOKEN`：至少 32 字符的随机凭据，只能查询、生成 Typo、创建/读取/暂停/恢复/取消/重查查询任务、导出。不能注册域名、删除数据、修改代理、读取管理配置或日志。
 - `POWERWHOIS_MCP_TOKEN`：可选 HTTP MCP 的独立入口凭据，不应复用管理员 JWT。MCP 进程向后端使用查询凭据。
@@ -98,6 +100,8 @@ with urllib.request.urlopen(request, timeout=60) as response:
 CLI 导出 CSV 时，标准输出只包含 CSV。标准错误中的 `nextOffset=N` 可作为下一次导出的 `--offset N`，值为 `-1` 时结束。缺失或无效的游标会使该次导出失败，调用脚本应检查退出码。
 
 ### 任务与分页规则
+
+开始或继续执行前，worker 会核对 Redis 输入列表长度与任务总量、已存结果条数与完成计数。数量不符的任务进入 `failed`，已有结果仍可读取。先核对 Redis 和一致备份、恢复缺失数据，再对该任务执行 `resume`。此检查不校验每条记录的内容，混用不同时间点的元数据或索引仍可能需要停机恢复。
 
 任务状态：`queued → running → completed`，也可 `paused/canceled/failed`。暂停后可继续，取消后只保留已有结果，不能继续；存储类失败可修复后 resume。错误域名本身不使任务失败，仍会计入 completed。任务按 FIFO 排队，一次执行一批，批内并发受服务端上限限制。
 

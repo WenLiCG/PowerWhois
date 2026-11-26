@@ -34,8 +34,8 @@ func TrimAndGetMainDomain(domain string) (string, error) {
 }
 
 func TrimDomain(domain string) (string, error) {
-	domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
-	ascii, err := idna.Lookup.ToASCII(domain)
+	ascii, err := idna.Lookup.ToASCII(strings.TrimSpace(domain))
+	ascii = strings.TrimSuffix(ascii, ".")
 	if err != nil || len(ascii) > 253 || !strings.Contains(ascii, ".") || net.ParseIP(ascii) != nil {
 		return "", errors.New("invalid domain name")
 	}

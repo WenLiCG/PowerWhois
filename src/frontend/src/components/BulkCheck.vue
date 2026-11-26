@@ -143,7 +143,12 @@
                     </div>
                 </div>
 
-                <q-banner v-if="task.error" class="bg-red-1 text-negative q-mb-md rounded-borders">{{ task.error }}</q-banner>
+                <q-banner v-if="task.error" class="bg-red-1 text-negative q-mb-md rounded-borders" role="alert">
+                    {{ taskFailureMessages[task.error] || task.error }}
+                    <details v-if="taskFailureMessages[task.error]" class="text-caption q-mt-xs">
+                        <summary>查看原始信息</summary>{{ task.error }}
+                    </details>
+                </q-banner>
 
                 <div class="task-actions">
                     <q-btn
@@ -324,7 +329,12 @@
                             原始信息：{{ details.queryError }}
                         </div>
                     </q-banner>
-                    <pre class="raw-response-box">{{ details?.rawResponse || (loadingDetail ? "正在读取原始响应…" : "无原始响应") }}</pre>
+                    <q-banner v-if="detailError" dense rounded class="bg-red-1 text-negative" role="alert">
+                        {{ detailError }}
+                        <template #action><q-btn flat no-caps label="重试读取" @click="openDetails(details)" /></template>
+                    </q-banner>
+                    <div v-else-if="loadingDetail" class="raw-response-box" role="status"><q-spinner class="q-mr-xs" /> 正在读取原始响应…</div>
+                    <pre v-else class="raw-response-box">{{ details?.rawResponse || "无原始响应" }}</pre>
                 </q-card-section>
             </q-card>
         </q-dialog>
@@ -347,6 +357,7 @@ const tasks = ref([]),
     selectedID = ref(localStorage.getItem("powerwhois-task") || null),
     results = ref([]),
     details = ref(null),
+    detailError = ref(""),
     loadingDetail = ref(false),
     pageStatusFilter = ref("all"),
     pageDomainFilter = ref("");
@@ -359,7 +370,7 @@ const error = ref(""),
 const resultOffsets = ref([0]),
     nextResultOffset = ref(-1);
 const loadingResults = ref(false);
-let resultRequest = 0, refreshRequest = 0;
+let resultRequest = 0, refreshRequest = 0, detailRequest = 0;
 const historyOffset = ref(0),
     resultOffset = ref(0);
 let timer,
@@ -368,6 +379,11 @@ let timer,
     stopped = false;
 const stateLabels = { queued: "等待执行", running: "查询中", paused: "已暂停", completed: "已完成", canceled: "已取消", failed: "任务失败，可继续" };
 const stateColors = { queued: "blue-grey-7", running: "primary", paused: "amber-9", completed: "positive", canceled: "grey-7", failed: "negative" };
+const taskFailureMessages = {
+    "cannot verify task inputs and result counts; check Redis and the backup before resuming": "无法核对任务输入与已存结果的数量。请先检查 Redis 和任务备份，确认数据完整后再继续。",
+    "task result count differs from input count; verify the backup before resuming": "已存结果数与任务输入数不一致。请先核对 Redis 中的任务数据与备份，确认完整后再继续。",
+    "task storage or worker failed; completed results retained": "任务存储或执行进程发生错误，已完成的结果已保留。请先检查服务与 Redis，再继续任务。"
+};
 const modeLabels = { whoisQuery: "Whois (RDAP 优先)", whoisQueryWithProxy: "Whois + 代理", dnsQuery: "DNS", mixedQuery: "Mixed 混合" };
 const resultLabels = { registered: "已注册", not_found: "未找到", unknown: "未知", timeout: "超时", error: "错误" };
 const resultColors = { registered: "blue-8", not_found: "teal-8", unknown: "blue-grey-7", timeout: "deep-orange-8", error: "negative" };
@@ -585,15 +601,18 @@ async function copyDetailRaw() {
 }
 async function openDetails(row) {
     const id = selectedID.value;
+    const request = ++detailRequest;
+    const isCurrent = () => request === detailRequest && !stopped && selectedID.value === id && details.value != null;
     details.value = row;
+    detailError.value = "";
     loadingDetail.value = true;
     try {
         const { data } = await api.get(`/v1/tasks/${id}/results/${row.order}`);
-        if (selectedID.value === id && details.value?.order === row.order) details.value = data;
+        if (isCurrent()) details.value = data;
     } catch (e) {
-        showError(e);
+        if (isCurrent()) detailError.value = e.response?.data?.error?.message || "读取原始响应失败，请重试。";
     } finally {
-        loadingDetail.value = false;
+        if (isCurrent()) loadingDetail.value = false;
     }
 }
 function onVisibilityChange() {

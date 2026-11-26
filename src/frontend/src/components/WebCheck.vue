@@ -113,6 +113,7 @@ defineOptions({
 import { ref, computed, watchEffect } from "vue";
 import { useQuasar } from "quasar";
 import { submitQuery, stopQuery } from "src/utils/websocketHandler";
+import { isPlainDomainInput, normalizeDomainInput } from "src/utils/domainInput";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useWebStore } from "src/stores/webStore";
 import { useSettingStore } from "src/stores/settingStore";
@@ -156,7 +157,7 @@ function parseRawEntries(text) {
     text.replace(/^\uFEFF/, "")
         .split(/\r?\n/)
         .forEach((raw, index) => {
-            const value = raw.trim();
+            const value = normalizeDomainInput(raw);
             if (value) entries.push({ value, line: index + 1 });
         });
     return entries;
@@ -164,20 +165,12 @@ function parseRawEntries(text) {
 
 const uniqueInputCount = computed(() => {
     const entries = parseRawEntries(domainInput.value);
-    return new Set(entries.map((d) => d.value.toLowerCase())).size;
+    return new Set(entries.map((d) => d.value)).size;
 });
 
 function cleanDomainInput() {
     const entries = parseRawEntries(domainInput.value);
-    const seen = new Set();
-    const deduped = [];
-    for (const { value } of entries) {
-        const cleaned = value.replace(/\.+$/, "").toLowerCase();
-        if (cleaned && !seen.has(cleaned)) {
-            seen.add(cleaned);
-            deduped.push(cleaned);
-        }
-    }
+    const deduped = [...new Set(entries.map((d) => d.value))];
     const removed = entries.length - deduped.length;
     domainInput.value = deduped.join("\n");
     $q.notify({
@@ -200,7 +193,7 @@ function queryDomains() {
     }
 
     for (const { value: item, line } of rawEntries) {
-        if (item.includes("://") || item.includes("/") || /\s/.test(item) || !item.includes(".")) {
+        if (!isPlainDomainInput(item)) {
             $q.notify({
                 position: "top",
                 type: "warning",
@@ -210,15 +203,7 @@ function queryDomains() {
         }
     }
 
-    const seen = new Set();
-    const dedupedList = [];
-    for (const { value: item } of rawEntries) {
-        const key = item.toLowerCase();
-        if (!seen.has(key)) {
-            seen.add(key);
-            dedupedList.push(item);
-        }
-    }
+    const dedupedList = [...new Set(rawEntries.map((d) => d.value))];
 
     if (dedupedList.length > settingStore.webCheckDomainLimit) {
         $q.notify({

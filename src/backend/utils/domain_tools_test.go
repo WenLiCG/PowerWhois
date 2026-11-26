@@ -8,7 +8,7 @@ import (
 )
 
 func TestDomainBoundary(t *testing.T) {
-	for in, want := range map[string]string{"foo.bar.ck": "foo.bar.ck", "www.city.kawasaki.jp": "city.kawasaki.jp", "例子.中国": "xn--fsqu00a.xn--fiqs8s", "foo.blogspot.com": "blogspot.com"} {
+	for in, want := range map[string]string{"foo.bar.ck": "foo.bar.ck", "www.city.kawasaki.jp": "city.kawasaki.jp", "例子.中国": "xn--fsqu00a.xn--fiqs8s", "例子。中国。": "xn--fsqu00a.xn--fiqs8s", "example．com｡": "example.com", "foo.blogspot.com": "blogspot.com"} {
 		got, e := TrimAndGetMainDomain(in)
 		if e != nil || got != want {
 			t.Fatalf("PSL %s: %s %v", in, got, e)
@@ -20,7 +20,7 @@ func TestDomainBoundary(t *testing.T) {
 			t.Fatalf("%q: %q %v", in, got, e)
 		}
 	}
-	for _, in := range []string{"hello world.com", "https://example.com/path", "example..com", "-example.com", "example-.com", "127.0.0.1", "a.com\nQUIT", "x_foo.com"} {
+	for _, in := range []string{"hello world.com", "https://example.com/path", "example..com", "example.com。.", "-example.com", "example-.com", "127.0.0.1", "a.com\nQUIT", "x_foo.com"} {
 		if _, e := TrimAndGetMainDomain(in); e == nil {
 			t.Fatalf("accepted %q", in)
 		}

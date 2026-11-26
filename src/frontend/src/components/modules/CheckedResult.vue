@@ -257,7 +257,7 @@
     <q-dialog v-model="showCheckedRawResponseDialog">
         <q-card style="width: 760px; max-width: 94vw; max-height: 90vh">
             <q-card-section class="row items-center q-py-sm">
-                <div class="text-subtitle1 text-weight-bold domain-mono">{{ checkedRawResponseDomain }}</div>
+                <div class="text-subtitle1 text-weight-bold domain-mono">{{ checkedDetailRow?.domain }}</div>
                 <q-badge v-if="checkedDetailRow?.status" :color="statusColors[checkedDetailRow.status] || 'grey-8'" class="q-ml-sm">
                     {{ statusLabels[checkedDetailRow.status] || checkedDetailRow.status }}
                 </q-badge>
@@ -268,11 +268,11 @@
                     dense
                     no-caps
                     icon="content_copy"
-                    label="复制内容"
+                    label="复制原文"
                     color="primary"
                     class="q-mr-xs"
-                    :disable="!checkedRawResponseContent"
-                    @click="copyText(checkedRawResponseContent, '原始响应已复制')"
+                    :disable="!checkedDetailRow?.rawResponse"
+                    @click="copyText(checkedDetailRow.rawResponse, '原始响应已复制')"
                 />
                 <q-btn icon="close" aria-label="关闭详情" flat round dense v-close-popup />
             </q-card-section>
@@ -303,7 +303,7 @@
                         原始信息：{{ checkedDetailRow.errorInfo }}
                     </div>
                 </q-banner>
-                <pre class="raw-response-box">{{ checkedDetailRawBody || "无原始响应" }}</pre>
+                <pre class="raw-response-box">{{ checkedDetailRow?.rawResponse || "无原始响应" }}</pre>
             </q-card-section>
         </q-card>
     </q-dialog>
@@ -386,13 +386,7 @@ const registrationLabels = {
 };
 
 const showCheckedRawResponseDialog = ref(false);
-const checkedRawResponseDomain = ref(null);
-const checkedRawResponseContent = ref(null);
 const checkedDetailRow = ref(null);
-const checkedDetailRawBody = computed(() => {
-    if (!checkedDetailRow.value) return checkedRawResponseContent.value || "";
-    return checkedDetailRow.value.rawResponse || checkedRawResponseContent.value || "";
-});
 
 const showRegisterRawResponseDialog = ref(false);
 const registerRawResponseDomain = ref(null);
@@ -534,8 +528,6 @@ function isWebsocketConnected() {
 
 function showCheckedRawResponse(data) {
     checkedDetailRow.value = data;
-    checkedRawResponseDomain.value = data.domain;
-    checkedRawResponseContent.value = data.checkedRawResponse;
     showCheckedRawResponseDialog.value = true;
 }
 
