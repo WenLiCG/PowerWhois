@@ -1,6 +1,27 @@
 # PowerWhois 程序员交接文档
 
-## 当前交付 · 2026-11-26 代理链路修复、性能加固与网页体验精修
+## 当前交付 · 2026-11-26 Debian VPS 实网部署验证与注册局/DNS 故障修复
+
+在上一轮（`e812bee`）基础上，完成 Debian 12 / amd64 Docker Compose 实机部署升级与 365+ 真实域名（153 个 `google.*`、212 个未注册域名、以及大小写/空格/特殊符号/重复/无效后缀/中日西 IDN 混合矩阵）和真实商业 SOCKS5 代理全链路压测，定位并修复了以下实网暴露的问题（`b7d6dfe`）：
+
+| 影响 | 实网问题与修复行为 |
+|---|---|
+| 高 · 失效 WHOIS 服务器 | `.in`（原 `whois.registry.in` 已下线报 `no such host`）改走 IANA 官方 RDAP（`rdap.nixiregistry.in`）并同步更新备用 WHOIS（`whois.nixiregistry.in` 与 `is available for registration` 匹配）；`.co`（原 `whois.nic.co` 已下线）切换至官方 `whois.registry.co` 并支持新未注册提示 `The queried object does not exist: DOMAIN NOT FOUND`；新增官方 IANA RDAP 支持 `.cm` 与 `.to`。 |
+| 高 · `.cat` TLS 握手失败 | `rdap.nic.cat` 仅提供非前向安全的传统 `TLS_RSA_WITH_AES_128_CBC_SHA`（Go 1.23+ 默认禁用）。为不降级全局 TLS 安全，将 `.cat` 路由至实测可用的官方 `whois.nic.cat:43` 并补充对应解析规则。 |
+| 高 · 多个 ccTLD WHOIS 解析失效 | 实网抓包修复 `.md`（NIC.MD v3.0.1 带冒号字段与 `No entries found`）、`.kz`（KazNIC 点填充字段、拼写错误 `Registar` 与补充到期日提取）、`.do`（新版 `The queried object does not exist: No Object Found`）及 `.nz`（受限冲突域名 `Error code: 01044` 归类为 `ErrorReservedDomain` 而非解析错误）。 |
+| 高 · 权威 DNS 故障转移饥饿 | `dnslib.NsCheckContext` 原将单个权威 NS 的超时设为与整次 `DnsTimeout`（5 s）相同，遇到部分丢包 NS（如 `.vn` 的 `b/c.dns-servers.vn`）时单节点耗尽全部预算，后续健康 NS 无法被尝试。现通过 `perNameserverTimeout` 为多 NS 场景封顶单次尝试超时（`<= 2 s`），保障 `DnsTimeout` 内自动切换健康节点。 |
+| 中 · 代理测试直传密码 | `POST /api/admin/proxy/test` 在未传 `secretActions` 时原会静默忽略请求体中的 `socketProxyPassword` 并回退到已保存空密码。现未指定 `secretActions` 且请求体提供了非空密码时直接使用该密码测试，兼容既有 `"keep"` / `"set"` / `"clear"` 语义。 |
+
+**实网复测结果（Debian 12 / amd64，Docker Compose 三容器，端口仅绑定本机回环）**
+
+- **基础与多入口烟测**：`/healthz`（`200 ok`）、SPA 首页、`/api/web/setting`、`/api/admin/setting`（`Cache-Control: no-store` 且零秘密回传）、`/api/openapi.json`、`/api/v1/typo`、CLI `powerwhois query` 及 stdio MCP（11 个工具）全部通过。
+- **已注册样本集（153 个 `google.*`）**：`mixed` 模式下 140 个 `registered`、0 个 `error`；其余 9 个为权威注册局明确返回 404/`No match!!` 且无 DNS 委派的域名（7 个 Identity Digital DPML 保护后缀 `live/world/network/media/life/digital/social`、`google.or.jp`、`google.ac.in`），2 个为受限/未委派（`google.nz`、`google.ac.uk`），仅 2 个为外部注册局不可达超时（`google.ng`、`google.com.ng`）。`dns` 模式 136 `registered` + 17 `unknown` + **0 超时**（总耗时从 27.1 s 降至 **9.0 s**）。
+- **未注册样本集（212 个）**：`whois` / `mixed` / `dns` 三种模式均 **0 误报 `registered`**、**0 `error`**；`mixed` 模式 187 `not_found` + 23 DNS `unknown` + 2 外部超时（`.ng`）；`dns` 模式 212/212 全部 `unknown` + **0 超时**（耗时从 23.1 s 降至 **5.0 s**）。
+- **边界与 IDN 矩阵（大小写、空格、特殊符号、重复、无效后缀、中日西 IDN）**：大小写规范化与重复去重准确；含内部空格、特殊字符或无效后缀的批次按设计整批拦截并返回精确行号与原值；22 个有效及中日西 IDN（含 `都对三地方.com`、`ですか.jp`、`Cómoestás.es` 等）去重为 21 个并全部正确转 Punycode 实网查询成功。
+- **商业 SOCKS5 代理模式实测**：误填 HTTP 端口返回明确中文协议提示；正确 SOCKS5 端口测试接口 `200 ok`（约 122–304 ms）；30 域名代理批量任务全部标注 `viaProxy: true`，14/14 RDAP 全通，12/16 WHOIS 43 通（4 个为数据中心代理出口 IP 被目标 WHOIS 43 断开/超时）；测试完毕后已清空临时代理配置。
+- **自动化验证与 CI**：本地 Go `-race` 全 14 个测试包、Linux/Windows 构建、`tools/acceptance.py --stress`、`govulncheck`（0 可达/导入漏洞）及 GitHub Actions `verify` + `compose` 均通过。
+
+## 历史交付 · 2026-11-26 代理链路修复、性能加固与网页体验精修
 
 基线为 GitHub `main@7663175`（PR #16 合并提交）。本地 `main` 原位于 `cfb3026`（落后 `origin/main` 6 个提交，无未提交修改、无本地独有提交或 stash），已快进同步到 `origin/main` 作为工作基线。本轮围绕全库审查、真实 Bright Data SOCKS5 代理实网验证、性能根因修复与真实用户交互精修完成端到端交付，无新增第三方依赖。
 
