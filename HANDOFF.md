@@ -19,6 +19,7 @@
 - govulncheck 使用与项目匹配的 Go 1.27.4 重新构建并运行。可达和导入包级漏洞均为 0，模块层报告未使用的 OpenPGP 公告 GO-2026-5932。
 - 隔离服务端、Redis 与模拟上游实际启动。跨 HTTP、CLI、stdio/HTTP MCP、管理员接口和导出一致性通过。`tools/acceptance.py --stress` 覆盖 300 个域名、32 并发、20 次并发幂等提交、暂停/继续/取消和 SIGKILL 恢复。两个恢复异常的回归还验证了后续任务执行及修复后保留原结果。日志下载、清空、相邻文件保留和清空后写入经管理员 API 验证。
 - 新构建的 CLI 通过本地服务向 Verisign 实际查询了 `example.com` 和随机 `.com` 名称，分别返回 registered 和 not_found。Chromium 在 1280×800 和 390×844 验证登录、即时查询、Typo、输入整理、TXT 任务、搜索、详情、实际 CSV 下载、设置和退出；另验证了剪贴板原文、详情失败后重试、代理密码改址确认。代理探测的请求用本地夹具核验。
+- 代码提交 `0b500f7` 已通过 GitHub Actions 的 `verify` 与 `compose`。Compose 在全新 Linux runner 上构建并启动三容器，检查健康页、SPA、公开设置、缓存头和 404 路由。[构建与 Compose 验收](https://github.com/WenLiCG/PowerWhois/actions/runs/45830487228) · [PR #17 与合并记录](https://github.com/WenLiCG/PowerWhois/pull/17)
 
 **部署与后续**　前后端同步升级，Redis 键、API 路径及已有凭据处理契约兼容。任务检查核对数量，元数据或索引损坏时仍需从一致备份恢复。历史任务及原文会继续占用 Redis 空间。原始 TXT/工作簿、付费注册、商业代理与生产 VPS 更新均未纳入本轮实测；上一轮实网记录保留在下方。
 
