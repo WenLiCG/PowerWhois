@@ -114,7 +114,7 @@ func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (l
 	return parsed, err
 }
 
-func registryNotFound(h *rdap.HTTPResponse) bool {
+func registryNotFound(h *rdap.HTTPResponse, domain string) bool {
 	mediaType, _, err := mime.ParseMediaType(h.Response.Header.Get("Content-Type"))
 	if err != nil || (mediaType != "application/rdap+json" && mediaType != "application/json") {
 		return false
@@ -124,9 +124,28 @@ func registryNotFound(h *rdap.HTTPResponse) bool {
 		return mediaType == "application/rdap+json"
 	}
 	var reply struct {
-		ErrorCode int `json:"errorCode"`
+		ErrorCode json.RawMessage `json:"errorCode"`
 	}
-	return json.Unmarshal(h.Body, &reply) == nil && reply.ErrorCode == http.StatusNotFound
+	if json.Unmarshal(h.Body, &reply) != nil {
+		return false
+	}
+	if reply.ErrorCode != nil {
+		var code int
+		return json.Unmarshal(reply.ErrorCode, &code) == nil && code == http.StatusNotFound
+	}
+	// SIDN's .nl endpoint returns the requested domain with status ["free"] on a 404.
+	req := h.Response.Request
+	if mediaType != "application/rdap+json" || h.Error != nil || !strings.HasSuffix(domain, ".nl") ||
+		req == nil || req.URL == nil || req.URL.String() != "https://rdap.sidn.nl/domain/"+domain {
+		return false
+	}
+	var object struct {
+		ObjectClassName string   `json:"objectClassName"`
+		LDHName         string   `json:"ldhName"`
+		Status          []string `json:"status"`
+	}
+	return json.Unmarshal(h.Body, &object) == nil && object.ObjectClassName == "domain" &&
+		object.LDHName == domain && len(object.Status) == 1 && object.Status[0] == "free"
 }
 
 func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Response, err error) (lookupinfo.DomainInfo, error) {
@@ -145,7 +164,7 @@ func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Respons
 				return info, lookuperror.ErrorRateLimited
 			}
 			if h.Response.StatusCode == http.StatusNotFound {
-				if registryNotFound(h) {
+				if registryNotFound(h, domain) {
 					return info, lookuperror.ErrorWhoisNotFound
 				}
 				return info, fmt.Errorf("%w: HTTP 404 without an RDAP negative response", lookuperror.ErrorWhoisServerFailed)
