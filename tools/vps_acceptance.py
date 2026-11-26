@@ -112,7 +112,12 @@ def main():
         key = base64.b64encode(os.urandom(16)).decode()
         sock.sendall(('GET /app/ws HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: '+key+'\r\nOrigin: '+origin+'\r\n\r\n').encode())
         header=b''
-        while not header.endswith(b'\r\n\r\n'): header+=sock.recv(1)
+        while not header.endswith(b'\r\n\r\n'):
+            chunk = sock.recv(1)
+            if not chunk:
+                sock.close()
+                raise ConnectionError('WebSocket disconnected during handshake')
+            header += chunk
         return sock,header
     def send(sock,event,data):
         data=json.dumps({'event':event,'data':data}).encode(); mask=os.urandom(4)

@@ -60,7 +60,6 @@ export const useWebStore = defineStore("web", {
                     row.expiryDate = null;
                     row.nameServer = null;
                     row.domainStatus = null;
-                    row.checkedRawResponse = null;
                     row.isChecked = false;
                 }
                 if (scope) this.rememberMode(scope, this.pendingMode);
@@ -105,7 +104,6 @@ export const useWebStore = defineStore("web", {
                         expiryDate: null,
                         nameServer: null,
                         domainStatus: null,
-                        checkedRawResponse: null,
                         isChecked: false,
                         selectedRegister: false,
                         registerStatus: null,
@@ -126,14 +124,6 @@ export const useWebStore = defineStore("web", {
                     this.domains[i].source = domainResult.source || "";
                     this.domains[i].queriedAt = domainResult.queriedAt || "";
                     this.domains[i].rawResponse = domainResult.rawResponse || "";
-                    this.domains[i].checkedRawResponse = [
-                        domainResult.source && `来源: ${domainResult.source}`,
-                        domainResult.queriedAt && `查询时间: ${domainResult.queriedAt}`,
-                        domainResult.queryError,
-                        domainResult.rawResponse
-                    ]
-                        .filter(Boolean)
-                        .join("\n");
                     this.domains[i].errorInfo = domainResult.queryError;
 
                     if (domainResult.registerStatus == "Taken") {
@@ -211,7 +201,6 @@ export const useWebStore = defineStore("web", {
                 if (!d.isChecked) {
                     d.status = "Unknown";
                     d.errorInfo = "已停止查询，可点击重查";
-                    d.checkedRawResponse = "查询已手动停止，可点击“重查错误、超时和未知”继续查询剩余域名。";
                     d.isChecked = true;
                 }
             }
@@ -224,7 +213,7 @@ export const useWebStore = defineStore("web", {
             for (const d of this.domains) {
                 if (!d.isChecked) {
                     d.status = "Error";
-                    d.errorInfo = d.checkedRawResponse = "连接中断，请重查";
+                    d.errorInfo = "连接中断，请重查";
                     d.isChecked = true;
                 }
             }

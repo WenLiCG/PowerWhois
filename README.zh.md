@@ -4,7 +4,7 @@
 
 保留原有网页域名查询、批量任务、Typo、代理、自定义接口和管理功能，并增加不绑定 AI 厂商的 CLI、OpenAPI HTTP API 与可选 MCP。
 
-- DNS、WHOIS/RDAP、Mixed、SOCKS5 代理和自定义查询均区分已注册、未找到、未知、超时与错误。国际化后缀支持 Unicode 和 Punycode；RDAP 复用内存 IANA Bootstrap 缓存，保留最后一次请求的来源与上游响应正文，并兼容注册局 404 流关闭异常。
+- DNS、WHOIS/RDAP、Mixed、SOCKS5 代理和自定义查询均区分已注册、未找到、未知、超时与错误。域名支持 Unicode、Punycode、中文或全宽句点，以及单个根尾点。RDAP 保留最终来源与原文，网关 HTML 404 显示为查询错误，注册局的 RDAP 否定应答显示为「未找到」。
 - 网页即时查询与 Typo 查询支持标签页草稿保留、输入整理去重、中途停止与续查、点击状态筛选、代理标识与友好中文错误提示、一键复制域名及防公式注入 CSV 导出；两页各自保留结果，跨规则重复候选自动合并，Typo 候选不含原域名。
 - 批量任务支持暂停、继续、取消、重查、本页域名搜索、分页和部分导出，关闭浏览器或 CLI 后仍在服务端执行。CLI 导出 CSV 时向标准错误输出下一页输入位置，可直接将标准输出重定向到文件。
 - 管理设置提供 SOCKS5 代理连通性一键测试（`POST /api/admin/proxy/test`）与清晰故障诊断（如区分 SOCKS5 端口与 HTTP 代理端口），并自动保护代理与注册商密钥不回显。
@@ -14,6 +14,8 @@
 
 **未找到不等于可注册，DNS 无记录不等于未注册。**
 
+点击域名可查看并复制上游原文。批量详情读取失败时，可在弹窗内重试。恢复备份后，若输入条数或结果计数不一致，该批任务会保留证据、标记失败，后续批次可继续运行。请对照一致的 Redis 备份核查异常任务后再继续。
+
 ## Docker Compose 部署
 
 在 Linux 主机安装 Docker Engine 和 Compose v2 插件。首次部署时克隆仓库并创建私有环境文件。
@@ -21,7 +23,7 @@
 ```sh
 git clone https://github.com/WenLiCG/PowerWhois.git
 cd PowerWhois/deploy
-install -m 600 .env.example .env
+test -e .env || install -m 600 .env.example .env
 ${EDITOR:-vi} .env
 ```
 

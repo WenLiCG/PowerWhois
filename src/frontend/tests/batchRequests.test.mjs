@@ -63,3 +63,47 @@ test('registration sends and marks only the confirmed domains and provider', () 
   confirm();
   assert.equal(sent.length, 1);
 });
+test('batch detail errors stay in the open dialog and can be retried', async () => {
+  const source = fs.readFileSync(new URL('../src/components/BulkCheck.vue', import.meta.url), 'utf8');
+  const code = source.slice(source.indexOf('async function openDetails('), source.indexOf('function onVisibilityChange('));
+  const pending = [];
+  const context = {
+    selectedID: {value: 'batch'}, details: {value: null}, detailError: {value: ''},
+    loadingDetail: {value: false}, stopped: false, detailRequest: 0,
+    api: {get: () => new Promise((resolve, reject) => pending.push({resolve, reject}))}
+  };
+  vm.createContext(context); vm.runInContext(code, context);
+  const old = context.openDetails({order: 0}), current = context.openDetails({order: 1});
+  pending[0].reject(new Error('stale')); await old;
+  assert.equal(context.loadingDetail.value, true);
+  assert.equal(context.detailError.value, '');
+  pending[1].reject(new Error('offline')); await current;
+  assert.equal(context.loadingDetail.value, false);
+  assert.match(context.detailError.value, /读取原始响应失败/);
+  const retry = context.openDetails(context.details.value);
+  pending[2].resolve({data: {order: 1, rawResponse: 'body'}}); await retry;
+  assert.equal(context.details.value.rawResponse, 'body');
+  assert.equal(context.detailError.value, '');
+});
+
+test('reusing the saved proxy password on a changed host requires an explicit choice', async () => {
+  const source = fs.readFileSync(new URL('../src/components/AdminSetting.vue', import.meta.url), 'utf8');
+  const code = source.slice(source.indexOf('function confirmProxyPasswordReuse('), source.indexOf('function validateProxyHost('));
+  const context = {
+    savedProxyHost: 'old.test', settings: {value: {secrets: {socketProxyPassword: {configured: true}}}},
+    $q: {dialog(options) { context.dialog = options; return {onOk(fn) {context.ok = fn; return this;}, onDismiss(fn) {context.dismiss = fn;}}; }}
+  };
+  vm.createContext(context); vm.runInContext(code, context);
+  const payload = {socketProxyHost: 'OLD.TEST', socketProxyPort: 1080, socketProxyAuth: true, secretActions: {socketProxyPassword: 'keep'}};
+  assert.equal(context.confirmProxyPasswordReuse(payload, true), true);
+  payload.socketProxyHost = 'new.test';
+  const cancel = context.confirmProxyPasswordReuse(payload, true);
+  assert.match(context.dialog.message, /new\.test:1080/);
+  context.dismiss(); assert.equal(await cancel, false);
+  payload.socketProxyAuth = false;
+  assert.equal(context.confirmProxyPasswordReuse(payload, true), true);
+  const save = context.confirmProxyPasswordReuse(payload, false);
+  context.ok(); context.dismiss(); assert.equal(await save, true);
+  payload.secretActions.socketProxyPassword = 'set';
+  assert.equal(context.confirmProxyPasswordReuse(payload, false), true);
+});

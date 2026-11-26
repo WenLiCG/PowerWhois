@@ -5,6 +5,7 @@ import {useWebStore} from '../src/stores/webStore.js';
 import {rules} from '../src/boot/rules.js';
 import {buildWebResultsCsv,sanitizeCsvCell} from '../src/utils/exportCsv.js';
 import {formatQueryError,formatDateTime} from '../src/utils/formatError.js';
+import { isPlainDomainInput, normalizeDomainInput } from '../src/utils/domainInput.js';
 test('duplicate responses never corrupt counts; disconnect and retry remain usable',()=>{
  setActivePinia(createPinia());const s=useWebStore();s.setCheckingDomains(['example.com','example.org'],'webCheck','');
  const r={domain:'example.com',registerStatus:'NotFound',status:'not_found',lookupType:'rdap',queriedAt:'2026-11-03T00:00:00Z',source:'fixture'};
@@ -178,5 +179,16 @@ test('error formatter translates raw upstream errors and webStore tracks proxy m
   });
   assert.equal(store.domains[0].viaProxy, true);
   assert.equal(store.domains[0].source, 'https://rdap.verisign.com/com/v1/domain/example.com');
+  assert.equal(store.domains[0].rawResponse, '{"ldhName":"example.com"}');
   assert.equal(store.webDomainInput, 'example.com');
+});
+test('instant and Typo drafts normalize IDNA separators without repairing empty labels', () => {
+  const values = [' 例子。中国。 ', '例子．中国', '例子｡中国.', '例子.中国'];
+  assert.deepEqual([...new Set(values.map(normalizeDomainInput))], ['例子.中国']);
+  assert.ok(isPlainDomainInput(normalizeDomainInput('EXAMPLE.COM.')));
+  for (const invalid of ['a..com', 'a.com。。', '.com', 'https://a.com', 'a.com/path', 'a .com']) {
+    const cleaned = normalizeDomainInput(invalid);
+    assert.equal(normalizeDomainInput(cleaned), cleaned);
+    assert.equal(isPlainDomainInput(cleaned), false);
+  }
 });

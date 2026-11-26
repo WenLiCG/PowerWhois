@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duke-git/lancet/v2/fileutil"
 	"github.com/duke-git/lancet/v2/strutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -26,12 +25,11 @@ const (
 )
 
 var (
-	logger   *zap.Logger
-	sugar    *zap.SugaredLogger
-	logLevel zap.AtomicLevel
-	logDir   string
-	logFile  string
-	appDev   = os.Getenv("APP_DEV")
+	logger    *zap.Logger
+	sugar     *zap.SugaredLogger
+	logLevel  zap.AtomicLevel
+	logWriter *lumberjack.Logger
+	appDev    = os.Getenv("APP_DEV")
 )
 
 func init() {
@@ -65,7 +63,7 @@ func init() {
 		os.Exit(1)
 	}
 
-	logDir = filepath.Join(filepath.Dir(execPath), logDirName)
+	logDir := filepath.Join(filepath.Dir(execPath), logDirName)
 	if configured := os.Getenv("POWERWHOIS_LOG_DIR"); configured != "" {
 		logDir = filepath.Clean(configured)
 		if err := os.MkdirAll(logDir, 0700); err != nil {
@@ -73,14 +71,13 @@ func init() {
 			os.Exit(1)
 		}
 	}
-	logFile = filepath.Join(logDir, logFileName)
-
-	fileWriteSyncer := zapcore.AddSync(&lumberjack.Logger{
-		Filename: logFile,         // 日志文件路径
+	logWriter = &lumberjack.Logger{
+		Filename: filepath.Join(logDir, logFileName),
 		MaxSize:  logFileMaxSize,  // 每个日志文件最大尺寸（MB）
 		MaxAge:   logFileMaxAge,   // 保留的最大天数
 		Compress: logFileCompress, // 是否压缩
-	})
+	}
+	fileWriteSyncer := zapcore.AddSync(logWriter)
 
 	// 创建同步器. The file stays the source for the Web log download; containers also set
 	// POWERWHOIS_LOG_STDOUT=true so `docker compose logs typonamer` shows the application log.
@@ -124,42 +121,88 @@ func SetLevel(level string) {
 	}
 }
 
+func logFiles() ([]string, error) {
+	dir := filepath.Dir(logWriter.Filename)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		if name != logFileName {
+			// lumberjack inserts this timestamp between the base name and extension.
+			const layout = "typonamer-2006-01-02T15-04-05.000.log"
+			if stamp, err := time.Parse(layout, name); err != nil || stamp.Format(layout) != name {
+				continue
+			}
+		}
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return paths, nil
+}
+
 func WriteZipLogs(out io.Writer) error {
-	w := zip.NewWriter(out)
-	if err := w.AddFS(os.DirFS(logDir)); err != nil {
+	paths, err := logFiles()
+	if err != nil {
 		return err
+	}
+	w := zip.NewWriter(out)
+	for _, path := range paths {
+		if err := addLogToZip(w, path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return w.Close()
 }
 
-// ResetLogsFile resets the log file by clearing its contents.
-// It returns an error if the log file is not initialized or if there is an error clearing the file.
+func addLogToZip(w *zip.Writer, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Method = zip.Deflate
+	entry, err := w.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(entry, io.LimitReader(f, info.Size()))
+	return err
+}
+
 func ResetLogsFile() error {
-	if logFile == "" {
-		logger.Error("Log file not initialized")
-		return errors.New("log file not initialized")
-	}
-
-	err := fileutil.ClearFile(logFile)
-	if err != nil {
-		logger.Error("Error resetting log file: ", zap.Error(err))
+	if info, err := os.Lstat(logWriter.Filename); err == nil && !info.Mode().IsRegular() {
+		return errors.New("current log is not a regular file")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-
-	fileList, err := fileutil.ListFileNames(logDir)
-	if err != nil {
-		logger.Error("Error listing files in directory: ", zap.Error(err))
+	// Rotate under the writer's lock so subsequent writes start at the new file's offset zero.
+	if err := logWriter.Rotate(); err != nil {
 		return err
 	}
-
-	for _, file := range fileList {
-		if file != logFileName {
-			if strings.HasSuffix(file, ".log") {
-				os.Remove(filepath.Join(logDir, file))
+	paths, err := logFiles()
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if path != logWriter.Filename {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
 			}
 		}
 	}
-
 	return nil
 }
 

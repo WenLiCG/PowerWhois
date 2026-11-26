@@ -29,7 +29,7 @@ make all
 
 ```sh
 cd deploy
-install -m 600 .env.example .env
+test -e .env || install -m 600 .env.example .env
 # 在编辑器中填写随机凭据；不要将真实值粘贴到命令行。
 sudo install -d -o 10001 -g 10001 -m 750 runtime/backend
 sudo test ! -e runtime/backend/config.yaml && sudo install -o 10001 -g 10001 -m 600 backend/config.yaml runtime/backend/config.yaml

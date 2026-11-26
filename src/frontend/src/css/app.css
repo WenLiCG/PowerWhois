@@ -35,6 +35,10 @@ body {
 .domain-mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.q-dialog .domain-mono,
+.detail-meta {
+    overflow-wrap: anywhere;
+}
 .proxy-hint {
     display: flex;
     align-items: center;

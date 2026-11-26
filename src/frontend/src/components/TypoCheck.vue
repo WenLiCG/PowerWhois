@@ -87,6 +87,7 @@ defineOptions({
 import { ref, computed, watchEffect } from "vue";
 import { useQuasar } from "quasar";
 import { submitQuery, stopQuery } from "src/utils/websocketHandler";
+import { isPlainDomainInput, normalizeDomainInput } from "src/utils/domainInput";
 import { useTokenStore } from "src/stores/tokenStore";
 import { useWebStore } from "src/stores/webStore";
 import { useSettingStore } from "src/stores/settingStore";
@@ -131,7 +132,7 @@ watchEffect(() => {
 
 function typoCheckDomain() {
     if (webStore.busy) return;
-    const target = (domainInput.value || "").trim().replace(/\.+$/, "");
+    const target = normalizeDomainInput(domainInput.value);
     if (!target) {
         $q.notify({
             position: "top",
@@ -140,7 +141,7 @@ function typoCheckDomain() {
         });
         return;
     }
-    if (target.includes("://") || target.includes("/") || /\s/.test(target) || !target.includes(".")) {
+    if (!isPlainDomainInput(target)) {
         $q.notify({
             position: "top",
             type: "warning",

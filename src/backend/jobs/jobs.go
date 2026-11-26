@@ -515,8 +515,17 @@ func (s *Store) runTask(parent context.Context, id string) error {
 		s.mu.Unlock()
 		return nil
 	}
-	t.setState("running")
-	if err = s.save(parent, t); err != nil {
+	// A partial restore can shift input indices or leave results without their counts.
+	pipe := s.Redis.Pipeline()
+	inputLength := pipe.LLen(parent, s.key(id, "input"))
+	resultCount := pipe.HLen(parent, s.key(id, "results"))
+	if _, err = pipe.Exec(parent); err != nil || inputLength.Val() != int64(t.Total) || resultCount.Val() != int64(t.Completed) || t.Completed > t.Total {
+		t.setState("failed")
+		t.Error = "cannot verify task inputs and result counts; check Redis and the backup before resuming"
+	} else {
+		t.setState("running")
+	}
+	if err = s.save(parent, t); err != nil || t.State == "failed" {
 		s.mu.Unlock()
 		return err
 	}
@@ -626,7 +635,8 @@ feed:
 		if t.Completed == t.Total {
 			t.setState("completed")
 		} else {
-			t.setState("queued")
+			t.setState("failed")
+			t.Error = "task result count differs from input count; verify the backup before resuming"
 		}
 	}
 	return s.save(parent, t)

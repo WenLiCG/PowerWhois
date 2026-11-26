@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,12 +68,12 @@ def main():
         token, mcp_token = secrets.token_urlsafe(40), secrets.token_urlsafe(40)
         # These credentials exist only in this isolated, temporary mock service.
         username, password = "acceptance-admin", "acceptance-test-only-password"
-        config = {"logLevel": "Error", "retryOnTimeout": False, "rdapRate": 256,
+        config = {"logLevel": "Info", "retryOnTimeout": False, "rdapRate": 256,
                   "whoisTimeout": 5, "webCheckDomainLimit": 500,
                   "whoisApis": [{"apiName": "Fixture", "apiUrl": f"http://127.0.0.1:{fixture.server_port}/?domain={{domain}}",
                                  "freeText": ["MISSING"], "takenText": ["EXISTS"], "concurrencyLimit": 32}]}
         (scratch / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
-        env = {**os.environ, "POWERWHOIS_CONFIG": str(scratch / "config.yaml"),
+        env = {**os.environ, "POWERWHOIS_CONFIG": str(scratch / "config.yaml"), "POWERWHOIS_LOG_DIR": str(scratch / "logs"),
                "POWERWHOIS_ADMIN_USER": username, "POWERWHOIS_ADMIN_PASSWORD": password,
                "POWERWHOIS_JWT_SECRET": secrets.token_urlsafe(40), "POWERWHOIS_QUERY_TOKEN": token,
                "POWERWHOIS_MCP_TOKEN": mcp_token, "POWERWHOIS_TOKEN_FILE": "", "REDIS_HOST": "127.0.0.1", "REDIS_PORT": str(redis_port),
@@ -222,9 +223,13 @@ def main():
             init = {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"acceptance","version":"1"}}}
             req = urllib.request.Request(f"http://127.0.0.1:{mcp_port}/mcp", data=json.dumps(init).encode(), headers={"Content-Type":"application/json","Accept":"application/json, text/event-stream","Authorization":"Bearer " + mcp_token})
             with urllib.request.urlopen(req, timeout=10) as response: assert "result" in json.load(response)
+            request("/api/admin/setting", bearer=admin)
+            with zipfile.ZipFile(io.BytesIO(request("/api/admin/log", bearer=admin, raw=True))) as archive:
+                assert archive.getinfo("typonamer.log").file_size > 0, "empty application log in download"
+                app_logs = b"\n".join(archive.read(name) for name in archive.namelist())
             log.flush()
-            logs = (scratch / "processes.log").read_text()
-            assert not any(secret in logs for secret in [password, token, mcp_token, admin])
+            logs = app_logs + (scratch / "processes.log").read_bytes()
+            assert not any(secret.encode() in logs for secret in [password, token, mcp_token, admin, env["POWERWHOIS_JWT_SECRET"]])
             print("PASS: API/CLI/MCP and authenticated Web API share task ID and equivalent JSON exports; HTTP MCP auth, per-domain timeout, no secret logs, service restart.", flush=True)
             if args.serve:
                 print(f"Browser fixture ready: backend 127.0.0.1:{backend_port}; task {task['id']}. Use temporary credentials documented in this test. Ctrl+C removes fixture processes/data.", flush=True)
