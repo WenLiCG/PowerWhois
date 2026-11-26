@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -59,4 +60,21 @@ func TestMixedCaseHeaderMatchingLogic(t *testing.T) {
 		t.Fatal("expected canceled lookup error")
 	}
 	_ = net.ErrClosed
+}
+
+func TestPerNameserverTimeoutLeavesBudgetForFailover(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Multiple nameservers: cap each individual attempt at <= 2s so dead NS do not starve healthy ones.
+	first := perNameserverTimeout(ctx, 5, 5*time.Second)
+	if first > 2*time.Second || first < time.Second {
+		t.Fatalf("expected multi-NS timeout in [1s, 2s], got %v", first)
+	}
+
+	// Final nameserver gets the remaining budget.
+	last := perNameserverTimeout(ctx, 1, 5*time.Second)
+	if last < 4*time.Second {
+		t.Fatalf("expected last NS to retain remaining budget, got %v", last)
+	}
 }

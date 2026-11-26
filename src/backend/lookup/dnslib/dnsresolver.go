@@ -148,17 +148,24 @@ func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, 
 		rawTrace += "│\n"
 		rawTrace += fmt.Sprintf("%s├─ Level %d: Query for %s\n", indent, level+1, domain)
 
-		for _, nameserver := range nextNameservers {
+		for idx, nameserver := range nextNameservers {
+			if ctx.Err() != nil {
+				break
+			}
 			domainInfo.Source = nameserver
 			if err := network.Wait(ctx, "dns", nameserver); err != nil {
 				return domainInfo, err
 			}
-			response, _, err := dnsClient.ExchangeContext(ctx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+			nsTimeout := perNameserverTimeout(ctx, len(nextNameservers)-idx, time.Duration(cfg.DnsTimeout)*time.Second)
+			nsCtx, nsCancel := context.WithTimeout(ctx, nsTimeout)
+			dnsClient.Timeout = nsTimeout
+			response, _, err := dnsClient.ExchangeContext(nsCtx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
 			if err == nil && response != nil && response.Truncated {
 				tcp := *dnsClient
 				tcp.Net = "tcp"
-				response, _, err = tcp.ExchangeContext(ctx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
+				response, _, err = tcp.ExchangeContext(nsCtx, msg, net.JoinHostPort(strutil.Trim(nameserver, "."), "53"))
 			}
+			nsCancel()
 			if err != nil {
 				lastErr = err
 				log.Debugf("Failed to query DNS for domain %s using nameserver %s: %s", domain, nameserver, err)
@@ -265,6 +272,25 @@ func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, 
 	}
 
 	return domainInfo, nil
+}
+
+func perNameserverTimeout(ctx context.Context, remainingServers int, fallback time.Duration) time.Duration {
+	rem := fallback
+	if deadline, ok := ctx.Deadline(); ok {
+		rem = time.Until(deadline)
+	}
+	if rem <= 0 {
+		return 100 * time.Millisecond
+	}
+	if remainingServers <= 1 {
+		return rem
+	}
+	// Reserve budget for backup authoritative nameservers so 1-2 blackholed NS (e.g. .vn) do not consume the full DnsTimeout.
+	capTimeout := min(2*time.Second, max(time.Second, rem/2))
+	if capTimeout > rem {
+		return rem
+	}
+	return capTimeout
 }
 
 func NsCheck(domain string) (lookupinfo.DomainInfo, error) {

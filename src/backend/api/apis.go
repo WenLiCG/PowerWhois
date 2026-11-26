@@ -114,7 +114,13 @@ func TestProxyConnection(c *fiber.Ctx) error {
 		probe.SocketProxyAuth = payload.SocketProxyAuth
 		probe.SocketProxyUser = strings.TrimSpace(payload.SocketProxyUser)
 		switch payload.SecretActions["socketProxyPassword"] {
-		case "", "keep":
+		case "":
+			if payload.SocketProxyPassword != "" {
+				probe.SocketProxyPassword = payload.SocketProxyPassword
+			} else {
+				probe.SocketProxyPassword = saved.SocketProxyPassword
+			}
+		case "keep":
 			probe.SocketProxyPassword = saved.SocketProxyPassword
 		case "set":
 			if payload.SocketProxyPassword == "" {

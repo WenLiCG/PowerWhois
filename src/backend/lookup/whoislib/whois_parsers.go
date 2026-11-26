@@ -35,7 +35,9 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 
 	// Clean up the response by replacing unwanted characters with a newline.
 	responseContent := strutil.ReplaceWithMap(response, whoisResponseReplaceList)
-	if strings.HasPrefix(responseContent, "Reserved by QDR") || strings.Contains(responseContent, "has been reserved by aeDA Regulator") {
+	if strings.HasPrefix(responseContent, "Reserved by QDR") ||
+		strings.Contains(responseContent, "has been reserved by aeDA Regulator") ||
+		strings.Contains(responseContent, "usage restrictions applied to it") {
 		return domainInfo, lookuperror.ErrorReservedDomain
 	}
 

@@ -108,6 +108,37 @@ func TestAdminSettingsNeverRoundTripCredentials(t *testing.T) {
 		t.Fatalf("unexpected proxy test response %d: %s", proxyResp.StatusCode, proxyData)
 	}
 
+	// Verify /api/admin/proxy/test also honors a direct socketProxyPassword when secretActions is omitted.
+	go func() {
+		conn, e := ln.Accept()
+		if e != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 8)
+		_, _ = conn.Read(buf)
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+	}()
+	directBody, _ := json.Marshal(map[string]any{
+		"socketProxyHost":     tcpAddr.IP.String(),
+		"socketProxyPort":     tcpAddr.Port,
+		"socketProxyAuth":     true,
+		"socketProxyUser":     "probe-user",
+		"socketProxyPassword": "inline-secret-value",
+	})
+	directReq := httptest.NewRequest("POST", "/api/admin/proxy/test", bytes.NewReader(directBody))
+	directReq.Header.Set("Content-Type", "application/json")
+	directReq.Header.Set("Authorization", "Bearer "+token)
+	directResp, err := app.Test(directReq, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directResp.Body.Close()
+	directData, _ := io.ReadAll(directResp.Body)
+	if directResp.StatusCode != 502 || !strings.Contains(string(directData), "HTTP 代理端口") || strings.Contains(string(directData), "inline-secret-value") {
+		t.Fatalf("unexpected direct proxy test response %d: %s", directResp.StatusCode, directData)
+	}
+
 	// Verify /api/web/setting exposes proxyConfigured only to authenticated admins.
 	anonWeb, _ := app.Test(httptest.NewRequest("GET", "/api/web/setting", nil))
 	anonBody, _ := io.ReadAll(anonWeb.Body)

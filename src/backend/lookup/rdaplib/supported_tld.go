@@ -192,7 +192,8 @@ var RdapSupportedTlds = []string{
 	"case",
 	"cash",
 	"casino",
-	"cat",
+	// "cat" intentionally routes via whois.nic.cat because rdap.nic.cat only negotiates legacy
+	// non-PFS TLS_RSA_WITH_AES_128_CBC_SHA disabled by Go 1.23+ defaults.
 	"catering",
 	"catholic",
 	"cba",
@@ -230,6 +231,7 @@ var RdapSupportedTlds = []string{
 	"cloud",
 	"club",
 	"clubmed",
+	"cm",
 	"coach",
 	"codes",
 	"coffee",
@@ -509,6 +511,7 @@ var RdapSupportedTlds = []string{
 	"imdb",
 	"immo",
 	"immobilien",
+	"in",
 	"inc",
 	"industries",
 	"infiniti",
@@ -986,6 +989,7 @@ var RdapSupportedTlds = []string{
 	"tjx",
 	"tkmaxx",
 	"tmall",
+	"to",
 	"today",
 	"tokyo",
 	"tools",
