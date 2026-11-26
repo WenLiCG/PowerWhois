@@ -88,6 +88,44 @@ func TestHTTP404RequiresRegistryEvidence(t *testing.T) {
 	}
 }
 
+func TestSIDNFreeDomain404(t *testing.T) {
+	const domain = "example.nl"
+	const endpoint = "https://rdap.sidn.nl/domain/" + domain
+	const body = `{"objectClassName":"domain","ldhName":"example.nl","status":["free"]}`
+	const media = "application/rdap+json"
+	for _, tc := range []struct {
+		name, query, endpoint, media, body string
+		want                               error
+	}{
+		{"registry absence", domain, endpoint, media, body, lookuperror.ErrorWhoisNotFound},
+		{"redirected to other host", domain, "https://other.example/domain/example.nl", media, body, lookuperror.ErrorWhoisServerFailed},
+		{"plain HTTP", domain, "http://rdap.sidn.nl/domain/example.nl", media, body, lookuperror.ErrorWhoisServerFailed},
+		{"wrong lookup path", domain, "https://rdap.sidn.nl/domain/other.nl", media, body, lookuperror.ErrorWhoisServerFailed},
+		{"other suffix", "example.net", "https://rdap.sidn.nl/domain/example.net", media, `{"objectClassName":"domain","ldhName":"example.net","status":["free"]}`, lookuperror.ErrorWhoisServerFailed},
+		{"wrong name", domain, endpoint, media, `{"objectClassName":"domain","ldhName":"other.nl","status":["free"]}`, lookuperror.ErrorWhoisServerFailed},
+		{"wrong class", domain, endpoint, media, `{"objectClassName":"entity","ldhName":"example.nl","status":["free"]}`, lookuperror.ErrorWhoisServerFailed},
+		{"mixed status", domain, endpoint, media, `{"objectClassName":"domain","ldhName":"example.nl","status":["free","active"]}`, lookuperror.ErrorWhoisServerFailed},
+		{"conflicting error", domain, endpoint, media, `{"errorCode":500,"objectClassName":"domain","ldhName":"example.nl","status":["free"]}`, lookuperror.ErrorWhoisServerFailed},
+		{"invalid error code", domain, endpoint, media, `{"errorCode":null,"objectClassName":"domain","ldhName":"example.nl","status":["free"]}`, lookuperror.ErrorWhoisServerFailed},
+		{"HTML", domain, endpoint, "text/html", body, lookuperror.ErrorWhoisServerFailed},
+		{"untyped empty page", domain, endpoint, "", "", lookuperror.ErrorWhoisServerFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, tc.endpoint, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := &rdap.HTTPResponse{URL: endpoint, Body: []byte(tc.body), Response: &http.Response{
+				Request: req, StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": {tc.media}},
+			}}
+			info, err := parseResponse(tc.query, lookupinfo.DomainInfo{}, &rdap.Response{HTTP: []*rdap.HTTPResponse{h}}, &rdap.ClientError{Type: rdap.ObjectDoesNotExist})
+			if !errors.Is(err, tc.want) || info.Source != tc.endpoint || info.RawResponse != tc.body {
+				t.Fatalf("wrong classification or evidence: %+v, %v", info, err)
+			}
+		})
+	}
+}
+
 func TestEventDatesUseUTCAndIgnoreMalformedEvents(t *testing.T) {
 	created, expires := getDomainDates([]rdap.Event{
 		{Action: "registration", Date: "2026-01-02T00:00:01.123+08:00"},
