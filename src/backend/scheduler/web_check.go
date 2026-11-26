@@ -51,6 +51,7 @@ func (t *WebCheck) Run(mode string, public bool) {
 	if cfg.RetryOnTimeout {
 		retries = cfg.RetryMax
 	}
+	perDomainTimeout := min(120, max(30, cfg.WhoisTimeout, cfg.RdapTimeout, cfg.DnsTimeout))
 	for i := 0; i < min(cfg.WebCheckConcurrencyLimit, len(t.Domains)); i++ {
 		wg.Add(1)
 		go func() {
@@ -59,7 +60,7 @@ func (t *WebCheck) Run(mode string, public bool) {
 				if ctx.Err() != nil {
 					return
 				}
-				r := lookuper.Query(ctx, d, mode, 30, retries)
+				r := lookuper.Query(ctx, d, mode, perDomainTimeout, retries)
 				if ctx.Err() != nil {
 					return
 				}

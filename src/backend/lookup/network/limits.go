@@ -13,6 +13,32 @@ import (
 var mu sync.Mutex
 var active = map[string]slots{}
 var next = map[string]time.Time{}
+var notify chan struct{}
+
+func init() {
+	config.RegisterChangeHook(WakeWaiters)
+}
+
+// WakeWaiters notifies blocked Acquire callers (e.g. after concurrency limits change).
+func WakeWaiters() {
+	mu.Lock()
+	wakeLocked()
+	mu.Unlock()
+}
+
+func wakeLocked() {
+	if notify != nil {
+		close(notify)
+		notify = nil
+	}
+}
+
+func waitChanLocked() <-chan struct{} {
+	if notify == nil {
+		notify = make(chan struct{})
+	}
+	return notify
+}
 
 type slots struct {
 	total  int
@@ -67,22 +93,27 @@ func Acquire(ctx context.Context, protocol string) (func(), error) {
 			}
 			active[protocol] = used
 			mu.Unlock()
+			var once sync.Once
 			return func() {
-				mu.Lock()
-				defer mu.Unlock()
-				used := active[protocol]
-				used.total--
-				if public {
-					used.public--
-				}
-				active[protocol] = used
+				once.Do(func() {
+					mu.Lock()
+					used := active[protocol]
+					used.total--
+					if public {
+						used.public--
+					}
+					active[protocol] = used
+					wakeLocked()
+					mu.Unlock()
+				})
 			}, nil
 		}
+		ch := waitChanLocked()
 		mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(10 * time.Millisecond):
+		case <-ch:
 		}
 	}
 }
@@ -103,10 +134,12 @@ func Wait(ctx context.Context, protocol, host string) error {
 			return nil
 		}
 		mu.Unlock()
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 }

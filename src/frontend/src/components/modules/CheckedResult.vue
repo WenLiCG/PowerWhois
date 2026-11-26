@@ -15,19 +15,9 @@
             <template v-slot:top>
                 <div class="full-width">
                     <div class="row items-center q-gutter-sm">
-                        <q-input dense outlined v-model="filter" placeholder="搜索域名…" clearable style="min-width: 190px">
+                        <q-input dense outlined v-model="filter" placeholder="搜索域名…" clearable style="min-width: 210px">
                             <template #prepend><q-icon name="filter_list" size="18px" /></template>
                         </q-input>
-                        <q-select
-                            dense
-                            outlined
-                            v-model="statusFilter"
-                            :options="statusOptions"
-                            emit-value
-                            map-options
-                            label="状态筛选"
-                            class="status-filter"
-                        />
                         <q-btn
                             outline
                             no-caps
@@ -153,7 +143,7 @@
                         <q-chip v-if="summaryCounts.pending > 0" dense square outline color="accent">
                             待完成 {{ summaryCounts.pending }}
                         </q-chip>
-                        <span class="text-grey-7 q-ml-xs">点击状态标签可筛选，点击行内状态可查看原始响应</span>
+                        <span class="text-grey-7 q-ml-xs">点击状态标签可筛选，点击域名或状态可查看查询详情与原始响应</span>
                     </div>
                 </div>
             </template>
@@ -164,6 +154,26 @@
 
             <template v-slot:body-selection="scope">
                 <q-checkbox v-model="scope.selected" aria-label="选择域名" />
+            </template>
+
+            <template v-slot:body-cell-domain="props">
+                <q-td :props="props">
+                    <div class="row items-center no-wrap q-gutter-xs">
+                        <q-btn
+                            v-if="props.row.isChecked"
+                            flat
+                            dense
+                            no-caps
+                            size="sm"
+                            color="primary"
+                            class="domain-mono q-px-xs"
+                            :label="props.row.domain"
+                            @click="showCheckedRawResponse(props.row)"
+                        />
+                        <span v-else class="domain-mono">{{ props.row.domain }}</span>
+                        <q-badge v-if="props.row.isChecked && props.row.viaProxy" outline color="indigo-7" class="q-px-xs">代理</q-badge>
+                    </div>
+                </q-td>
             </template>
 
             <template v-slot:body-cell-typoType="props">
@@ -187,7 +197,7 @@
                             :aria-label="`${props.row.domain}：${statusLabels[props.row.status]}，查看原始响应`"
                             @click="showCheckedRawResponse(props.row)"
                         >
-                            <q-tooltip>{{ props.row.errorInfo ? props.row.errorInfo : "点击查看来源与原始响应" }}</q-tooltip>
+                            <q-tooltip>{{ props.row.errorInfo ? formatQueryError(props.row.errorInfo) : "点击查看来源与原始响应" }}</q-tooltip>
                         </q-btn>
                         <span v-else><q-spinner-ios color="primary" size="1.6em" /></span>
                     </div>
@@ -247,7 +257,11 @@
     <q-dialog v-model="showCheckedRawResponseDialog">
         <q-card style="width: 760px; max-width: 94vw; max-height: 90vh">
             <q-card-section class="row items-center q-py-sm">
-                <div class="text-subtitle1 text-weight-bold">{{ checkedRawResponseDomain }} · 原始查询证据</div>
+                <div class="text-subtitle1 text-weight-bold domain-mono">{{ checkedRawResponseDomain }}</div>
+                <q-badge v-if="checkedDetailRow?.status" :color="statusColors[checkedDetailRow.status] || 'grey-8'" class="q-ml-sm">
+                    {{ statusLabels[checkedDetailRow.status] || checkedDetailRow.status }}
+                </q-badge>
+                <q-badge v-if="checkedDetailRow?.viaProxy" outline color="indigo-7" class="q-ml-xs">经由 SOCKS5 代理</q-badge>
                 <q-space />
                 <q-btn
                     flat
@@ -266,7 +280,30 @@
             <q-separator />
 
             <q-card-section>
-                <pre class="raw-response-box">{{ checkedRawResponseContent ? checkedRawResponseContent : "无响应内容" }}</pre>
+                <div v-if="checkedDetailRow" class="detail-meta text-body2 q-mb-sm">
+                    <div v-if="checkedDetailRow.source || checkedDetailRow.lookupType">
+                        <strong>查询来源：</strong>{{ checkedDetailRow.source || "—" }}（{{ checkedDetailRow.lookupType || "—" }}）
+                    </div>
+                    <div v-if="checkedDetailRow.queriedAt">
+                        <strong>查询时间：</strong>{{ formatDateTime(checkedDetailRow.queriedAt) }}
+                    </div>
+                    <div v-if="checkedDetailRow.createdDate || checkedDetailRow.expiryDate">
+                        <strong>创建 / 到期：</strong>{{ checkedDetailRow.createdDate || "—" }} → {{ checkedDetailRow.expiryDate || "—" }}
+                    </div>
+                    <div v-if="checkedDetailRow.domainStatus">
+                        <strong>域名状态：</strong>{{ checkedDetailRow.domainStatus }}
+                    </div>
+                    <div v-if="checkedDetailRow.nameServer?.length && checkedDetailRow.nameServer[0] !== 'N/A'">
+                        <strong>权威 DNS：</strong>{{ checkedDetailRow.nameServer.join(", ") }}
+                    </div>
+                </div>
+                <q-banner v-if="checkedDetailRow?.errorInfo" dense class="bg-orange-1 text-deep-orange-10 q-mb-sm rounded-borders">
+                    <div>{{ formatQueryError(checkedDetailRow.errorInfo) }}</div>
+                    <div v-if="formatQueryError(checkedDetailRow.errorInfo) !== checkedDetailRow.errorInfo" class="text-caption text-grey-8 q-mt-xs">
+                        原始信息：{{ checkedDetailRow.errorInfo }}
+                    </div>
+                </q-banner>
+                <pre class="raw-response-box">{{ checkedDetailRawBody || "无原始响应" }}</pre>
             </q-card-section>
         </q-card>
     </q-dialog>
@@ -308,6 +345,7 @@ import { useWebStore } from "src/stores/webStore";
 import { useSettingStore } from "src/stores/settingStore";
 import { typoTypes, typoTypeCcTld } from "src/utils/globalDefinition";
 import { buildWebResultsCsv, downloadCsvContent } from "src/utils/exportCsv";
+import { formatQueryError, formatDateTime } from "src/utils/formatError";
 
 defineOptions({
     name: "CheckedResult"
@@ -350,6 +388,11 @@ const registrationLabels = {
 const showCheckedRawResponseDialog = ref(false);
 const checkedRawResponseDomain = ref(null);
 const checkedRawResponseContent = ref(null);
+const checkedDetailRow = ref(null);
+const checkedDetailRawBody = computed(() => {
+    if (!checkedDetailRow.value) return checkedRawResponseContent.value || "";
+    return checkedDetailRow.value.rawResponse || checkedRawResponseContent.value || "";
+});
 
 const showRegisterRawResponseDialog = ref(false);
 const registerRawResponseDomain = ref(null);
@@ -359,7 +402,7 @@ const tableColumns = ref([
     { name: "domainID", label: "ID", field: "domainID", align: "center", sortable: true },
     { name: "domain", label: "域名", field: "domain", align: "left", sortable: true },
     { name: "typoType", label: "Typo 类型", field: "typoType", align: "left", sortable: true },
-    { name: "status", label: "状态（点击查看原文）", field: "status", align: "center", sortable: true },
+    { name: "status", label: "状态", field: "status", align: "center", sortable: true },
     { name: "lookupType", label: "协议", field: "lookupType", align: "center", sortable: true },
     { name: "createdDate", label: "创建日期", field: "createdDate", align: "left", sortable: true },
     { name: "expiryDate", label: "过期日期", field: "expiryDate", align: "left", sortable: true },
@@ -375,12 +418,6 @@ const filter = ref("");
 const statusFilter = ref("all");
 const statusLabels = { Taken: "已注册", NotFound: "未找到", Free: "未找到", Unknown: "未知", Timeout: "超时", Error: "错误" };
 const statusColors = { Taken: "primary", NotFound: "teal-9", Free: "teal-9", Unknown: "blue-grey-8", Timeout: "deep-orange-9", Error: "negative" };
-const statusOptions = [
-    { label: "全部状态", value: "all" },
-    ...Object.entries(statusLabels)
-        .filter(([key]) => key !== "Free")
-        .map(([value, label]) => ({ value, label }))
-];
 
 const summaryCounts = computed(() => {
     const counts = { taken: 0, free: 0, unknown: 0, timeout: 0, error: 0, pending: 0 };
@@ -496,6 +533,7 @@ function isWebsocketConnected() {
 }
 
 function showCheckedRawResponse(data) {
+    checkedDetailRow.value = data;
     checkedRawResponseDomain.value = data.domain;
     checkedRawResponseContent.value = data.checkedRawResponse;
     showCheckedRawResponseDialog.value = true;

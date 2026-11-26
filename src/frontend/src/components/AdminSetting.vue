@@ -7,7 +7,10 @@
                     管理员密码至少 12 位，登录有效期 1–30 天；由服务端环境变量托管的凭据需在服务端修改并重启。
                 </div>
             </div>
-            <q-btn outline no-caps size="sm" color="grey-8" icon="refresh" label="放弃修改并重新读取" :disable="submitting" @click="getSettings" />
+            <div class="row q-gutter-sm">
+                <q-btn outline no-caps size="sm" color="grey-8" icon="refresh" label="放弃修改并重新读取" :disable="submitting" @click="getSettings" />
+                <q-btn unelevated no-caps size="sm" color="primary" icon="save" label="保存配置" :loading="submitting" @click="onSubmit" />
+            </div>
         </div>
 
         <q-form @validation-error="showValidationError" @submit="onSubmit" ref="settingForm">
@@ -309,11 +312,60 @@
 
             <!-- SOCKS5 代理与后缀路由 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="q-py-sm bg-grey-1">
-                    <div class="text-subtitle2 text-weight-bold">SOCKS5 代理与后缀分流策略</div>
+                <q-card-section class="row items-center justify-between q-py-sm bg-grey-1 q-gutter-xs">
+                    <div>
+                        <div class="row items-center q-gutter-xs">
+                            <span class="text-subtitle2 text-weight-bold">SOCKS5 代理与后缀分流策略</span>
+                            <q-badge
+                                v-if="settings.socketProxyHost && settings.socketProxyPort > 0"
+                                outline
+                                color="teal-8"
+                            >
+                                已配置代理
+                            </q-badge>
+                            <q-badge v-else outline color="grey-7">未启用代理</q-badge>
+                            <q-badge
+                                v-if="settings.socketProxyAuth"
+                                outline
+                                :color="settings.secrets?.socketProxyPassword?.configured ? 'primary' : 'amber-9'"
+                            >
+                                {{ settings.secrets?.socketProxyPassword?.configured ? "已保存代理密码" : "尚未保存代理密码" }}
+                            </q-badge>
+                        </div>
+                        <div class="text-caption text-grey-7">
+                            仅支持 SOCKS5 协议（含远程域名解析）；请填写主机名或 IP（不含 http://），例如 Bright Data 的 SOCKS5 端口为 22228（非 HTTP 端口 44445）。
+                        </div>
+                    </div>
+                    <q-btn
+                        outline
+                        no-caps
+                        size="sm"
+                        color="primary"
+                        icon="network_check"
+                        label="测试 SOCKS5 代理"
+                        :disable="!settings.socketProxyHost || testingProxy"
+                        :loading="testingProxy"
+                        @click="testProxy"
+                    />
                 </q-card-section>
                 <q-separator />
                 <q-card-section>
+                    <q-banner
+                        v-if="proxyTestResult"
+                        dense
+                        rounded
+                        class="q-mb-md"
+                        :class="proxyTestResult.ok ? 'bg-green-1 text-green-10' : 'bg-red-1 text-negative'"
+                        role="status"
+                    >
+                        <template #avatar>
+                            <q-icon :name="proxyTestResult.ok ? 'check_circle' : 'error_outline'" size="20px" />
+                        </template>
+                        {{ proxyTestResult.message }}
+                        <template #action>
+                            <q-btn flat dense no-caps label="关闭" @click="proxyTestResult = null" />
+                        </template>
+                    </q-banner>
                     <div class="row q-col-gutter-md">
                         <div class="col-12 col-md-5">
                             <q-input
@@ -323,8 +375,10 @@
                                 clearable
                                 v-model="settings.socketProxyHost"
                                 label="SOCKS5 代理主机"
+                                placeholder="例如 brd.superproxy.io"
                                 aria-label="代理地址"
-                                hint="留空即禁用代理"
+                                hint="留空即禁用代理；勿填写 http:// 或端口号"
+                                :rules="[validateProxyHost]"
                             />
                         </div>
                         <div class="col-12 col-sm-6 col-md-4">
@@ -334,6 +388,7 @@
                                 dense
                                 v-model.number="settings.socketProxyPort"
                                 label="SOCKS5 代理端口"
+                                placeholder="例如 22228 或 1080"
                                 aria-label="代理端口"
                                 :disable="!settings.socketProxyHost"
                                 :rules="
@@ -357,6 +412,7 @@
                                 checked-icon="check"
                                 color="primary"
                                 unchecked-icon="clear"
+                                @update:model-value="onProxyAuthToggle"
                             />
                         </div>
                     </div>
@@ -380,7 +436,7 @@
                                 v-model="settings.secretActions.socketProxyPassword"
                                 :options="[
                                     { label: '保持原密码', value: 'keep' },
-                                    { label: '更换密码', value: 'set' },
+                                    { label: '设置 / 更换密码', value: 'set' },
                                     { label: '清空密码', value: 'clear' }
                                 ]"
                                 emit-value
@@ -394,11 +450,11 @@
                                 outlined
                                 dense
                                 v-model="settings.socketProxyPassword"
-                                label="新代理密码"
+                                label="代理密码"
                                 aria-label="代理密码"
                                 :disable="settings.secretActions.socketProxyPassword !== 'set'"
-                                hint="仅选择“更换密码”时填写"
-                                :rules="[(v) => settings.secretActions.socketProxyPassword !== 'set' || !!v || '请输入新代理密码']"
+                                :hint="settings.secrets?.socketProxyPassword?.configured ? '原密码不回显；选择“设置 / 更换密码”后输入新密码' : '首次启用认证请填写代理密码'"
+                                :rules="[(v) => settings.secretActions.socketProxyPassword !== 'set' || !!v || '请输入代理密码']"
                             >
                                 <template #append>
                                     <q-btn
@@ -848,6 +904,8 @@ const logLevelOptions = ["Debug", "Info", "Warn", "Error", "Off"];
 
 const submitting = ref(false);
 const downloadingLog = ref(false);
+const testingProxy = ref(false);
+const proxyTestResult = ref(null);
 const showAdminPassword = ref(false);
 const showProxyPassword = ref(false);
 
@@ -904,6 +962,7 @@ const reservedWhoisApiNames = ref([
 
 function getSettings() {
     loadFailed.value = false;
+    proxyTestResult.value = null;
     api.get("/admin/setting")
         .then((response) => {
             if (response.data) {
@@ -970,6 +1029,71 @@ function resetLog() {
     });
 }
 
+function onProxyAuthToggle(enabled) {
+    if (enabled && settings.value && !settings.value.secrets?.socketProxyPassword?.configured) {
+        settings.value.secretActions.socketProxyPassword = "set";
+    }
+}
+
+function validateProxyHost(value) {
+    const host = (value || "").trim();
+    if (!host) return true;
+    const lower = host.toLowerCase();
+    if (lower.startsWith("http://") || lower.startsWith("https://")) {
+        return "仅支持 SOCKS5 代理，请填写主机名或 IP（不含 http://）";
+    }
+    if (/[\s/@?#]/.test(host)) {
+        return "请填写纯主机名或 IP（不含路径、空格或认证信息）";
+    }
+    return true;
+}
+
+async function testProxy() {
+    if (!settings.value || testingProxy.value) return;
+    const host = (settings.value.socketProxyHost || "").trim();
+    const hostCheck = validateProxyHost(host);
+    if (!host || hostCheck !== true) {
+        proxyTestResult.value = { ok: false, message: hostCheck === true ? "请先填写 SOCKS5 代理主机" : hostCheck };
+        return;
+    }
+    const port = Number(settings.value.socketProxyPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        proxyTestResult.value = { ok: false, message: "请填写有效的 SOCKS5 代理端口（1–65535）" };
+        return;
+    }
+    if (settings.value.socketProxyAuth && !(settings.value.socketProxyUser || "").trim()) {
+        proxyTestResult.value = { ok: false, message: "启用代理认证时请先填写代理用户名" };
+        return;
+    }
+    testingProxy.value = true;
+    proxyTestResult.value = null;
+    try {
+        const { data } = await api.post(
+            "/admin/proxy/test",
+            {
+                socketProxyHost: host,
+                socketProxyPort: port,
+                socketProxyAuth: Boolean(settings.value.socketProxyAuth),
+                socketProxyUser: (settings.value.socketProxyUser || "").trim(),
+                socketProxyPassword: settings.value.socketProxyPassword || "",
+                secretActions: { socketProxyPassword: settings.value.secretActions.socketProxyPassword }
+            },
+            { timeout: 18000 }
+        );
+        proxyTestResult.value = {
+            ok: true,
+            message: `SOCKS5 代理连通测试成功（耗时 ${data.latencyMs} ms，已验证目标 ${data.target} TLS 握手）。别忘了保存系统配置使其生效。`
+        };
+    } catch (error) {
+        proxyTestResult.value = {
+            ok: false,
+            message: error.response?.data?.message || "代理连通性测试失败，请检查代理主机、端口与凭据"
+        };
+    } finally {
+        testingProxy.value = false;
+    }
+}
+
 function downloadLog() {
     const defaultFilename = "log_" + date.formatDate(Date.now(), "YYYY-MM-DD_HH-mm-ss") + ".zip";
     downloadingLog.value = true;
@@ -979,10 +1103,9 @@ function downloadLog() {
         timeout: 600000
     })
         .then((response) => {
-            let serverFilename = response.headers["content-disposition"]
-                ? response.headers["content-disposition"].split("filename=")[1]
-                : defaultFilename;
-            serverFilename = serverFilename.replace(/^["']|["']$/g, "");
+            const disposition = response.headers["content-disposition"] || "";
+            const match = /filename=([^;]+)/i.exec(disposition);
+            const serverFilename = match ? match[1].trim().replace(/^["']|["']$/g, "") : defaultFilename;
 
             const url = window.URL.createObjectURL(new Blob([response.data]));
             const link = document.createElement("a");
@@ -1340,7 +1463,13 @@ function onSubmit() {
 
             settings.value.typoCustomizedReplaces = splitNonEmptyLines(settings.value.typoCustomizedReplacesInput);
 
-            api.put("/admin/setting", { ...settings.value, socketProxyPort: settings.value.socketProxyPort || 0 })
+            const cleanHost = (settings.value.socketProxyHost || "").trim();
+            api.put("/admin/setting", {
+                ...settings.value,
+                socketProxyHost: cleanHost,
+                socketProxyPort: cleanHost ? settings.value.socketProxyPort || 0 : 0,
+                socketProxyAuth: cleanHost ? Boolean(settings.value.socketProxyAuth) : false
+            })
                 .then((response) => {
                     $q.notify({
                         position: "top",
@@ -1348,6 +1477,9 @@ function onSubmit() {
                         message: "系统配置保存成功"
                     });
                     submitting.value = false;
+                    settings.value.socketProxyHost = response.data.socketProxyHost || "";
+                    settings.value.socketProxyPort = response.data.socketProxyPort || 0;
+                    settings.value.socketProxyAuth = Boolean(response.data.socketProxyAuth);
                     settings.value.authPassword = "";
                     settings.value.socketProxyPassword = "";
                     settings.value.jwtSecretKey = "";

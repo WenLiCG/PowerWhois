@@ -17,6 +17,11 @@ export const useWebStore = defineStore("web", {
         pendingMode: null,
         // Query modes behind each tab's current rows, so result columns do not follow the live selector.
         resultModes: { webCheck: [], typoCheck: [] },
+        // Preserve draft inputs and mode selections across tab switches.
+        webDomainInput: "",
+        webQueryType: "whoisQuery",
+        typoDomainInput: "",
+        typoQueryType: "whoisQuery",
         // Row IDs stay unique across tabs because registration selects rows by ID.
         nextDomainID: 1
     }),
@@ -45,6 +50,10 @@ export const useWebStore = defineStore("web", {
                 for (const row of this.domains) {
                     if ((scope && row.checkType !== scope) || !retryDomains.has(row.domain)) continue;
                     row.lookupType = null;
+                    row.viaProxy = false;
+                    row.source = "";
+                    row.queriedAt = "";
+                    row.rawResponse = "";
                     row.status = null;
                     row.errorInfo = "";
                     row.createdDate = null;
@@ -86,6 +95,10 @@ export const useWebStore = defineStore("web", {
                         typoType: typoType,
                         typoTypes: typoType ? [typoType] : [],
                         lookupType: null,
+                        viaProxy: false,
+                        source: "",
+                        queriedAt: "",
+                        rawResponse: "",
                         status: null,
                         errorInfo: "",
                         createdDate: null,
@@ -109,6 +122,10 @@ export const useWebStore = defineStore("web", {
                 if (this.domains[i].domain == domainResult.domain.toLowerCase() && !this.domains[i].isChecked) {
                     this.domains[i].status = domainResult.registerStatus;
                     this.domains[i].lookupType = domainResult.lookupType;
+                    this.domains[i].viaProxy = Boolean(domainResult.viaProxy);
+                    this.domains[i].source = domainResult.source || "";
+                    this.domains[i].queriedAt = domainResult.queriedAt || "";
+                    this.domains[i].rawResponse = domainResult.rawResponse || "";
                     this.domains[i].checkedRawResponse = [
                         domainResult.source && `来源: ${domainResult.source}`,
                         domainResult.queriedAt && `查询时间: ${domainResult.queriedAt}`,
@@ -219,7 +236,13 @@ export const useWebStore = defineStore("web", {
         clearDomains(checkType = null) {
             this.domains = checkType ? this.domains.filter((row) => row.checkType !== checkType) : [];
             if (checkType) this.resultModes[checkType] = [];
-            else this.resultModes = { webCheck: [], typoCheck: [] };
+            else {
+                this.resultModes = { webCheck: [], typoCheck: [] };
+                this.webDomainInput = "";
+                this.typoDomainInput = "";
+                this.webQueryType = "whoisQuery";
+                this.typoQueryType = "whoisQuery";
+            }
             this.unRegisterDomains = this.domains.filter((row) => row.selectedRegister && row.registerStatus == null).length;
             this.pendingQuery = null;
             this.pendingScope = null;

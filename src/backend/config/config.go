@@ -17,9 +17,29 @@ import (
 
 var mu sync.RWMutex
 var configFile string
+var changeHooks []func()
 var config = Config{LogLevel: "Info", WhoisTimeout: 5, DnsTimeout: 3, RdapTimeout: 10,
 	DnsConcurrency: 15, WhoisConcurrency: 15, RdapConcurrency: 4, DnsRate: 20, WhoisRate: 2, RdapRate: 4,
 	WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500, BulkCheckConcurrencyLimit: 32, RetryMax: 2, RetryInterval: 1, AuthExpireDays: 1}
+
+// RegisterChangeHook registers a callback invoked after configuration loads or updates.
+func RegisterChangeHook(fn func()) {
+	if fn == nil {
+		return
+	}
+	mu.Lock()
+	changeHooks = append(changeHooks, fn)
+	mu.Unlock()
+}
+
+func notifyChangeHooks() {
+	mu.RLock()
+	hooks := slices.Clone(changeHooks)
+	mu.RUnlock()
+	for _, fn := range hooks {
+		fn()
+	}
+}
 
 type Config struct {
 	LogLevel string `json:"logLevel"` //日志等级
@@ -103,6 +123,7 @@ func Load(path string) error {
 			*dst = value
 		}
 	}
+	next.normalizeProxy()
 	next.normalizeRoutingTLDs()
 	if err := Validate(next); err != nil {
 		return err
@@ -112,6 +133,7 @@ func Load(path string) error {
 	config = clone(next)
 	mu.Unlock()
 	log.SetLevel(next.LogLevel)
+	notifyChangeHooks()
 	return nil
 }
 func GetConfig() Config { mu.RLock(); defer mu.RUnlock(); return clone(config) }
@@ -180,6 +202,9 @@ func Validate(c Config) error {
 	}
 	if c.AuthExpireDays < 1 || c.AuthExpireDays > 30 {
 		return fmt.Errorf("auth expiry must be 1..30 days")
+	}
+	if err := ValidateProxy(c); err != nil {
+		return err
 	}
 	names := map[string]bool{"dnsQuery": true, "whoisQuery": true, "mixedQuery": true, "whoisQueryWithProxy": true, "dns": true, "whois": true, "mixed": true, "proxy": true}
 	for _, a := range c.WhoisApis {
@@ -288,6 +313,7 @@ func UpdateConfig(next Config, secretActions ...map[string]string) error {
 	if next.RdapRate == 0 {
 		next.RdapRate = config.RdapRate
 	}
+	next.normalizeProxy()
 	next.normalizeRoutingTLDs()
 	if err := Validate(next); err != nil {
 		return err
@@ -297,6 +323,7 @@ func UpdateConfig(next Config, secretActions ...map[string]string) error {
 	}
 	config = clone(next)
 	log.SetLevel(next.LogLevel)
+	go notifyChangeHooks()
 	return nil
 }
 func WriteConfig(next Config) error {
@@ -338,6 +365,49 @@ func WriteConfig(next Config) error {
 	}
 	return os.Rename(f.Name(), configFile)
 }
+func (c *Config) normalizeProxy() {
+	c.SocketProxyHost = NormalizeProxyHost(c.SocketProxyHost)
+	c.SocketProxyUser = strings.TrimSpace(c.SocketProxyUser)
+	if c.SocketProxyHost == "" {
+		c.SocketProxyPort = 0
+		c.SocketProxyAuth = false
+	}
+}
+
+// NormalizeProxyHost trims whitespace and strips optional socks5(h):// prefixes.
+func NormalizeProxyHost(host string) string {
+	host = strings.TrimSpace(host)
+	lower := strings.ToLower(host)
+	if strings.HasPrefix(lower, "socks5h://") {
+		host = strings.TrimSpace(host[len("socks5h://"):])
+	} else if strings.HasPrefix(lower, "socks5://") {
+		host = strings.TrimSpace(host[len("socks5://"):])
+	}
+	return strings.TrimSuffix(host, "/")
+}
+
+// ValidateProxy checks SOCKS5 proxy fields when a proxy host is configured.
+func ValidateProxy(c Config) error {
+	host := NormalizeProxyHost(c.SocketProxyHost)
+	if host == "" {
+		return nil
+	}
+	lower := strings.ToLower(host)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return fmt.Errorf("SOCKS5 proxy host must be a hostname or IP without http(s):// (e.g. brd.superproxy.io)")
+	}
+	if strings.ContainsAny(host, " \t\r\n/@?#") {
+		return fmt.Errorf("invalid SOCKS5 proxy host: provide hostname or IP only")
+	}
+	if c.SocketProxyPort < 1 || c.SocketProxyPort > 65535 {
+		return fmt.Errorf("SOCKS5 proxy port must be 1..65535")
+	}
+	if c.SocketProxyAuth && strings.TrimSpace(c.SocketProxyUser) == "" {
+		return fmt.Errorf("SOCKS5 proxy username is required when proxy authentication is enabled")
+	}
+	return nil
+}
+
 func (c *Config) normalizeRoutingTLDs() {
 	c.GlobalProxyTlds = trimTlds(c.GlobalProxyTlds)
 	c.MixedProxyTlds = trimTlds(c.MixedProxyTlds)

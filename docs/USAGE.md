@@ -20,7 +20,7 @@ Typo 生成结果不包含原域名本身。批量或同步查询中有无效域
 
 未支持后缀等本地校验结果标记 `source=local-validation`，不伪装成注册局响应。`.ac.uk` 由 [Jisc](https://www.jisc.ac.uk/domain-registry) 独立管理，当前没有专门适配，因此 WHOIS/Mixed 返回 unknown 和原因；不能把 Nominet 的 `.uk` RDAP 404 当作 `.ac.uk` 未注册证据。DNS 仍可独立查询委派。
 
-`whois` 模式沿用原项目的 RDAP 优先路由；`dns`、`mixed`、`proxy` 也保留。自定义 WHOIS API 使用配置中的名称。原长名称 `whoisQuery/dnsQuery/mixedQuery/whoisQueryWithProxy` 继续有效。输入须为纯域名，支持 IDN，转换为小写 ASCII；子域名按原项目规则归并到注册域名，自动去重。后缀使用仓库维护的列表，不保证所有未来新后缀立即可用。
+`whois` 模式沿用原项目的 RDAP 优先路由；`dns`、`mixed`、`proxy` 也保留。`proxy` 模式使用系统设置中的 **SOCKS5 代理**（由代理端完成远程域名解析，同时支持 HTTPS RDAP 443 与传统 WHOIS 43；配置时填写主机名与 SOCKS5 端口如 `22228`，勿填写 HTTP 代理端口，可在管理设置中点击「测试 SOCKS5 代理」即时验证）。自定义 WHOIS API 使用配置中的名称。原长名称 `whoisQuery/dnsQuery/mixedQuery/whoisQueryWithProxy` 继续有效。输入须为纯域名，支持 IDN，转换为小写 ASCII；子域名按原项目规则归并到注册域名，自动去重。后缀使用仓库维护的列表，不保证所有未来新后缀立即可用。
 
 新 RDAP 查询的 `rawResponse` 保存最终上游响应正文（成功的 RDAP 域名记录为 JSON，错误正文可能为空或使用其他格式），`source` 记录最终请求 URL。旧任务保留当时存储的原文格式。自动化读取日期、状态或 NS 时应使用相应的结构化字段。配置代理和 Mixed 路由时，Unicode 后缀与其 Punycode 写法等效。
 

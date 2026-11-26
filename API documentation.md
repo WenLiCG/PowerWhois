@@ -9,8 +9,9 @@
 - `GET /healthz` 返回 `ok` 表示后端和 Redis 可用。
 - `POST /api/admin/logout` 使用管理员 JWT 撤销所有管理会话。
 - `POST /api/login`：管理员登录，返回 JWT。
-- `GET /api/web/setting`：公开网页查询参数（不含管理秘密）。
-- `GET/PUT /api/admin/setting`：管理配置（回传 `secrets` 状态含 `authUsername`、`authPassword`、`jwtSecretKey`、`socketProxyPassword` 的已配置与环境变量托管标记，秘密原值与自定义接口 URL 不回显）。
+- `GET /api/web/setting`：公开网页查询参数（不含管理秘密；仅当请求附带有效管理员 JWT 时返回自定义接口名称与 `proxyConfigured` 布尔状态）。
+- `GET/PUT /api/admin/setting`：管理配置（附带 `Cache-Control: no-store`；回传 `secrets` 状态含 `authUsername`、`authPassword`、`jwtSecretKey`、`socketProxyPassword` 的已配置与环境变量托管标记，秘密原值与自定义接口 URL 不回显）。
+- `POST /api/admin/proxy/test`：测试已保存或请求体中的 SOCKS5 代理草稿配置，向固定公开 RDAP 端点（`rdap.verisign.com:443`）验证远程域名解析、认证与 TLS 握手，返回耗时或中文诊断信息（`Cache-Control: no-store`，不回显或记录密码）。
 - `GET/DELETE /api/admin/log`：下载/清空日志。
 - `POST /api/admin/bulkcheckupload`：旧版批量 TXT 上传（缺少文件返回 400，当前任务运行中返回 409）。
 - `GET /api/admin/bulkcheckresultdownload`：旧版当前批量任务下载。

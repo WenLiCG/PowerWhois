@@ -130,8 +130,18 @@ const webStore = useWebStore();
 
 const settingStore = useSettingStore();
 
-const domainInput = ref("");
-const queryType = ref("whoisQuery");
+const domainInput = computed({
+    get: () => webStore.webDomainInput,
+    set: (val) => {
+        webStore.webDomainInput = val;
+    }
+});
+const queryType = computed({
+    get: () => webStore.webQueryType,
+    set: (val) => {
+        webStore.webQueryType = val;
+    }
+});
 const registerType = ref(null);
 
 const resultType = ref("webCheck");
@@ -140,32 +150,35 @@ watchEffect(() => {
     webCheckDomains.value = webStore.domains.filter((domain) => domain.checkType == "webCheck");
 });
 
-function parseRawLines(text) {
+function parseRawEntries(text) {
     if (!text) return [];
-    return text
-        .replace(/^\uFEFF/, "")
+    const entries = [];
+    text.replace(/^\uFEFF/, "")
         .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line !== "");
+        .forEach((raw, index) => {
+            const value = raw.trim();
+            if (value) entries.push({ value, line: index + 1 });
+        });
+    return entries;
 }
 
 const uniqueInputCount = computed(() => {
-    const lines = parseRawLines(domainInput.value);
-    return new Set(lines.map((d) => d.toLowerCase())).size;
+    const entries = parseRawEntries(domainInput.value);
+    return new Set(entries.map((d) => d.value.toLowerCase())).size;
 });
 
 function cleanDomainInput() {
-    const lines = parseRawLines(domainInput.value);
+    const entries = parseRawEntries(domainInput.value);
     const seen = new Set();
     const deduped = [];
-    for (const line of lines) {
-        const cleaned = line.replace(/\.+$/, "").toLowerCase();
+    for (const { value } of entries) {
+        const cleaned = value.replace(/\.+$/, "").toLowerCase();
         if (cleaned && !seen.has(cleaned)) {
             seen.add(cleaned);
             deduped.push(cleaned);
         }
     }
-    const removed = lines.length - deduped.length;
+    const removed = entries.length - deduped.length;
     domainInput.value = deduped.join("\n");
     $q.notify({
         position: "top",
@@ -176,8 +189,8 @@ function cleanDomainInput() {
 
 function queryDomains() {
     if (webStore.busy) return;
-    const rawLines = parseRawLines(domainInput.value);
-    if (rawLines.length === 0) {
+    const rawEntries = parseRawEntries(domainInput.value);
+    if (rawEntries.length === 0) {
         $q.notify({
             position: "top",
             type: "warning",
@@ -186,13 +199,12 @@ function queryDomains() {
         return;
     }
 
-    for (let i = 0; i < rawLines.length; i++) {
-        const item = rawLines[i];
+    for (const { value: item, line } of rawEntries) {
         if (item.includes("://") || item.includes("/") || /\s/.test(item) || !item.includes(".")) {
             $q.notify({
                 position: "top",
                 type: "warning",
-                message: `第 ${i + 1} 行“${item.slice(0, 40)}”格式无效，请输入纯域名（如 example.com）`
+                message: `第 ${line} 行“${item.slice(0, 40)}”格式无效，请输入纯域名（如 example.com）`
             });
             return;
         }
@@ -200,7 +212,7 @@ function queryDomains() {
 
     const seen = new Set();
     const dedupedList = [];
-    for (const item of rawLines) {
+    for (const { value: item } of rawEntries) {
         const key = item.toLowerCase();
         if (!seen.has(key)) {
             seen.add(key);

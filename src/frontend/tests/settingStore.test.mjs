@@ -9,8 +9,14 @@ test('empty server configuration stays usable by every selector', () => {
     store.setSetting({typoDefaultCcTlds: null, registerApis: null});
     assert.deepEqual(store.typoDefaultCcTlds, []);
     assert.deepEqual(store.whoisApis, []);
-    store.updateSetting({typoDefaultCcTlds: [{tld: 'com', isSelected: true}], whoisApis: [{apiName: 'test'}]});
+    store.updateSetting({typoDefaultCcTlds: [{tld: 'com', isSelected: true}], whoisApis: [{apiName: 'test'}], socketProxyHost: 'brd.superproxy.io', socketProxyPort: 22228});
     assert.deepEqual(store.whoisApis, ['test']);
-    store.updateSetting({typoDefaultCcTlds: null});
+    assert.equal(store.proxyConfigured, true);
+    store.updateSetting({typoDefaultCcTlds: null, socketProxyHost: '', socketProxyPort: 0});
     assert.deepEqual(store.typoDefaultCcTlds, []);
+    assert.equal(store.proxyConfigured, false);
+    store.setSetting({proxyConfigured: true});
+    assert.equal(store.proxyConfigured, true);
+    store.clearSetting();
+    assert.equal(store.proxyConfigured, false);
 });

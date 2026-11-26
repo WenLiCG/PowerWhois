@@ -21,12 +21,17 @@ var whoisResponseReplaceList = map[string]string{
 }
 
 // ParseWhoisResponse parses the WHOIS response and returns the DomainInfo struct.
-func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher) (lookupinfo.DomainInfo, error) {
-	domainInfo := lookupinfo.DomainInfo{
+func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher) (domainInfo lookupinfo.DomainInfo, parseErr error) {
+	domainInfo = lookupinfo.DomainInfo{
 		LookupType:  constant.LookupTypeWhois,
 		DomainName:  domain,
 		RawResponse: response,
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			parseErr = errors.New("unexpected panic while parsing whois response")
+		}
+	}()
 
 	// Clean up the response by replacing unwanted characters with a newline.
 	responseContent := strutil.ReplaceWithMap(response, whoisResponseReplaceList)
@@ -52,19 +57,27 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	if matcher.ReDomainStatus != nil {
 		matchDomainStatuses := matcher.ReDomainStatus.FindAllStringSubmatch(responseContent, -1)
 		if len(matchDomainStatuses) > 0 {
-			// domainInfo.DomainStatus = make([]string, len(matchDomainStatuses))
 			for _, match := range matchDomainStatuses {
-				if strings.Contains(match[1], ",") {
-					status := strutil.SplitAndTrim(match[1], ",")
+				if len(match) < 2 {
+					continue
+				}
+				val := strutil.Trim(match[1])
+				if val == "" {
+					continue
+				}
+				if strings.Contains(val, ",") {
+					status := strutil.SplitAndTrim(val, ",")
 					domainInfo.DomainStatus = append(domainInfo.DomainStatus, status...)
-				} else if strings.Contains(match[1], "http") {
-					status := strutil.SplitAndTrim(match[1], "http")
-					domainInfo.DomainStatus = append(domainInfo.DomainStatus, status[0])
-				} else if strings.Contains(match[1], "-") {
-					status := strutil.SplitAndTrim(match[1], "-")
-					domainInfo.DomainStatus = append(domainInfo.DomainStatus, status[0])
+				} else if strings.Contains(val, "http") {
+					if status := strutil.SplitAndTrim(val, "http"); len(status) > 0 {
+						domainInfo.DomainStatus = append(domainInfo.DomainStatus, status[0])
+					}
+				} else if strings.Contains(val, "-") {
+					if status := strutil.SplitAndTrim(val, "-"); len(status) > 0 {
+						domainInfo.DomainStatus = append(domainInfo.DomainStatus, status[0])
+					}
 				} else {
-					domainInfo.DomainStatus = append(domainInfo.DomainStatus, strutil.Trim(match[1]))
+					domainInfo.DomainStatus = append(domainInfo.DomainStatus, val)
 				}
 			}
 		}
@@ -77,32 +90,28 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 	if matcher.ReNameServer != nil {
 		matchNameServers := matcher.ReNameServer.FindAllStringSubmatch(responseContent, -1)
 		if len(matchNameServers) > 0 {
-			// domainInfo.NameServer = make([]string, len(matchNameServers))
 			for _, match := range matchNameServers {
+				if len(match) < 2 {
+					continue
+				}
 				nameServerItemStr := strutil.Trim(match[1])
 				if strings.Contains(nameServerItemStr, "\n") {
 					nss := strutil.SplitAndTrim(nameServerItemStr, "\n")
 					for _, ns := range nss {
 						if strings.Contains(ns, " ") {
-							nsSubs := strutil.SplitAndTrim(ns, " ")
-							if strings.Contains(nsSubs[0], ".") {
+							if nsSubs := strutil.SplitAndTrim(ns, " "); len(nsSubs) > 0 && strings.Contains(nsSubs[0], ".") {
 								domainInfo.NameServer = append(domainInfo.NameServer, strutil.Trim(nsSubs[0], "."))
 							}
-						} else {
-							if strings.Contains(ns, ".") {
-								domainInfo.NameServer = append(domainInfo.NameServer, strutil.Trim(ns, "."))
-							}
+						} else if strings.Contains(ns, ".") {
+							domainInfo.NameServer = append(domainInfo.NameServer, strutil.Trim(ns, "."))
 						}
 					}
 				} else if strings.Contains(nameServerItemStr, " ") {
-					nss := strutil.SplitAndTrim(nameServerItemStr, " ")
-					if strings.Contains(nss[0], ".") {
+					if nss := strutil.SplitAndTrim(nameServerItemStr, " "); len(nss) > 0 && strings.Contains(nss[0], ".") {
 						domainInfo.NameServer = append(domainInfo.NameServer, strutil.Trim(nss[0], "."))
 					}
-				} else {
-					if strings.Contains(nameServerItemStr, ".") {
-						domainInfo.NameServer = append(domainInfo.NameServer, strutil.Trim(nameServerItemStr, "."))
-					}
+				} else if strings.Contains(nameServerItemStr, ".") {
+					domainInfo.NameServer = append(domainInfo.NameServer, strutil.Trim(nameServerItemStr, "."))
 				}
 			}
 		}
@@ -112,7 +121,9 @@ func ParseWhoisResponse(response string, domain string, matcher WhoisInfoMatcher
 		if whoisRateLimitPattern.MatchString(responseContent) {
 			return domainInfo, lookuperror.ErrorRateLimited
 		}
-		return domainInfo, errors.New("no domain info found in whois response")
+		if len(domainInfo.DomainStatus) == 0 {
+			return domainInfo, errors.New("no domain info found in whois response")
+		}
 	}
 
 	return domainInfo, nil
@@ -134,7 +145,11 @@ func whoisDate(response string, re *regexp.Regexp, layout, fallbackLayout string
 		if parsed, err := time.Parse(layout, value); err == nil {
 			return parsed.UTC().Format(time.DateTime)
 		}
-		return carbon.ParseByLayout(value, layout, carbon.UTC).ToDateTimeString()
+		c := carbon.ParseByLayout(value, layout, carbon.UTC)
+		if c.Error != nil {
+			return ""
+		}
+		return c.ToDateTimeString()
 	}
 	for _, isoLayout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if parsed, err := time.Parse(isoLayout, value); err == nil {
@@ -144,6 +159,9 @@ func whoisDate(response string, re *regexp.Regexp, layout, fallbackLayout string
 	date := carbon.Parse(value, carbon.UTC)
 	if prefix, _, ok := strings.Cut(value, "+"); date.Error != nil && ok {
 		date = carbon.Parse(strings.TrimSpace(prefix), carbon.UTC)
+	}
+	if date.Error != nil {
+		return ""
 	}
 	return date.ToDateTimeString()
 }

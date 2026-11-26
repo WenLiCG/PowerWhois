@@ -1,6 +1,38 @@
 # PowerWhois 程序员交接文档
 
-## 当前交付 · 2026-11-25 端到端复审与网页体验修复
+## 当前交付 · 2026-11-26 代理链路修复、性能加固与网页体验精修
+
+基线为 GitHub `main@7663175`（PR #16 合并提交）。本地 `main` 原位于 `cfb3026`（落后 `origin/main` 6 个提交，无未提交修改、无本地独有提交或 stash），已快进同步到 `origin/main` 作为工作基线。本轮围绕全库审查、真实 Bright Data SOCKS5 代理实网验证、性能根因修复与真实用户交互精修完成端到端交付，无新增第三方依赖。
+
+| 影响 | 问题与现行行为 |
+|---|---|
+| 高 · Verisign RDAP 404 | 实网验证发现 Verisign `.com`/`.net` RDAP 服务器在返回合法 TLS 校验通过的 `HTTP/1.1 404 Not Found`（`Content-Type: application/rdap+json`，无 `Content-Length`）后关闭空正文流时触发 `tls: bad record MAC`，导致 `openrdap` 将所有未注册 `.com`/`.net` 域名误判为 `error`（`No RDAP servers responded successfully`）。现在当已认证 RDAP 响应明确返回 `404` 且 `Content-Type` 为 RDAP/JSON 时准确归类为 `not_found`；非 RDAP 的 HTML 404 读错误仍保持 `error`。 |
+| 高 · RDAP Bootstrap 缓存失效 | `safeRegistryCache.State()` 透传 `MemoryCache.Good`，但每次 RDAP 查询都新建 `bootstrap.Client`（其内部 `registries` 为空），`openrdap` 仅在收到 `ShouldReload` 时才调用 `Cache.Load()`，导致每次 RDAP 查询都重复从 `data.iana.org/rdap/dns.json` 下载约 200 KB 文件。现在缓存有效时返回 `ShouldReload`，实现跨请求内存复用（24 小时 TTL），实网 RDAP 代理耗时显著降低。 |
+| 高 · SOCKS5 代理错误分类与连通性测试 | 原实现将 SOCKS5 认证失败、规则拒绝和误填 HTTP 端口（返回 ASCII `72`/`H`）统一包为 `whois server failed`（且 `openrdap` 在 `NoWorkingServers` 中吞掉底层 `h.Error`），并缺少配置前校验与测试入口。现在统一归类为 `ErrorConnectToProxy` 并附可操作的中文诊断（如识别 HTTP 端口误填、凭据/规则拒绝、超时，且强制脱敏防止代理密码进入日志/结果）；确定性代理认证/协议错误不再无效重试；后端校验并规范化代理主机（自动剥离 `socks5://`/`socks5h://`，拒绝 `http(s)://`）；新增 `POST /api/admin/proxy/test` 固定探测 `rdap.verisign.com:443` 的 TLS 握手连通性（需管理员 JWT，支持测试未保存草稿，不暴露任意目标 SSRF）。 |
+| 高 · 协议超时计时边界 | WHOIS、RDAP 与 DNS 此前在 `network.Acquire` / `network.Wait` 排队前就启动单次协议超时，高并发同注册局限速时后排请求可能在等待限流期间误超时。现改为获取并发名额（WHOIS 含速率等待）后再启动单次尝试超时，整体每域名总预算仍由外层 `lookuper.Query` 严格控制；网页即时查询总时限改为 `min(120, max(30, WhoisTimeout, RdapTimeout, DnsTimeout))`。 |
+| 中 · 事件驱动并发信号量 | `network.Acquire` 原每 10 ms 轮询一次名额，存在空转 CPU 与定时器分配开销。现改为通道广播唤醒（释放名额与配置变更时即时唤醒），保留匿名/认证名额隔离语义，零空转轮询。 |
+| 中 · WHOIS 解析与安全加固 | `ParseWhoisResponse` 增加 `defer recover()` 保护，修复畸形 `Domain Status`（如仅 `http` 或 `-`）与空白 `Name Server` 切片越界 panic，补齐无 NS 的状态域名（如 `.de` `Status: connect`）识别并校验 `carbon` 错误状态；`rdap_parse` 补充 VCard 无 `fn` 时回退 `Handle`；`/api/v1` 查询令牌与 HTTP MCP 令牌改用定长 SHA-256 摘要常量时间比对；`/api/admin/setting` 与 `/api/admin/proxy/test` 统一输出 `Cache-Control: no-store`。 |
+| 中 · 前端代理体验与 UI/UX 精修 | 系统设置页新增顶部「保存配置」快捷按钮、代理配置/密码状态徽标、SOCKS5 端口提示与「测试 SOCKS5 代理」按钮（返回毫秒耗时或中文故障诊断）；首次开启代理认证自动切换密码为可填写状态；查询方式选择 `Whois + 代理` 且未配置代理时给出温和提示；新增 `formatError.js` 将常见英文错误翻译为清晰中文（详情弹窗保留原文）；网页与 Typo 查询保留标签页切换草稿并在退出登录时清空；即时结果表去除与状态标签重复的下拉筛选、支持点击域名查看结构化详情（含 `代理` / `经由 SOCKS5 代理` 标识与格式化时间）；批量页新增「搜索本页域名」；修复网页即时输入含空行时的报错行号偏移、优化 1280px 桌面表格列宽与 390px 窄屏批量按钮排版，并修复日志下载缺少 `filename=` 响应头时的异常。 |
+
+**本轮验收**（Windows 11 + WSL2 Ubuntu，Go 1.27.4，Redis 8.0.5，Node v24.14.0，npm 11.9.0）
+
+- **后端**：全部 `.go` 文件按 LF 规范通过 `gofmt` 检查、`go mod verify` 通过、`go vet ./...` 零警告、`go test -race -count=1 ./...` 全部 14 个测试包通过（含新增事件唤醒、代理错误分类/脱敏、Bootstrap 缓存复用、Verisign 404 TLS 容错、WHOIS 防 panic、代理配置校验与 `/api/admin/proxy/test` 回归测试；3 个缺外部原始附件用例按设计跳过）。Linux 三个二进制（`typonamer`、`powerwhois`、`powerwhois-mcp`）与 Windows amd64 交叉构建（`powerwhois.exe`、`powerwhois-mcp.exe`）全部成功。
+- **跨入口与压力验收**：`python3 tools/acceptance.py --stress` 通过，覆盖单活租约、API/CLI/stdio MCP/HTTP MCP/管理员 Web 一致性、300 域名 32 并发、暂停/继续/取消、20 次并发幂等重放、重启与 `SIGKILL` 恢复、日志零密钥扫描。
+- **漏洞扫描**：`govulncheck ./...` 可达调用 0、导入包级漏洞 0（模块层仍仅列未导入的 `GO-2026-5932`）；前端完整与生产 `npm audit` 均为 0 vulnerabilities。
+- **前端**：`npm test` 通过 24/25 项（1 项缺外部大 TXT 附件按设计跳过），`npm run lint`（ESLint）0 错误 0 警告，`npm run build`（Quasar/Vite SPA）成功。
+- **真实 Bright Data SOCKS5 代理实网验证**：使用测试账号配置 `brd.superproxy.io:22228`（验证 `socks5h://` 规范化、远程 DNS 与认证），实测 `TestSOCKS5Proxy` 成功（约 2.7–3.0 s）；经代理查询 `example.com`（RDAP `registered`）、`example.org`（RDAP `registered`）、`powerwhois-nonexistent-987654321.com`（Verisign RDAP 404 → `not_found`）、`powerwhois-nonexistent-987654321.org`（PIR RDAP 404 → `not_found`）、`baidu.cn`（WHOIS 43 `registered`）、`powerwhois-nonexistent-987654321.cn`（WHOIS 43 `not_found`）、`denic.de`（WHOIS 43 `registered`）全部准确；验证错误密码与误填 HTTP 端口 `44445` 均返回明确中文代理诊断，日志与结果中零密码泄漏。
+- **真实浏览器全链路验收（Chromium）**：使用新构建的 `typonamer` + 生产 SPA + 隔离 Redis 在 `http://127.0.0.1:18080` 完整走通 6 个阶段（桌面 `1280×800` 与移动端 `390×844`）：首页加载与空行行号校正、直连 RDAP（含 `.com` 404 → `未找到`）与结构化详情、管理员登录与未配置代理提示、系统设置错误端口 `44445` 诊断与 `22228` 实网测试通过及保存、代理即时查询与标签页草稿保留、Typo 排除原域名、批量 TXT 上传代理任务执行/本页搜索/详情查看、390px 零横向溢出、退出所有管理会话；全过程控制台报错 0，服务端日志密钥泄漏检查全为 `False`。
+- **未验证边界**：本机未安装 Docker，Compose 栈交由 GitHub Actions `compose` 作业验收；外部附件工作簿与 563k 行 TXT 不在本机；未调用真实付费注册商下单；测试网络直连 UDP 53 权威 DNS 存在超时（Typo DNS 用例在 5 项候选上均触发超时/错误反馈正常收口）。
+
+**后续建议**
+
+- 历史任务和原始响应目前不自动过期清理，长期高频使用时建议监控 Redis 内存/磁盘并按需补充保留期清理命令。
+- 若后续有仅提供 HTTP CONNECT（无 SOCKS5 端口）的代理供应商需求，可再按需扩展代理协议选项；当前保持仅 SOCKS5 以完整支持端口 43 WHOIS 与远程域名解析。
+- 真实付费注册商沙箱下单与具体云端 AI 宿主账号级 MCP 接入仍需在授权现场另行验收。
+
+升级时前后端同步替换即可，无需数据迁移。
+
+## 历史交付 · 2026-11-25 端到端复审与网页体验修复
 
 基线为 GitHub `main@6dc09b7`（PR #15 合并提交）。本机 7 份历史检出逐一核对：PW-5 至 PW-8 的本地分支与远端同名草稿分支树完全一致，11-22 实现分支的两个提交与 main 上的提交补丁等价，旧部署目录只有重新编译的二进制改动，没有本地独有工作，因此以 GitHub main 为准。草稿 PR #5、#6、#8、#9 仍未合并，本轮未改动。PW-8 记录的 `.cn` 日期解析 panic 在当前 main 上已不复现，解析器显式使用 UTC。
 

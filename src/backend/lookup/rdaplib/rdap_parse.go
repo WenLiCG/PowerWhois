@@ -52,11 +52,13 @@ func getRegistrar(responseEntities []rdap.Entity) string {
 				for _, property := range entity.VCard.Properties {
 					if property.Name == "fn" {
 						// Return the value of the "fn" property
-						return convertor.ToString(property.Value)
+						if fn := strings.TrimSpace(convertor.ToString(property.Value)); fn != "" {
+							return fn
+						}
 					}
 				}
-			} else {
-				// Return the handle of the entity
+			}
+			if entity.Handle != "" {
 				return entity.Handle
 			}
 		}

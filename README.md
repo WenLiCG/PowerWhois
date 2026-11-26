@@ -4,10 +4,10 @@
 
 Domain research through the existing Web UI, a noninteractive CLI, a documented HTTP API, and an optional MCP adapter. One query core and one durable batch store; no AI vendor dependency.
 
-- DNS, WHOIS/RDAP, Mixed, SOCKS proxy, custom query APIs and typo generation. Internationalized suffixes work in Unicode or Punycode. New RDAP results retain the final registry response and its source URL.
-- Instant Web and Typo lookups with input normalization/deduplication, in-flight stop/recheck, clickable status filters, domain copy, and formula-safe CSV export. Each page keeps its own results, and Typo candidates never include the source domain.
-- Durable batches with IDs, pause/resume/cancel, retry, lifecycle/expiry overview, progress and paged exports. CLI CSV exports print the next input offset to stderr so the CSV can be redirected to a file.
-- Accurate distinctions between registered, not_found, unknown, timeout and error, including WHOIS rate-limit classification and bounded upstream backoff. DNS absence is not availability.
+- DNS, WHOIS/RDAP, Mixed, SOCKS5 proxy, custom query APIs and typo generation. Internationalized suffixes work in Unicode or Punycode. RDAP reuses an in-memory IANA bootstrap cache, retains the final registry response and source URL, and handles registry 404 close quirks accurately.
+- Instant Web and Typo lookups with tab-preserved drafts, input normalization/deduplication, in-flight stop/recheck, clickable status filters, proxy indicators, friendly Chinese error messages, domain copy, and formula-safe CSV export. Each page keeps its own results, and Typo candidates never include the source domain.
+- Durable batches with IDs, pause/resume/cancel, retry, lifecycle/expiry overview, in-page domain search, progress and paged exports. CLI CSV exports print the next input offset to stderr so the CSV can be redirected to a file.
+- Accurate distinctions between registered, not_found, unknown, timeout and error, including WHOIS rate-limit classification, SOCKS5 proxy error diagnostics, and a built-in Settings proxy connectivity tester (`POST /api/admin/proxy/test`). DNS absence is not availability.
 - Existing Web administration and explicitly confirmed manual registration remain available. Agent query credentials cannot register, delete data or change settings.
 - Loopback binding by default; use SSH forwarding or an authenticated TLS gateway remotely.
 

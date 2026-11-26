@@ -85,13 +85,14 @@ func NsCheckContext(ctx context.Context, domain string) (lookupinfo.DomainInfo, 
 	}
 
 	cfg := config.GetConfig()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.DnsTimeout)*time.Second)
-	defer cancel()
 	release, err := network.Acquire(ctx, "dns")
 	if err != nil {
 		return domainInfo, err
 	}
 	defer release()
+	// Apply per-attempt DNS timeout only after acquiring a concurrency slot.
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.DnsTimeout)*time.Second)
+	defer cancel()
 	var lastErr error
 	answered := false
 

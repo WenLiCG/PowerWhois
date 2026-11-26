@@ -125,3 +125,21 @@ func TestRoutingSuffixesUseASCIIOnLoadAndSave(t *testing.T) {
 		t.Fatal("saved DNS routing rule does not match the lookup suffix", err)
 	}
 }
+
+func TestProxyValidationAndNormalization(t *testing.T) {
+	if got := NormalizeProxyHost("  socks5h://brd.superproxy.io/  "); got != "brd.superproxy.io" {
+		t.Fatalf("unexpected normalized host: %q", got)
+	}
+	if err := ValidateProxy(Config{SocketProxyHost: "http://brd.superproxy.io", SocketProxyPort: 44445}); err == nil {
+		t.Fatal("accepted http:// prefix for SOCKS5 proxy")
+	}
+	if err := ValidateProxy(Config{SocketProxyHost: "brd.superproxy.io", SocketProxyPort: 0}); err == nil {
+		t.Fatal("accepted missing port when proxy host is set")
+	}
+	if err := ValidateProxy(Config{SocketProxyHost: "brd.superproxy.io", SocketProxyPort: 22228, SocketProxyAuth: true}); err == nil {
+		t.Fatal("accepted auth without username")
+	}
+	if err := ValidateProxy(Config{SocketProxyHost: "socks5://brd.superproxy.io", SocketProxyPort: 22228, SocketProxyAuth: true, SocketProxyUser: "user"}); err != nil {
+		t.Fatalf("rejected valid SOCKS5 proxy config: %v", err)
+	}
+}

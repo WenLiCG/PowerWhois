@@ -17,11 +17,35 @@ body {
 .workspace-header {
     max-width: 1200px;
     margin: auto;
-    padding: 20px 24px 16px;
+    padding: 18px 24px 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 20px;
+}
+.workspace-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.workspace-logo {
+    flex-shrink: 0;
+    border-radius: 8px;
+}
+.domain-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.proxy-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: #8a5a00;
+}
+.detail-meta {
+    display: grid;
+    gap: 4px;
+    color: #33475b;
 }
 h1 {
     font-size: 26px;
@@ -129,11 +153,13 @@ a {
 }
 .q-table td {
     font-variant-numeric: tabular-nums;
+    padding: 8px 12px;
 }
 .q-table th {
     color: #3a526a;
     font-weight: 600;
     background: #f8fafd;
+    padding: 9px 12px;
 }
 .status-filter {
     min-width: 148px;

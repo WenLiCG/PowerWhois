@@ -11,7 +11,7 @@ function fixture() {
     error: {value: ''}, refreshError: {value: ''}, refreshing: {value: false}, creating: {value: false},
     selectedID: {value: 'prior-task'}, task: {value: {id: 'prior-task'}}, tasks: {value: []},
     results: {value: []}, resultOffset: {value: 0}, resultOffsets: {value: [0]}, nextResultOffset: {value: -1},
-    historyOffset: {value: 0}, resultRequest: 0, refreshRequest: 0, loadingResults: {value: false}, pageStatusFilter: {value: 'all'}, stopped: false, mode: {value: 'dnsQuery'},
+    historyOffset: {value: 0}, resultRequest: 0, refreshRequest: 0, loadingResults: {value: false}, pageStatusFilter: {value: 'all'}, pageDomainFilter: {value: ''}, stopped: false, mode: {value: 'dnsQuery'},
     concurrency: {value: 15}, timeout: {value: 30}, retries: {value: 0},
     file: {value: {size: 32, text: async () => 'example.com\nbad name.com'}},
     submissionBody: null, submissionKey: null, crypto,

@@ -2,16 +2,19 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"typonamer/config"
 	"typonamer/jobs"
 	"typonamer/log"
 	"typonamer/lookup/customize"
+	"typonamer/lookup/network"
 	"typonamer/register"
 	"typonamer/scheduler"
 	"typonamer/utils"
@@ -26,6 +29,7 @@ var utf8BomData = []byte{0xEF, 0xBB, 0xBF}
 
 func AdminSettingList(c *fiber.Ctx) error {
 	log.Info("Getting admin setting list success")
+	c.Set("Cache-Control", "no-store")
 	return c.JSON(config.PublicSettings())
 }
 
@@ -36,6 +40,7 @@ func WebSettingList(c *fiber.Ctx) error {
 
 	registerApis := make([]string, 0)
 	whoisApis := make([]string, 0)
+	proxyConfigured := false
 	if token, ok := strings.CutPrefix(c.Get("Authorization"), "Bearer "); ok && validAdminToken(token) {
 		for _, api := range cfg.RegisterApis {
 			registerApis = append(registerApis, api.ApiName)
@@ -43,6 +48,7 @@ func WebSettingList(c *fiber.Ctx) error {
 		for _, api := range cfg.WhoisApis {
 			whoisApis = append(whoisApis, api.ApiName)
 		}
+		proxyConfigured = strings.TrimSpace(cfg.SocketProxyHost) != "" && cfg.SocketProxyPort > 0
 	}
 
 	c.Set("Cache-Control", "no-store")
@@ -51,6 +57,7 @@ func WebSettingList(c *fiber.Ctx) error {
 		"typoDefaultCcTlds":   cfg.TypoDefaultCcTlds,
 		"registerApis":        registerApis,
 		"whoisApis":           whoisApis,
+		"proxyConfigured":     proxyConfigured,
 	})
 }
 
@@ -81,7 +88,62 @@ func SettingUpdate(c *fiber.Ctx) error {
 	// Update the config success
 	log.Info("Update config success")
 
+	c.Set("Cache-Control", "no-store")
 	return c.JSON(config.PublicSettings())
+}
+
+// TestProxyConnection verifies either the draft SOCKS5 settings in the request body or the saved proxy settings.
+func TestProxyConnection(c *fiber.Ctx) error {
+	c.Set("Cache-Control", "no-store")
+	saved := config.GetConfig()
+	probe := saved
+	if len(bytes.TrimSpace(c.Body())) > 0 {
+		var payload struct {
+			SocketProxyHost     string            `json:"socketProxyHost"`
+			SocketProxyPort     int               `json:"socketProxyPort"`
+			SocketProxyAuth     bool              `json:"socketProxyAuth"`
+			SocketProxyUser     string            `json:"socketProxyUser"`
+			SocketProxyPassword string            `json:"socketProxyPassword"`
+			SecretActions       map[string]string `json:"secretActions"`
+		}
+		if err := c.BodyParser(&payload); err != nil {
+			return c.Status(400).JSON(fiber.Map{"ok": false, "message": "代理测试参数格式无效"})
+		}
+		probe.SocketProxyHost = config.NormalizeProxyHost(payload.SocketProxyHost)
+		probe.SocketProxyPort = payload.SocketProxyPort
+		probe.SocketProxyAuth = payload.SocketProxyAuth
+		probe.SocketProxyUser = strings.TrimSpace(payload.SocketProxyUser)
+		switch payload.SecretActions["socketProxyPassword"] {
+		case "", "keep":
+			probe.SocketProxyPassword = saved.SocketProxyPassword
+		case "set":
+			if payload.SocketProxyPassword == "" {
+				return c.Status(400).JSON(fiber.Map{"ok": false, "message": "请填写新的代理密码后再测试"})
+			}
+			probe.SocketProxyPassword = payload.SocketProxyPassword
+		case "clear":
+			probe.SocketProxyPassword = ""
+		default:
+			return c.Status(400).JSON(fiber.Map{"ok": false, "message": "无效的代理密码操作"})
+		}
+	}
+	if probe.SocketProxyHost == "" {
+		return c.Status(400).JSON(fiber.Map{"ok": false, "message": "请先填写 SOCKS5 代理主机和端口"})
+	}
+	if err := config.ValidateProxy(probe); err != nil {
+		return c.Status(400).JSON(fiber.Map{"ok": false, "message": err.Error()})
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 12*time.Second)
+	defer cancel()
+	latency, err := network.TestSOCKS5Proxy(ctx, probe)
+	if err != nil {
+		return c.Status(502).JSON(fiber.Map{"ok": false, "message": err.Error(), "target": network.ProxyTestTarget()})
+	}
+	return c.JSON(fiber.Map{
+		"ok":        true,
+		"latencyMs": latency.Milliseconds(),
+		"target":    network.ProxyTestTarget(),
+	})
 }
 
 func DownloadLog(c *fiber.Ctx) error {

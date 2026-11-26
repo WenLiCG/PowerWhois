@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,9 +103,97 @@ func TestSOCKS5RequiresConfiguredHostAndPort(t *testing.T) {
 		{SocketProxyHost: "  ", SocketProxyPort: 1080},
 		{SocketProxyHost: "127.0.0.1", SocketProxyPort: 0},
 		{SocketProxyHost: "::1", SocketProxyPort: 65536},
+		{SocketProxyHost: "http://proxy.example", SocketProxyPort: 22228},
 	} {
 		if _, err := SOCKS5Dialer(cfg); !errors.Is(err, lookuperror.ErrorProxyNotConfigured) {
 			t.Fatalf("invalid endpoint accepted: %v", err)
 		}
+	}
+}
+
+func TestAcquireWakesImmediatelyOnRelease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	releases := make([]func(), 0, 4)
+	for i := 0; i < 4; i++ {
+		rel, err := Acquire(ctx, "rdap")
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, rel)
+	}
+	defer func() {
+		for _, rel := range releases {
+			if rel != nil {
+				rel()
+			}
+		}
+	}()
+
+	acquired := make(chan time.Time, 1)
+	go func() {
+		rel, err := Acquire(ctx, "rdap")
+		if err != nil {
+			t.Errorf("waiter failed: %v", err)
+			return
+		}
+		acquired <- time.Now()
+		rel()
+	}()
+	time.Sleep(15 * time.Millisecond)
+	releasedAt := time.Now()
+	releases[0]()
+	releases[0] = nil
+
+	select {
+	case got := <-acquired:
+		if got.Sub(releasedAt) > 200*time.Millisecond {
+			t.Fatalf("event-driven acquire woke too slowly: %v", got.Sub(releasedAt))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not wake after release")
+	}
+}
+
+func TestProxyErrorClassificationAndSanitization(t *testing.T) {
+	secret := "super-secret-proxy-pass"
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"socks connect tcp 1.2.3.4:44445->a:443: unexpected protocol version 72", "HTTP 代理端口"},
+		{"socks connect tcp 1.2.3.4:22228->a:443: authentication failed", "认证失败"},
+		{"socks connect tcp 1.2.3.4:22228->a:443: unknown error connection not allowed by ruleset", "代理拒绝连接"},
+		{"dial error with " + secret, "[redacted]"},
+	}
+	for _, tc := range cases {
+		err := classifyProxyError(errors.New(tc.raw), secret)
+		if !errors.Is(err, lookuperror.ErrorConnectToProxy) || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), secret) {
+			t.Fatalf("unexpected proxy classification for %q: %v", tc.raw, err)
+		}
+	}
+
+	// Point SOCKS5 dialer at a TCP listener that replies HTTP/1.1 400 (simulating an HTTP proxy port like 44445).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, e := ln.Accept()
+		if e != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 8)
+		_, _ = conn.Read(buf)
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+	}()
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = TestSOCKS5Proxy(ctx, config.Config{SocketProxyHost: tcpAddr.IP.String(), SocketProxyPort: tcpAddr.Port})
+	if !errors.Is(err, lookuperror.ErrorConnectToProxy) || !strings.Contains(err.Error(), "HTTP 代理端口") {
+		t.Fatalf("expected HTTP-port mismatch error, got: %v", err)
 	}
 }

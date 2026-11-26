@@ -232,13 +232,17 @@ func validDomains(input []string) ([]string, error) {
 	return out, nil
 }
 func runWeb(c *clientInfo, input []string, mode, kind string, public bool) {
+	errEvent := "webCheckError"
+	if kind == "typoCheck" {
+		errEvent = "typoCheckError"
+	}
 	domains, err := validDomains(input)
 	if err != nil {
-		emit(c.Kws, "webCheckError", err.Error())
+		emit(c.Kws, errEvent, err.Error())
 		return
 	}
 	if !lookuper.ValidMode(mode) {
-		emit(c.Kws, "webCheckError", "无效查询类型")
+		emit(c.Kws, errEvent, "无效查询类型")
 		return
 	}
 	if c.WebCheckTask != nil {

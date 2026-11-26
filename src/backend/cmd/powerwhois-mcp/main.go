@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"flag"
@@ -129,7 +130,9 @@ func main() {
 				}
 			}
 			supplied := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare([]byte(supplied), []byte(token)) != 1 {
+			gotSum := sha256.Sum256([]byte(supplied))
+			expSum := sha256.Sum256([]byte(token))
+			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare(gotSum[:], expSum[:]) != 1 {
 				http.Error(w, "unauthorized", 401)
 				return
 			}

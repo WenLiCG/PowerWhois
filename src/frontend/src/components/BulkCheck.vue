@@ -104,31 +104,43 @@
                     <strong>整个任务</strong>
                     <span v-for="(label, key) in resultLabels" :key="key">{{ label }} {{ task.counts[key] || 0 }}</span>
                 </div>
-                <div class="result-counts" role="group" aria-label="筛选本页结果">
-                    <q-chip
-                        clickable
+                <div class="result-filter-row">
+                    <q-input
                         dense
-                        square
-                        :outline="pageStatusFilter !== 'all'"
-                        color="primary"
-                        text-color="white"
-                        @click="pageStatusFilter = 'all'"
+                        outlined
+                        clearable
+                        v-model="pageDomainFilter"
+                        placeholder="搜索本页域名…"
+                        style="min-width: 200px; max-width: 260px"
                     >
-                        本页全部 {{ results.length }}
-                    </q-chip>
-                    <q-chip
-                        v-for="(label, key) in resultLabels"
-                        :key="key"
-                        clickable
-                        dense
-                        square
-                        :outline="pageStatusFilter !== key"
-                        :color="resultColors[key] || 'grey-7'"
-                        text-color="white"
-                        @click="pageStatusFilter = pageStatusFilter === key ? 'all' : key"
-                    >
-                        {{ label }} {{ pageCounts[key] || 0 }}
-                    </q-chip>
+                        <template #prepend><q-icon name="search" size="18px" /></template>
+                    </q-input>
+                    <div class="result-counts" role="group" aria-label="筛选本页结果">
+                        <q-chip
+                            clickable
+                            dense
+                            square
+                            :outline="pageStatusFilter !== 'all'"
+                            color="primary"
+                            text-color="white"
+                            @click="pageStatusFilter = 'all'"
+                        >
+                            本页全部 {{ results.length }}
+                        </q-chip>
+                        <q-chip
+                            v-for="(label, key) in resultLabels"
+                            :key="key"
+                            clickable
+                            dense
+                            square
+                            :outline="pageStatusFilter !== key"
+                            :color="resultColors[key] || 'grey-7'"
+                            text-color="white"
+                            @click="pageStatusFilter = pageStatusFilter === key ? 'all' : key"
+                        >
+                            {{ label }} {{ pageCounts[key] || 0 }}
+                        </q-chip>
+                    </div>
                 </div>
 
                 <q-banner v-if="task.error" class="bg-red-1 text-negative q-mb-md rounded-borders">{{ task.error }}</q-banner>
@@ -205,16 +217,20 @@
                 >
                     <template #body-cell-domain="props">
                         <q-td :props="props">
-                            <q-btn
-                                flat
-                                dense
-                                no-caps
-                                color="primary"
-                                icon-right="open_in_new"
-                                size="sm"
-                                :label="props.row.domain"
-                                @click="openDetails(props.row)"
-                            />
+                            <div class="row items-center no-wrap q-gutter-xs">
+                                <q-btn
+                                    flat
+                                    dense
+                                    no-caps
+                                    color="primary"
+                                    icon-right="open_in_new"
+                                    size="sm"
+                                    class="domain-mono"
+                                    :label="props.row.domain"
+                                    @click="openDetails(props.row)"
+                                />
+                                <q-badge v-if="props.row.viaProxy" outline color="indigo-7" class="q-px-xs">代理</q-badge>
+                            </div>
                         </q-td>
                     </template>
                     <template #body-cell-status="props">
@@ -229,6 +245,15 @@
                     </template>
                     <template #body-cell-domainStatus="props">
                         <q-td :props="props">{{ lifecycle(props.row) }}</q-td>
+                    </template>
+                    <template #body-cell-queryError="props">
+                        <q-td :props="props">
+                            <span v-if="props.row.queryError">
+                                {{ formatQueryError(props.row.queryError) }}
+                                <q-tooltip v-if="formatQueryError(props.row.queryError) !== props.row.queryError">{{ props.row.queryError }}</q-tooltip>
+                            </span>
+                            <span v-else class="text-grey-5">—</span>
+                        </q-td>
                     </template>
                 </q-table>
 
@@ -260,10 +285,11 @@
         <q-dialog :model-value="!!details" @update:model-value="details = null">
             <q-card class="result-detail">
                 <q-card-section class="row items-center q-py-sm">
-                    <h3>{{ details?.domain }}</h3>
+                    <h3 class="domain-mono">{{ details?.domain }}</h3>
                     <q-badge v-if="details?.status" :color="resultColors[details.status] || 'grey-8'" class="q-ml-sm">
                         {{ resultLabels[details.status] || details.status }}
                     </q-badge>
+                    <q-badge v-if="details?.viaProxy" outline color="indigo-7" class="q-ml-xs">经由 SOCKS5 代理</q-badge>
                     <q-space />
                     <q-btn
                         flat
@@ -282,7 +308,7 @@
                 <q-card-section>
                     <div class="detail-meta text-body2 q-mb-sm">
                         <div><strong>查询来源：</strong>{{ details?.source || "—" }}（{{ details?.lookupType || "—" }}）</div>
-                        <div><strong>查询时间：</strong>{{ details?.queriedAt || "—" }}</div>
+                        <div><strong>查询时间：</strong>{{ formatDateTime(details?.queriedAt) }}</div>
                         <div v-if="details?.createdDate || details?.expiryDate">
                             <strong>注册 / 到期：</strong>{{ details?.createdDate || "—" }} → {{ details?.expiryDate || "—" }}
                         </div>
@@ -293,7 +319,10 @@
                         <div v-if="details?.nameServer?.length"><strong>权威 DNS：</strong>{{ details.nameServer.join(", ") }}</div>
                     </div>
                     <q-banner v-if="details?.queryError" dense class="bg-orange-1 text-deep-orange-10 q-mb-sm rounded-borders">
-                        {{ details.queryError }}
+                        <div>{{ formatQueryError(details.queryError) }}</div>
+                        <div v-if="formatQueryError(details.queryError) !== details.queryError" class="text-caption text-grey-8 q-mt-xs">
+                            原始信息：{{ details.queryError }}
+                        </div>
                     </q-banner>
                     <pre class="raw-response-box">{{ details?.rawResponse || (loadingDetail ? "正在读取原始响应…" : "无原始响应") }}</pre>
                 </q-card-section>
@@ -306,6 +335,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useQuasar, copyToClipboard } from "quasar";
 import { api } from "boot/axios";
 import WhoisSelection from "./modules/WhoisSelection.vue";
+import { formatQueryError, formatDateTime } from "src/utils/formatError";
 const $q = useQuasar();
 const file = ref(null),
     mode = ref("whoisQuery"),
@@ -318,7 +348,8 @@ const tasks = ref([]),
     results = ref([]),
     details = ref(null),
     loadingDetail = ref(false),
-    pageStatusFilter = ref("all");
+    pageStatusFilter = ref("all"),
+    pageDomainFilter = ref("");
 const error = ref(""),
     refreshError = ref(""),
     creating = ref(false),
@@ -347,9 +378,14 @@ const pageCounts = computed(() => {
     for (const row of results.value) counts[row.status] = (counts[row.status] || 0) + 1;
     return counts;
 });
-const filteredPageResults = computed(() =>
-    pageStatusFilter.value === "all" ? results.value : results.value.filter((r) => r.status === pageStatusFilter.value)
-);
+const filteredPageResults = computed(() => {
+    const kw = (pageDomainFilter.value || "").trim().toLowerCase();
+    return results.value.filter((r) => {
+        if (pageStatusFilter.value !== "all" && r.status !== pageStatusFilter.value) return false;
+        if (kw && !r.domain.toLowerCase().includes(kw)) return false;
+        return true;
+    });
+});
 const taskOptions = computed(() =>
     tasks.value.map((t) => ({
         label: `${stateLabels[t.state] || t.state} · ${modeLabels[t.mode] || t.mode} · ${t.completed}/${t.total} · ${t.id}`,
@@ -413,6 +449,7 @@ async function loadSelected() {
     task.value = null;
     if (selectedID.value) localStorage.setItem("powerwhois-task", selectedID.value);
     pageStatusFilter.value = "all";
+    pageDomainFilter.value = "";
     await refresh(true);
 }
 async function refresh(force = false) {
@@ -675,11 +712,17 @@ h3 {
     gap: 10px;
     margin: 16px 0;
 }
+.result-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 14px 0;
+}
 .result-counts {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin: 14px 0;
 }
 .result-pager {
     display: flex;
@@ -706,6 +749,9 @@ h3 {
 @media (max-width: 600px) {
     .batch-options {
         grid-template-columns: 1fr 1fr;
+    }
+    .batch-options .q-btn {
+        grid-column: 1 / -1;
     }
     .section-heading {
         flex-direction: column;

@@ -50,8 +50,6 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 
 	// Read the configuration
 	cfg := config.GetConfig()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
-	defer cancel()
 	var dialer proxy.ContextDialer = &net.Dialer{}
 	if useProxy {
 		proxyDialer, err := network.SOCKS5Dialer(cfg)
@@ -69,19 +67,25 @@ func WhoisQueryContext(ctx context.Context, domain string, tld string, useProxy 
 	if err := network.Wait(ctx, "whois", whoisServer); err != nil {
 		return domainInfo, err
 	}
+	// Apply per-attempt WHOIS socket timeout only after acquiring concurrency and rate slots.
+	attemptCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.WhoisTimeout)*time.Second)
+	defer cancel()
 	domainInfo.Source = whoisServer
 
 	// Create the address for the WHOIS server
 	whoisAddr := net.JoinHostPort(whoisServer, "43")
 
-	conn, err := dialer.DialContext(ctx, "tcp", whoisAddr)
+	conn, err := dialer.DialContext(attemptCtx, "tcp", whoisAddr)
 	if err != nil {
+		if errors.Is(err, lookuperror.ErrorConnectToProxy) {
+			return domainInfo, err
+		}
 		return domainInfo, whoisTransportError(err)
 	}
 	defer conn.Close()
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	stop := context.AfterFunc(attemptCtx, func() { conn.Close() })
 	defer stop()
-	deadline, _ := ctx.Deadline()
+	deadline, _ := attemptCtx.Deadline()
 	if err := conn.SetDeadline(deadline); err != nil {
 		return domainInfo, whoisTransportError(err)
 	}

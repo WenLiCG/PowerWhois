@@ -69,3 +69,19 @@ func TestRateLimitedWhoisResponsesAndISOTimezoneOffsets(t *testing.T) {
 		t.Fatalf("registered domain with footer or +08:00 offset failed: %+v, %v", info, err)
 	}
 }
+
+func TestMalformedStatusAndStatusOnlyDomainParsing(t *testing.T) {
+	// Malformed status/NS lines must never panic on empty SplitAndTrim slices.
+	malformed := "Sponsoring Registrar: Example\nDomain Status: http\nDomain Status: -\nName Server:    \n"
+	info, err := ParseWhoisResponse(malformed, "example.cn", WhoisMatchers["cn"])
+	if err != nil || info.Registrar != "Example" {
+		t.Fatalf("malformed status/NS failed: %+v, %v", info, err)
+	}
+
+	// Parked .de domain with Status: connect and no nameservers must remain registered.
+	deConnect := "Domain: parked.de\nStatus: connect\n"
+	deInfo, err := ParseWhoisResponse(deConnect, "parked.de", WhoisMatchers["de"])
+	if err != nil || len(deInfo.DomainStatus) != 1 || deInfo.DomainStatus[0] != "connect" {
+		t.Fatalf("status-only .de domain failed: %+v, %v", deInfo, err)
+	}
+}

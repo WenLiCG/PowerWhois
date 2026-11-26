@@ -60,6 +60,10 @@
                     />
                 </template>
             </div>
+            <div v-if="tokenStore.token && queryType === 'whoisQueryWithProxy' && !settingStore.proxyConfigured" class="proxy-hint q-mt-xs" role="status">
+                <q-icon name="info_outline" size="15px" />
+                <span>尚未检测到已保存的 SOCKS5 代理，请先前往右上角「系统设置」填写代理主机与端口并测试连接。</span>
+            </div>
         </q-item-section>
     </q-item>
 </template>

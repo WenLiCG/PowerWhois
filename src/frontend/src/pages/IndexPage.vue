@@ -4,9 +4,12 @@
             <q-page class="workspace">
                 <div class="workspace-header-wrap">
                     <header class="workspace-header">
-                        <div>
-                            <h1>PowerWhois</h1>
-                            <p>域名即时查询、Typo 衍生与持久化批量任务</p>
+                        <div class="workspace-brand">
+                            <img src="/logo.svg" alt="" class="workspace-logo" width="36" height="36" />
+                            <div>
+                                <h1>PowerWhois</h1>
+                                <p>域名即时查询、Typo 衍生与持久化批量任务</p>
+                            </div>
                         </div>
                         <div
                             class="connection-state"

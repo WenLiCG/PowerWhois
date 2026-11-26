@@ -4,6 +4,7 @@ import {createPinia,setActivePinia} from 'pinia';
 import {useWebStore} from '../src/stores/webStore.js';
 import {rules} from '../src/boot/rules.js';
 import {buildWebResultsCsv,sanitizeCsvCell} from '../src/utils/exportCsv.js';
+import {formatQueryError,formatDateTime} from '../src/utils/formatError.js';
 test('duplicate responses never corrupt counts; disconnect and retry remain usable',()=>{
  setActivePinia(createPinia());const s=useWebStore();s.setCheckingDomains(['example.com','example.org'],'webCheck','');
  const r={domain:'example.com',registerStatus:'NotFound',status:'not_found',lookupType:'rdap',queriedAt:'2026-11-03T00:00:00Z',source:'fixture'};
@@ -152,4 +153,30 @@ test('each tab keeps its own results, row IDs stay unique and retries stay in th
   store.clearDomains();
   assert.deepEqual(store.domains, []);
   assert.deepEqual(store.resultModes, {webCheck: [], typoCheck: []});
+});
+
+test('error formatter translates raw upstream errors and webStore tracks proxy metadata', () => {
+  assert.match(formatQueryError('context deadline exceeded'), /查询超时/);
+  assert.match(formatQueryError('DNS has no delegation; registration status is unknown'), /DNS 无委派/);
+  assert.match(formatQueryError('connect to proxy failed（SOCKS5 代理认证失败，请检查用户名和密码）'), /代理认证失败/);
+  assert.match(formatQueryError('registry rate limited'), /限流/);
+  assert.equal(formatDateTime(''), '—');
+  assert.match(formatDateTime('2026-11-26T06:50:13Z'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+
+  setActivePinia(createPinia());
+  const store = useWebStore();
+  store.webDomainInput = 'example.com';
+  store.setCheckingDomains(['example.com'], 'webCheck', '');
+  store.updateCheckResult({
+    domain: 'example.com',
+    registerStatus: 'Taken',
+    lookupType: 'rdap',
+    viaProxy: true,
+    source: 'https://rdap.verisign.com/com/v1/domain/example.com',
+    queriedAt: '2026-11-26T06:50:13Z',
+    rawResponse: '{"ldhName":"example.com"}'
+  });
+  assert.equal(store.domains[0].viaProxy, true);
+  assert.equal(store.domains[0].source, 'https://rdap.verisign.com/com/v1/domain/example.com');
+  assert.equal(store.webDomainInput, 'example.com');
 });

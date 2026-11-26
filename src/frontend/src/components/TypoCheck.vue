@@ -109,8 +109,18 @@ const webStore = useWebStore();
 
 const settingStore = useSettingStore();
 
-const domainInput = ref("");
-const queryType = ref("whoisQuery");
+const domainInput = computed({
+    get: () => webStore.typoDomainInput,
+    set: (val) => {
+        webStore.typoDomainInput = val || "";
+    }
+});
+const queryType = computed({
+    get: () => webStore.typoQueryType,
+    set: (val) => {
+        webStore.typoQueryType = val;
+    }
+});
 const registerType = ref(null);
 
 const resultType = ref("typoCheck");

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -30,8 +31,12 @@ func QueryAuth(c *fiber.Ctx) error {
 		return apiError(c, 401, "unauthorized", "Bearer token required")
 	}
 	expected := os.Getenv("POWERWHOIS_QUERY_TOKEN")
-	if len(expected) >= 32 && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
-		return c.Next()
+	if len(expected) >= 32 {
+		gotSum := sha256.Sum256([]byte(token))
+		expSum := sha256.Sum256([]byte(expected))
+		if subtle.ConstantTimeCompare(gotSum[:], expSum[:]) == 1 {
+			return c.Next()
+		}
 	}
 	valid, _ := ValidateToken(token)
 	if valid {

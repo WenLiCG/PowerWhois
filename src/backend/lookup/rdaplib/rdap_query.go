@@ -7,6 +7,7 @@ import (
 	"github.com/openrdap/rdap"
 	"github.com/openrdap/rdap/bootstrap"
 	"github.com/openrdap/rdap/bootstrap/cache"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,7 +39,14 @@ func (c *safeRegistryCache) Save(filename string, data []byte) error {
 func (c *safeRegistryCache) State(filename string) cache.FileState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.inner.State(filename)
+	state := c.inner.State(filename)
+	// Each RDAP query instantiates a fresh bootstrap.Client whose local registries map is empty.
+	// openrdap only loads from Cache when State returns ShouldReload; returning Good would skip
+	// Cache.Load and force a full network re-download of data.iana.org/rdap/dns.json every time.
+	if state == cache.Good {
+		return cache.ShouldReload
+	}
+	return state
 }
 
 func (c *safeRegistryCache) SetTimeout(timeout time.Duration) {
@@ -61,26 +69,33 @@ var (
 func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (lookupinfo.DomainInfo, error) {
 	info := lookupinfo.DomainInfo{DomainName: domain, LookupType: constant.LookupTypeRDAP, ViaProxy: useProxy}
 	cfg := config.GetConfig()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.RdapTimeout)*time.Second)
-	defer cancel()
-	tr := directRDAPTransport
+	var dialer interface {
+		DialContext(context.Context, string, string) (net.Conn, error)
+	}
 	if useProxy {
-		dialer, err := network.SOCKS5Dialer(cfg)
+		proxyDialer, err := network.SOCKS5Dialer(cfg)
 		if err != nil {
 			info.Source = "local-validation"
 			return info, err
 		}
-		proxyTr := directRDAPTransport.Clone()
-		proxyTr.Proxy = nil
-		proxyTr.DialContext = dialer.DialContext
-		defer proxyTr.CloseIdleConnections()
-		tr = proxyTr
+		dialer = proxyDialer
 	}
 	release, err := network.Acquire(ctx, "rdap")
 	if err != nil {
 		return info, err
 	}
 	defer release()
+	// Apply per-attempt RDAP timeout only after acquiring a concurrency slot.
+	attemptCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.RdapTimeout)*time.Second)
+	defer cancel()
+	tr := directRDAPTransport
+	if useProxy {
+		proxyTr := directRDAPTransport.Clone()
+		proxyTr.Proxy = nil
+		proxyTr.DialContext = dialer.DialContext
+		defer proxyTr.CloseIdleConnections()
+		tr = proxyTr
+	}
 	client := &http.Client{Transport: network.Transport{Base: tr, Protocol: "rdap"}, Timeout: time.Duration(cfg.RdapTimeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 || req.URL.Scheme != "https" {
@@ -89,20 +104,27 @@ func RDAPQueryContext(ctx context.Context, domain, tld string, useProxy bool) (l
 			return nil
 		}}
 	rc := &rdap.Client{HTTP: client, Bootstrap: &bootstrap.Client{HTTP: client, Cache: sharedBootstrapCache}}
-	resp, err := rc.Do((&rdap.Request{Type: rdap.DomainRequest, Query: domain, Timeout: time.Duration(cfg.RdapTimeout) * time.Second}).WithContext(ctx))
+	resp, err := rc.Do((&rdap.Request{Type: rdap.DomainRequest, Query: domain, Timeout: time.Duration(cfg.RdapTimeout) * time.Second}).WithContext(attemptCtx))
 	parsed, err := parseResponse(domain, info, resp, err)
-	if ctx.Err() != nil {
-		return parsed, ctx.Err()
+	if attemptCtx.Err() != nil && !errors.Is(err, lookuperror.ErrorConnectToProxy) && !errors.Is(err, lookuperror.ErrorWhoisNotFound) {
+		return parsed, attemptCtx.Err()
 	}
 	return parsed, err
 }
 
+func isRDAPContentType(contentType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	return strings.HasPrefix(ct, "application/rdap+json") || strings.HasPrefix(ct, "application/json")
+}
+
 func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Response, err error) (lookupinfo.DomainInfo, error) {
 	// The SDK tries alternate registry URLs until one answers. Evidence belongs to the final attempt.
+	var lastHTTPErr error
 	if resp != nil && len(resp.HTTP) > 0 {
 		h := resp.HTTP[len(resp.HTTP)-1]
 		info.Source = h.URL
 		info.RawResponse = string(h.Body)
+		lastHTTPErr = h.Error
 		if h.Response != nil {
 			if req := h.Response.Request; req != nil && req.URL != nil {
 				info.Source = req.URL.String()
@@ -110,9 +132,21 @@ func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Respons
 			if h.Response.StatusCode == http.StatusTooManyRequests {
 				return info, lookuperror.ErrorRateLimited
 			}
+			// Some authoritative RDAP responders (e.g. Verisign .com/.net) send a valid
+			// TLS-authenticated 404 with application/rdap+json and no Content-Length, then abort
+			// the TLS stream when closing the empty body. Treat a verified RDAP 404 as not_found.
+			if h.Response.StatusCode == http.StatusNotFound && h.Error != nil && isRDAPContentType(h.Response.Header.Get("Content-Type")) {
+				return info, lookuperror.ErrorWhoisNotFound
+			}
+		}
+		if lastHTTPErr != nil && errors.Is(lastHTTPErr, lookuperror.ErrorConnectToProxy) {
+			return info, lastHTTPErr
 		}
 	}
 	if err != nil {
+		if errors.Is(err, lookuperror.ErrorConnectToProxy) {
+			return info, err
+		}
 		var ce *rdap.ClientError
 		if errors.As(err, &ce) {
 			switch ce.Type {
@@ -120,12 +154,16 @@ func parseResponse(domain string, info lookupinfo.DomainInfo, resp *rdap.Respons
 				return info, lookuperror.ErrorWhoisNotFound
 			case rdap.BootstrapNoMatch, rdap.BootstrapNotSupported:
 				return info, lookuperror.ErrorNotSupportedTld
+			case rdap.NoWorkingServers:
+				if lastHTTPErr != nil {
+					return info, fmt.Errorf("%w: %w", lookuperror.ErrorWhoisServerFailed, lastHTTPErr)
+				}
 			}
 		}
-		return info, fmt.Errorf("%w: %s", lookuperror.ErrorWhoisServerFailed, err)
+		return info, fmt.Errorf("%w: %w", lookuperror.ErrorWhoisServerFailed, err)
 	}
 	d, ok := resp.Object.(*rdap.Domain)
-	if !ok || !strings.EqualFold(d.LDHName, domain) {
+	if !ok || !strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(d.LDHName), "."), domain) {
 		return info, lookuperror.ErrorParseWhoisResponse
 	}
 	parsed := ParseRDAPResponseforDomain(d)

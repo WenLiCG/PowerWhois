@@ -128,7 +128,11 @@ func Query(ctx context.Context, domain, mode string, timeoutSeconds, retries int
 			break
 		}
 		var netErr net.Error
-		if !errors.As(err, &netErr) && !errors.Is(err, lookuperror.ErrorWhoisTimeout) && !errors.Is(err, lookuperror.ErrorDnsTimeout) && !errors.Is(err, lookuperror.ErrorRateLimited) {
+		if errors.Is(err, lookuperror.ErrorConnectToProxy) && !errors.Is(err, context.DeadlineExceeded) && !(errors.As(err, &netErr) && netErr.Timeout()) {
+			// Deterministic proxy auth/protocol/ruleset errors will not recover on immediate retry.
+			break
+		}
+		if !errors.As(err, &netErr) && !errors.Is(err, lookuperror.ErrorWhoisTimeout) && !errors.Is(err, lookuperror.ErrorDnsTimeout) && !errors.Is(err, lookuperror.ErrorRateLimited) && !errors.Is(err, context.DeadlineExceeded) {
 			break
 		}
 		if attempt < retries {
