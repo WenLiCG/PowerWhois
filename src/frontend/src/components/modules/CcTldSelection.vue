@@ -1,32 +1,16 @@
 <template>
-    <q-item class="q-py-sm q-px-none">
-        <q-item-section side class="text-weight-bold text-grey-9" style="min-width: 84px">
-            <div>后缀变体</div>
-            <div class="row q-gutter-xs q-mt-xs">
-                <q-btn flat dense no-caps size="xs" color="primary" label="全选" :disable="disable" style="min-height: 22px" @click="selectedTlds = [...tldOptions]" />
-                <q-btn flat dense no-caps size="xs" color="grey-7" label="清空" :disable="disable" style="min-height: 22px" @click="selectedTlds = []" />
-            </div>
-        </q-item-section>
-        <q-item-section>
-            <div class="flex justify-left items-center q-gutter-sm">
-                <q-checkbox :disable="disable" v-model="selectedTlds" :val="tld" :label="tld" color="primary" v-for="tld in tldOptions" :key="tld" />
-                <q-input
-                    dense
-                    outlined
-                    :disable="disable"
-                    v-model="inputTld"
-                    label="添加后缀"
-                    placeholder="例如 io 或 co.uk"
-                    style="width: 190px"
-                    @keydown.enter.prevent="addTld"
-                >
-                    <template v-slot:after>
-                        <q-btn aria-label="添加后缀" dense unelevated icon="add" color="primary" :disable="disable || !inputTld" @click="addTld" />
-                    </template>
-                </q-input>
-            </div>
-        </q-item-section>
-    </q-item>
+    <div class="suffix-editor">
+        <div class="input-tools">
+            <q-btn flat dense no-caps label="全选" aria-label="全选后缀" :disable="disable" @click="selectedTlds = [...tldOptions]" />
+            <q-btn flat dense no-caps label="清空" aria-label="清空后缀" :disable="disable" @click="selectedTlds = []" />
+        </div>
+        <div class="choice-options">
+            <q-checkbox v-for="tld in tldOptions" :key="tld" v-model="selectedTlds" :val="tld" :label="tld" dense color="primary" :disable="disable" />
+        </div>
+        <q-input dense outlined :disable="disable" v-model="inputTld" label="添加后缀" placeholder="例如 io 或 co.uk" @keydown.enter.prevent="addTld">
+            <template #append><q-btn aria-label="添加后缀" flat dense round icon="add" color="primary" :disable="disable || !inputTld" @click="addTld" /></template>
+        </q-input>
+    </div>
 </template>
 
 <script setup>

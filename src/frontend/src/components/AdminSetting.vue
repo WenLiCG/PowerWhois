@@ -1,23 +1,25 @@
 <template>
     <div v-if="settings">
-        <div class="row items-center justify-between q-mb-md q-gutter-sm">
+        <header class="page-heading settings-header">
             <div>
-                <div class="text-h6 text-weight-bold text-grey-9">系统管理设置</div>
-                <div class="text-caption text-grey-7">
-                    管理员密码至少 12 位，登录有效期 1–30 天；由服务端环境变量托管的凭据需在服务端修改并重启。
-                </div>
+                <h1>系统设置</h1>
+                <p>调整管理员账户、查询限额和服务接口。修改后请保存配置。</p>
             </div>
-            <div class="row q-gutter-sm">
-                <q-btn outline no-caps size="sm" color="grey-8" icon="refresh" label="放弃修改并重新读取" :disable="submitting" @click="getSettings" />
-                <q-btn unelevated no-caps size="sm" color="primary" icon="save" label="保存配置" :loading="submitting" @click="onSubmit" />
+            <div class="settings-actions">
+                <q-btn flat no-caps color="primary" icon="refresh" label="放弃修改并重新读取" :disable="submitting || loadingSettings" @click="getSettings" />
+                <q-btn unelevated no-caps color="primary" icon="save" label="保存配置" form="powerwhois-settings" type="submit" :loading="submitting" :disable="loadingSettings" />
             </div>
-        </div>
+        </header>
+        <p v-if="loadFailed" class="settings-warning" role="alert">重新读取失败，已保留当前表单。请检查连接后重试。</p>
+        <nav class="settings-nav" aria-label="设置目录">
+            <a v-for="section in sections" :key="section.id" :href="'#' + section.id" @click.prevent="focusSection(section.id)">{{ section.name }}</a>
+        </nav>
 
-        <q-form @validation-error="showValidationError" @submit="onSubmit" ref="settingForm">
+        <q-form id="powerwhois-settings" @validation-error="showValidationError" @submit="onSubmit">
             <!-- 管理员与日志 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="q-py-sm bg-grey-1">
-                    <div class="text-subtitle2 text-weight-bold">管理员认证与系统日志</div>
+                <q-card-section class="settings-section">
+                    <h2 id="settings-account" tabindex="-1">账户与日志</h2>
                 </q-card-section>
                 <q-separator />
                 <q-card-section>
@@ -28,6 +30,12 @@
                                 outlined
                                 dense
                                 v-model="settings.authUsername"
+                                name="username"
+                                for="settings-username"
+                                autocomplete="username"
+                                autocapitalize="none"
+                                autocorrect="off"
+                                :spellcheck="false"
                                 label="管理员用户名"
                                 aria-label="管理员用户名"
                                 :disable="settings.secrets?.authUsername?.managed"
@@ -63,59 +71,53 @@
                                 :options="logLevelOptions"
                             />
                         </div>
-                        <div class="col-12 col-md-4">
-                            <q-select
-                                outlined
-                                dense
-                                v-model="settings.secretActions.authPassword"
-                                :options="[
-                                    { label: '保持原密码', value: 'keep' },
-                                    { label: '更换密码', value: 'set' }
-                                ]"
-                                emit-value
-                                map-options
-                                label="管理员密码操作"
-                                :disable="settings.secrets?.authPassword?.managed"
-                                :hint="settings.secrets?.authPassword?.managed ? '由环境变量 POWERWHOIS_ADMIN_PASSWORD 托管' : '原密码不回显'"
-                            />
+                    </div>
+                    <div class="password-controls">
+                        <div>
+                            <div class="text-body2 text-weight-bold">管理员密码</div>
+                            <p v-if="settings.secrets?.authPassword?.managed">密码由服务端环境变量托管。</p>
+                            <p v-else-if="settings.secretActions.authPassword === 'set'">保存新密码后，所有管理员会话都需要重新登录。</p>
+                            <p v-else>保存其他配置时会保留当前密码。</p>
                         </div>
-                        <div class="col-12 col-md-8">
-                            <q-input
-                                :type="showAdminPassword ? 'text' : 'password'"
-                                outlined
-                                dense
-                                v-model="settings.authPassword"
-                                label="新管理员密码"
-                                aria-label="管理员密码"
-                                :disable="settings.secrets?.authPassword?.managed || settings.secretActions.authPassword !== 'set'"
-                                minlength="12"
-                                hint="仅选择“更换密码”时填写，至少 12 个字符"
-                                :rules="[
-                                    (v) =>
-                                        settings.secretActions.authPassword !== 'set' ||
-                                        (typeof v === 'string' && v.length >= 12) ||
-                                        '新管理员密码至少需要 12 个字符'
-                                ]"
-                            >
-                                <template #append>
-                                    <q-btn
-                                        v-if="settings.secretActions.authPassword === 'set'"
-                                        flat
-                                        round
-                                        dense
-                                        tabindex="-1"
-                                        :icon="showAdminPassword ? 'visibility_off' : 'visibility'"
-                                        @click="showAdminPassword = !showAdminPassword"
-                                    />
-                                </template>
-                            </q-input>
-                        </div>
+                        <q-btn v-if="!settings.secrets?.authPassword?.managed" outline no-caps color="primary"
+                            :label="settings.secretActions.authPassword === 'set' ? '取消更换' : '更换密码'"
+                            :aria-expanded="settings.secretActions.authPassword === 'set'"
+                            :disable="submitting" @click="togglePassword"
+                        />
+                    </div>
+                    <div v-if="settings.secretActions.authPassword === 'set'" class="new-password">
+                        <q-input
+                            ref="passwordField"
+                            for="settings-new-password"
+                            name="new-password"
+                            autocomplete="new-password"
+                            required
+                            :type="showAdminPassword ? 'text' : 'password'"
+                            outlined
+                            dense
+                            v-model="settings.authPassword"
+                            label="新管理员密码"
+                            aria-label="新管理员密码"
+                            :rules="[(value) => !!value?.trim() || '请输入非空白的新密码，或取消更换以保留当前密码']"
+                        >
+                            <template #append>
+                                <q-btn
+                                    flat
+                                    round
+                                    dense
+                                    type="button"
+                                    :aria-label="showAdminPassword ? '隐藏新密码' : '显示新密码'"
+                                    :icon="showAdminPassword ? 'visibility_off' : 'visibility'"
+                                    @click="showAdminPassword = !showAdminPassword"
+                                />
+                            </template>
+                        </q-input>
                     </div>
 
                     <q-separator class="q-my-md" />
 
                     <div class="row items-center justify-between q-gutter-sm">
-                        <div class="text-caption text-grey-7">下载打包的运行日志（ZIP）或清空当前日志文件</div>
+                        <div class="text-body2 text-weight-medium">运行日志</div>
                         <div class="row q-gutter-sm">
                             <q-btn
                                 outline
@@ -139,9 +141,9 @@
 
             <!-- 各协议查询限制 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="q-py-sm bg-grey-1">
-                    <div class="text-subtitle2 text-weight-bold">协议并发、速率与超时参数</div>
-                    <div class="text-caption text-grey-7">全局并发在所有任务间共享；每上游速率独立控制并遵循 Retry-After 冷却。</div>
+                <q-card-section class="settings-section">
+                    <h2 id="settings-protocol" tabindex="-1">协议并发、速率与超时</h2>
+                    <p>所有任务共享协议并发。各上游单独限速，并遵循其 Retry-After 冷却时间。</p>
                 </q-card-section>
                 <q-separator />
                 <q-card-section>
@@ -251,8 +253,8 @@
 
             <!-- 任务与网页并发上限 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="q-py-sm bg-grey-1">
-                    <div class="text-subtitle2 text-weight-bold">网页与批量任务规模上限</div>
+                <q-card-section class="settings-section">
+                    <h2 id="settings-limits" tabindex="-1">网页与批量任务上限</h2>
                 </q-card-section>
                 <q-separator />
                 <q-card-section>
@@ -312,10 +314,10 @@
 
             <!-- SOCKS5 代理与后缀路由 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="row items-center justify-between q-py-sm bg-grey-1 q-gutter-xs">
+                <q-card-section class="settings-section row items-center justify-between">
                     <div>
                         <div class="row items-center q-gutter-xs">
-                            <span class="text-subtitle2 text-weight-bold">SOCKS5 代理与后缀分流策略</span>
+                            <h2 id="settings-proxy" tabindex="-1">SOCKS5 代理与后缀分流</h2>
                             <q-badge
                                 v-if="settings.socketProxyHost && settings.socketProxyPort > 0"
                                 outline
@@ -332,9 +334,7 @@
                                 {{ settings.secrets?.socketProxyPassword?.configured ? "已保存代理密码" : "尚未保存代理密码" }}
                             </q-badge>
                         </div>
-                        <div class="text-caption text-grey-7">
-                            仅支持 SOCKS5 协议（含远程域名解析）；请填写主机名或 IP（不含 http://），例如 Bright Data 的 SOCKS5 端口为 22228（非 HTTP 端口 44445）。
-                        </div>
+                        <p>填写 SOCKS5 主机名或 IP 和端口。域名由代理远程解析。</p>
                     </div>
                     <q-btn
                         outline
@@ -462,7 +462,8 @@
                                         flat
                                         round
                                         dense
-                                        tabindex="-1"
+                                        type="button"
+                                        :aria-label="showProxyPassword ? '隐藏代理密码' : '显示代理密码'"
                                         :icon="showProxyPassword ? 'visibility_off' : 'visibility'"
                                         @click="showProxyPassword = !showProxyPassword"
                                     />
@@ -519,8 +520,8 @@
 
             <!-- Typo 查询参数 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="q-py-sm bg-grey-1">
-                    <div class="text-subtitle2 text-weight-bold">Typo 默认后缀与替换词</div>
+                <q-card-section class="settings-section">
+                    <h2 id="settings-typo" tabindex="-1">Typo 默认后缀与替换词</h2>
                 </q-card-section>
                 <q-separator />
                 <q-card-section>
@@ -539,7 +540,7 @@
                             @keydown.enter.prevent="addCcTld"
                         >
                             <template v-slot:after>
-                                <q-btn dense unelevated icon="add" color="primary" :disable="!inputCcTld" @click="addCcTld" />
+                                <q-btn dense unelevated icon="add" aria-label="添加后缀" color="primary" :disable="!inputCcTld" @click="addCcTld" />
                             </template>
                         </q-input>
                     </div>
@@ -563,10 +564,10 @@
 
             <!-- 注册接口设定 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="row items-center q-py-sm bg-grey-1">
+                <q-card-section class="settings-section row items-center">
                     <div>
-                        <div class="text-subtitle2 text-weight-bold">自定义注册商接口</div>
-                        <div class="text-caption text-grey-7">仅在管理员手动确认注册时调用；接口 URL 中的密钥不回显</div>
+                        <h2 id="settings-register" tabindex="-1">自定义注册商接口</h2>
+                        <p>管理员确认注册后才会调用接口。保存过的地址会隐藏。</p>
                     </div>
                     <q-space />
                     <q-btn unelevated no-caps color="primary" size="sm" icon="add" label="添加注册接口" @click="openAddRegisterApiDialog()" />
@@ -616,10 +617,10 @@
 
             <!-- 自定义 Whois 接口设定 -->
             <q-card flat class="workspace-card q-mb-md">
-                <q-card-section class="row items-center q-py-sm bg-grey-1">
+                <q-card-section class="settings-section row items-center">
                     <div>
-                        <div class="text-subtitle2 text-weight-bold">自定义 WHOIS 查询接口</div>
-                        <div class="text-caption text-grey-7">可在网页、批量任务、CLI 与 MCP 中按接口名称调用</div>
+                        <h2 id="settings-whois" tabindex="-1">自定义 WHOIS 查询接口</h2>
+                        <p>网页、批量任务、CLI 和 MCP 均可按名称调用。</p>
                     </div>
                     <q-space />
                     <q-btn unelevated no-caps color="primary" size="sm" icon="add" label="添加查询接口" @click="openAddWhoisApiDialog()" />
@@ -669,7 +670,7 @@
 
             <div class="row q-col-gutter-sm q-py-md">
                 <div class="col">
-                    <q-btn unelevated no-caps color="primary" class="full-width" icon="save" label="保存全部系统配置" type="submit" :loading="submitting">
+                    <q-btn unelevated no-caps color="primary" class="full-width" icon="save" label="保存全部系统配置" type="submit" :loading="submitting" :disable="loadingSettings">
                         <template v-slot:loading>
                             <q-spinner-dots />
                         </template>
@@ -746,7 +747,7 @@
                                 :placeholder="`成功标识 #${index + 1}`"
                                 :rules="[$rules.required('不能为空')]"
                             />
-                            <q-btn round flat dense color="negative" icon="close" @click="removeSuccessText(index)" />
+                            <q-btn round flat dense color="negative" icon="close" :aria-label="`移除成功标识 ${index + 1}`" @click="removeSuccessText(index)" />
                         </div>
                     </div>
                     <div>
@@ -763,7 +764,7 @@
                                 :placeholder="`失败标识 #${index + 1}`"
                                 :rules="[$rules.required('不能为空')]"
                             />
-                            <q-btn round flat dense color="negative" icon="close" @click="removeFailText(index)" />
+                            <q-btn round flat dense color="negative" icon="close" :aria-label="`移除失败标识 ${index + 1}`" @click="removeFailText(index)" />
                         </div>
                     </div>
                 </q-card-section>
@@ -838,7 +839,7 @@
                                 :placeholder="`未找到标识 #${index + 1}`"
                                 :rules="[$rules.required('不能为空')]"
                             />
-                            <q-btn round flat dense color="negative" icon="close" @click="removeFreeText(index)" />
+                            <q-btn round flat dense color="negative" icon="close" :aria-label="`移除未找到标识 ${index + 1}`" @click="removeFreeText(index)" />
                         </div>
                     </div>
                     <div>
@@ -855,7 +856,7 @@
                                 :placeholder="`已注册标识 #${index + 1}`"
                                 :rules="[$rules.required('不能为空')]"
                             />
-                            <q-btn round flat dense color="negative" icon="close" @click="removeTakenText(index)" />
+                            <q-btn round flat dense color="negative" icon="close" :aria-label="`移除已注册标识 ${index + 1}`" @click="removeTakenText(index)" />
                         </div>
                     </div>
                 </q-card-section>
@@ -876,12 +877,26 @@ defineOptions({
     name: "AdminSetting"
 });
 
-import { ref, onMounted } from "vue";
+import { nextTick, ref, onMounted } from "vue";
 import { useQuasar, is, date } from "quasar";
 import { api } from "boot/axios";
 import { useSettingStore } from "src/stores/settingStore";
 
 const $q = useQuasar();
+const emit = defineEmits(["credentials-changed"]);
+const sections = [
+    { id: "settings-account", name: "账户与日志" },
+    { id: "settings-protocol", name: "协议参数" },
+    { id: "settings-limits", name: "任务上限" },
+    { id: "settings-proxy", name: "代理分流" },
+    { id: "settings-typo", name: "Typo" },
+    { id: "settings-register", name: "注册接口" },
+    { id: "settings-whois", name: "查询接口" }
+];
+
+function focusSection(id) {
+    document.getElementById(id)?.focus();
+}
 const protocolFields = [
     { key: "rdapTimeout", label: "RDAP 超时 / 秒", max: 120 },
     ...[
@@ -896,11 +911,11 @@ const protocolFields = [
 
 const settingStore = useSettingStore();
 
-const settingForm = ref(null);
-
 const settings = ref(null);
 let savedProxyHost = "";
+let savedUsername = "";
 const loadFailed = ref(false);
+const loadingSettings = ref(false);
 const logLevelOptions = ["Debug", "Info", "Warn", "Error", "Off"];
 
 const submitting = ref(false);
@@ -908,6 +923,7 @@ const downloadingLog = ref(false);
 const testingProxy = ref(false);
 const proxyTestResult = ref(null);
 const showAdminPassword = ref(false);
+const passwordField = ref(null);
 const showProxyPassword = ref(false);
 
 const ccTldOptions = ref([]);
@@ -961,7 +977,20 @@ const reservedWhoisApiNames = ref([
     "mixedQuery"
 ]);
 
+async function togglePassword() {
+    const change = settings.value.secretActions.authPassword !== "set";
+    settings.value.authPassword = "";
+    settings.value.secretActions.authPassword = change ? "set" : "keep";
+    showAdminPassword.value = false;
+    if (change) {
+        await nextTick();
+        passwordField.value?.focus();
+    }
+}
+
 function getSettings() {
+    if (loadingSettings.value || submitting.value) return;
+    loadingSettings.value = true;
     loadFailed.value = false;
     proxyTestResult.value = null;
     api.get("/admin/setting")
@@ -969,6 +998,8 @@ function getSettings() {
             if (response.data) {
                 settings.value = response.data;
                 savedProxyHost = response.data.socketProxyHost || "";
+                savedUsername = response.data.authUsername;
+                showAdminPassword.value = false;
                 settings.value.secretActions = { authPassword: "keep", jwtSecretKey: "keep", socketProxyPassword: "keep" };
                 settings.value.globalProxyTldsInput = settings.value.globalProxyTlds ? settings.value.globalProxyTlds.join("\n") : "";
                 settings.value.mixedProxyTldsInput = settings.value.mixedProxyTlds ? settings.value.mixedProxyTlds.join("\n") : "";
@@ -994,6 +1025,9 @@ function getSettings() {
         })
         .catch(() => {
             loadFailed.value = true;
+        })
+        .finally(() => {
+            loadingSettings.value = false;
         });
 }
 
@@ -1457,79 +1491,63 @@ function splitNonEmptyLines(text) {
         .filter(Boolean);
 }
 
-function onSubmit() {
-    settingForm.value.validate().then(async (success) => {
-        if (success) {
-            if (submitting.value) return;
-            submitting.value = true;
-
-            if (!settings.value.retryOnTimeout) {
-                if (!is.number(settings.value.retryInterval)) {
-                    settings.value.retryInterval = 0;
-                }
-                if (!is.number(settings.value.retryMax)) {
-                    settings.value.retryMax = 0;
-                }
-            }
-
-            settings.value.globalProxyTlds = splitNonEmptyLines(settings.value.globalProxyTldsInput);
-            settings.value.mixedProxyTlds = splitNonEmptyLines(settings.value.mixedProxyTldsInput);
-            settings.value.mixedDnsTlds = splitNonEmptyLines(settings.value.mixedDnsTldsInput);
-
-            settings.value.typoDefaultCcTlds = ccTldOptions.value.map((tld) => ({
-                tld: tld,
-                isSelected: selectedCcTlds.value.includes(tld)
-            }));
-
-            settings.value.typoCustomizedReplaces = splitNonEmptyLines(settings.value.typoCustomizedReplacesInput);
-
-            const cleanHost = (settings.value.socketProxyHost || "").trim();
-            const payload = {
-                ...settings.value,
-                secretActions: { ...settings.value.secretActions },
-                socketProxyHost: cleanHost,
-                socketProxyPort: cleanHost ? settings.value.socketProxyPort || 0 : 0,
-                socketProxyAuth: cleanHost ? Boolean(settings.value.socketProxyAuth) : false
-            };
-            if (!(await confirmProxyPasswordReuse(payload, false))) {
-                submitting.value = false;
-                return;
-            }
-            api.put("/admin/setting", payload)
-                .then((response) => {
-                    $q.notify({
-                        position: "top",
-                        type: "positive",
-                        message: "系统配置保存成功"
-                    });
-                    submitting.value = false;
-                    settings.value.socketProxyHost = response.data.socketProxyHost || "";
-                    savedProxyHost = settings.value.socketProxyHost;
-                    settings.value.socketProxyPort = response.data.socketProxyPort || 0;
-                    settings.value.socketProxyAuth = Boolean(response.data.socketProxyAuth);
-                    settings.value.authPassword = "";
-                    settings.value.socketProxyPassword = "";
-                    settings.value.jwtSecretKey = "";
-                    settings.value.secretActions = { authPassword: "keep", jwtSecretKey: "keep", socketProxyPassword: "keep" };
-                    settings.value.secrets = response.data.secrets;
-                    for (const key of ["whoisApis", "registerApis"]) settings.value[key] = response.data[key];
-                    settingStore.updateSetting(response.data);
-                })
-                .catch((error) => {
-                    $q.notify({
-                        position: "top",
-                        type: "negative",
-                        message:
-                            error.response?.status === 400 && typeof error.response.data === "string"
-                                ? "保存失败：" + error.response.data
-                                : "配置保存失败，请检查连接后重试"
-                    });
-                    submitting.value = false;
-                });
-        } else {
-            showValidationError();
+async function onSubmit() {
+    if (submitting.value || loadingSettings.value) return;
+    submitting.value = true;
+    try {
+        if (!settings.value.retryOnTimeout) {
+            if (!is.number(settings.value.retryInterval)) settings.value.retryInterval = 0;
+            if (!is.number(settings.value.retryMax)) settings.value.retryMax = 0;
         }
-    });
+
+        settings.value.globalProxyTlds = splitNonEmptyLines(settings.value.globalProxyTldsInput);
+        settings.value.mixedProxyTlds = splitNonEmptyLines(settings.value.mixedProxyTldsInput);
+        settings.value.mixedDnsTlds = splitNonEmptyLines(settings.value.mixedDnsTldsInput);
+        settings.value.typoDefaultCcTlds = ccTldOptions.value.map((tld) => ({
+            tld,
+            isSelected: selectedCcTlds.value.includes(tld)
+        }));
+        settings.value.typoCustomizedReplaces = splitNonEmptyLines(settings.value.typoCustomizedReplacesInput);
+
+        const cleanHost = (settings.value.socketProxyHost || "").trim();
+        const payload = {
+            ...settings.value,
+            secretActions: { ...settings.value.secretActions },
+            authPassword: settings.value.secretActions.authPassword === "set" ? settings.value.authPassword : "",
+            socketProxyHost: cleanHost,
+            socketProxyPort: cleanHost ? settings.value.socketProxyPort || 0 : 0,
+            socketProxyAuth: cleanHost ? Boolean(settings.value.socketProxyAuth) : false
+        };
+        if (!(await confirmProxyPasswordReuse(payload, false))) return;
+        const { data } = await api.put("/admin/setting", payload);
+        settings.value.socketProxyHost = data.socketProxyHost || "";
+        savedProxyHost = settings.value.socketProxyHost;
+        settings.value.socketProxyPort = data.socketProxyPort || 0;
+        settings.value.socketProxyAuth = Boolean(data.socketProxyAuth);
+        settings.value.authPassword = "";
+        settings.value.socketProxyPassword = "";
+        settings.value.jwtSecretKey = "";
+        settings.value.secretActions = { authPassword: "keep", jwtSecretKey: "keep", socketProxyPassword: "keep" };
+        settings.value.secrets = data.secrets;
+        for (const key of ["whoisApis", "registerApis"]) settings.value[key] = data[key];
+        if (payload.secretActions.authPassword === "set" || data.authUsername !== savedUsername) {
+            emit("credentials-changed");
+            return;
+        }
+        settingStore.updateSetting(data);
+        $q.notify({ position: "top", type: "positive", message: "系统配置保存成功" });
+    } catch (error) {
+        $q.notify({
+            position: "top",
+            type: "negative",
+            message:
+                error.response?.status === 400 && typeof error.response.data === "string"
+                    ? "保存失败：" + error.response.data
+                    : "未收到保存结果，请检查连接后重试"
+        });
+    } finally {
+        submitting.value = false;
+    }
 }
 
 onMounted(() => {
@@ -1538,14 +1556,65 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.settings-header, .settings-actions, .password-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: .75rem;
+}
+.settings-header p, .password-controls p, .settings-section p {
+    color: #53645e;
+    line-height: 1.6;
+    margin: .25rem 0 0;
+}
+.settings-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem .875rem;
+    margin: 1rem 0;
+    border-block: 1px solid #d7dfd7;
+    padding: .375rem 0;
+}
+.settings-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    color: var(--q-primary);
+    text-underline-offset: .22em;
+}
+.settings-section {
+    gap: .75rem;
+}
+.settings-section h2 {
+    color: #182b27;
+    font-size: 1.075rem;
+    line-height: 1.4;
+    font-weight: 650;
+    letter-spacing: 0;
+    margin: 0;
+    scroll-margin-top: 6rem;
+}
+.password-controls {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #dee5df;
+}
+.new-password {
+    max-width: 33rem;
+    margin-top: 1rem;
+}
+.settings-warning {
+    color: #963c2c;
+}
 .api-editor {
     width: 38rem;
     max-width: 94vw;
 }
 .tld-pill {
     padding: 3px 6px 3px 8px;
-    border: 1px solid #d7e2ee;
+    border: 1px solid #d7dfd7;
     border-radius: 6px;
-    background: #f8fbff;
+    background: #f5f7f3;
 }
 </style>

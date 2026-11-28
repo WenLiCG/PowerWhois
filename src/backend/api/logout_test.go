@@ -168,7 +168,7 @@ func TestLogoutStopsQueuedRegistrationsAndKeepsInFlightResult(t *testing.T) {
 	if err := InitAuth(ctx, redis); err != nil || validAdminToken(token) {
 		t.Fatalf("logout did not survive reload: %v", err)
 	}
-	newToken, err := generateToken(cfg.AuthUsername)
+	newToken, err := generateToken(cfg)
 	if err != nil || !validAdminToken(newToken) {
 		t.Fatalf("new administrator token rejected: %v", err)
 	}

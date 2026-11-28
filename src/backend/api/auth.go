@@ -82,17 +82,15 @@ func Login(c *fiber.Ctx) error {
 	// Compare fixed-size digests in constant time to avoid leaking credential length or prefix.
 	userDigest := sha256.Sum256([]byte(login.Username))
 	expectedUser := sha256.Sum256([]byte(cfg.AuthUsername))
-	passDigest := sha256.Sum256([]byte(login.Password))
-	expectedPass := sha256.Sum256([]byte(cfg.AuthPassword))
 	userMatch := subtle.ConstantTimeCompare(userDigest[:], expectedUser[:]) == 1
-	passMatch := subtle.ConstantTimeCompare(passDigest[:], expectedPass[:]) == 1
+	passMatch := cfg.MatchesPassword(login.Password)
 	if !userMatch || !passMatch {
 		log.Warn("Login failed")
 		return c.SendStatus(fiber.StatusBadRequest) // Return a 400 status if the username or password is incorrect.
 	}
 
 	// Generate a JWT token with the username.
-	token, err := generateToken(login.Username)
+	token, err := generateToken(cfg)
 	if err != nil {
 		log.Error("Generate token error: ", err)
 		return c.SendStatus(fiber.StatusInternalServerError) // Return a 500 status if the token generation fails.
@@ -164,7 +162,7 @@ func ValidateToken(tokenString string) (bool, error) {
 	cfg := config.GetConfig()
 	claims := &adminClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(*jwt.Token) (any, error) {
-		return []byte(cfg.JwtSecretKey), nil
+		return cfg.AdminJWTKey(), nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
 	if err != nil {
 		return false, err
@@ -185,19 +183,8 @@ func jwtError(c *fiber.Ctx, err error) error {
 	return c.Status(401).JSON(fiber.Map{"status": "error", "message": err.Error()})
 }
 
-// generateToken creates a new JWT token for the given username.
-//
-// The token includes the username claim and expires after the configured number
-// of days (defaults to jwtDefaultExpireDays if not configured).
-//
-// Parameters:
-//   - username: The username to include in the token claims
-//
-// Returns:
-//   - string: The signed JWT token string
-//   - error: Error if token generation fails
-func generateToken(username string) (string, error) {
-	cfg := config.GetConfig()
+// Sign with the same credential snapshot that verified the password.
+func generateToken(cfg config.Config) (string, error) {
 
 	// Get the number of days the token is valid for.
 	// If the AuthExpireDays config value is not set, use the default value of jwtDefaultExpireDays.
@@ -210,7 +197,7 @@ func generateToken(username string) (string, error) {
 
 	// Create the Claims
 	claims := adminClaims{
-		Name:       username,
+		Name:       cfg.AuthUsername,
 		Generation: authGeneration.Load(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24 * time.Duration(jwtExp))),
@@ -221,7 +208,7 @@ func generateToken(username string) (string, error) {
 	tokenObj := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 	// Generate encoded token and send it as response.
-	token, err := tokenObj.SignedString([]byte(cfg.JwtSecretKey))
+	token, err := tokenObj.SignedString(cfg.AdminJWTKey())
 	if err != nil {
 		// Log the error if the token generation fails.
 		log.Error("Generate token error: ", err)

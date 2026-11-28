@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """VPS attachment regression. No registration; preserves prior tasks and writes a JSON report.
 Run: python3 attachment_acceptance.py FIXTURE_DIR
+After a Web password change, supply the current POWERWHOIS_ADMIN_PASSWORD in the process environment.
 Requires web-cases.json, typo-comparison.json, original.txt and txt-valid-unique.txt.
 Web means its real HTTP/WebSocket contracts, not a browser UI session.
 """
@@ -90,7 +91,7 @@ try:
  cases=json.loads((ROOT/'web-cases.json').read_text());typos=json.loads((ROOT/'typo-comparison.json').read_text())
  prior=request('/api/v1/tasks?limit=100')['items'];report['priorTaskIds']=[t['id'] for t in prior]
  assert not any(t['state'] in ['queued','running'] for t in prior),'existing task active; defer live suite'
- admin=request('/api/login',{'username':ENV['POWERWHOIS_ADMIN_USER'],'password':ENV['POWERWHOIS_ADMIN_PASSWORD']})['token']
+ admin=request('/api/login',{'username':ENV['POWERWHOIS_ADMIN_USER'],'password':os.environ.get('POWERWHOIS_ADMIN_PASSWORD', ENV.get('POWERWHOIS_ADMIN_PASSWORD', ''))})['token']
  config=request('/api/admin/setting',token=admin)
  check('live DNS/WHOIS/Web defaults are 15',all(config[k]==15 for k in ['dnsConcurrency','whoisConcurrency','webCheckConcurrencyLimit']))
  report['protocolLimits']={k:config[k] for k in ['dnsConcurrency','whoisConcurrency','webCheckConcurrencyLimit','rdapConcurrency','dnsRate','whoisRate','rdapRate']}

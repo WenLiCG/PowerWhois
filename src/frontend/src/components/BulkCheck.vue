@@ -1,12 +1,12 @@
 <template>
     <section class="batch-workspace">
-        <div class="section-heading">
+        <header class="page-heading page-heading-actions">
             <div>
-                <h2>持久化批量任务</h2>
-                <p>关闭浏览器后仍会在服务端继续执行。Web、CLI、HTTP API 与 MCP 共用同一任务历史。</p>
+                <h1>批量任务</h1>
+                <p>上传域名清单后由服务器持续查询。可随时返回查看进度、暂停或导出结果。</p>
             </div>
             <q-btn outline no-caps color="primary" icon="refresh" label="刷新列表" :loading="refreshing" @click="refresh" />
-        </div>
+        </header>
         <q-banner v-if="error" class="bg-red-1 text-negative q-mb-md rounded-borders" role="alert"
             >{{ error }}<template #action><q-btn flat no-caps label="关闭提示" @click="error = ''" /></template
         ></q-banner>
@@ -14,23 +14,26 @@
             >{{ refreshError }}<template #action><q-btn flat no-caps label="重试刷新" @click="refresh" /></template
         ></q-banner>
 
-        <q-card flat class="workspace-card q-mb-md">
-            <q-expansion-item label="新建查询任务" icon="add_circle_outline" default-opened header-class="text-weight-bold text-grey-9">
+        <q-card flat class="workspace-card batch-create">
+            <q-expansion-item label="新建查询任务" icon="add_circle_outline" default-opened header-class="section-label">
                 <q-separator />
-                <q-form @submit.prevent="createTask" class="q-pa-md">
+                <q-form @submit.prevent="createTask" class="batch-form">
+                    <div class="batch-input-grid">
                     <q-file
                         outlined
                         v-model="file"
                         accept=".txt,text/plain"
                         label="选择域名 TXT 文件"
-                        hint="每行一个纯域名，服务端自动规范化与去重；单批最多 100 万个域名，文件不超过 50 MB。"
+                        hint="每行一个域名，最多 100 万行，文件不超过 50 MB。"
                         clearable
                         :disable="creating"
                     >
                         <template #prepend><q-icon name="upload_file" /></template>
                     </q-file>
                     <WhoisSelection v-model:queryType="mode" :disable="creating" />
-                    <div class="batch-options q-mt-sm">
+                    </div>
+                    <details class="batch-advanced"><summary>并发、超时与重试</summary>
+                    <div class="batch-options">
                         <q-input
                             outlined
                             dense
@@ -44,13 +47,17 @@
                         />
                         <q-input outlined dense type="number" v-model.number="timeout" label="单域名总时限 / 秒" min="1" max="120" />
                         <q-input outlined dense type="number" v-model.number="retries" label="瞬时失败重试次数" min="0" max="5" />
+                    </div>
+                    </details>
+                    <div class="form-action-bar"><span class="action-summary">{{ file ? file.name : "尚未选择文件" }}</span>
                         <q-btn unelevated no-caps color="primary" type="submit" icon="play_arrow" label="创建并启动任务" :disable="!file" :loading="creating" />
                     </div>
                 </q-form>
             </q-expansion-item>
         </q-card>
 
-        <q-card flat class="workspace-card q-pa-md">
+        <q-card flat class="workspace-card batch-history-card">
+            <div class="result-title"><h2>任务历史</h2></div>
             <div class="batch-history">
                 <q-select
                     outlined
@@ -95,10 +102,13 @@
                         重查自 {{ task.parentTaskId.slice(0, 8) }}…
                     </q-badge>
                 </div>
-                <p class="text-grey-8 q-mt-sm q-mb-sm">
-                    模式：<strong>{{ modeLabels[task.mode] || task.mode }}</strong> · 进度：<strong>{{ task.completed }} / {{ task.total }}</strong>（{{ progressPercent }}%） · 并发 {{ task.concurrency }} · 超时 {{ task.timeout }}s · 创建于 {{ new Date(task.createdAt).toLocaleString() }}
-                </p>
-                <q-linear-progress :value="task.total ? task.completed / task.total : 0" size="10px" rounded color="primary" aria-label="批量查询进度" />
+                <dl class="task-facts">
+                    <div><dt>进度</dt><dd>{{ task.completed }} / {{ task.total }}（{{ progressPercent }}%）</dd></div>
+                    <div><dt>方式</dt><dd>{{ modeLabels[task.mode] || task.mode }}</dd></div>
+                    <div><dt>并发 / 时限</dt><dd>{{ task.concurrency }} / {{ task.timeout }} 秒</dd></div>
+                    <div><dt>创建时间</dt><dd>{{ formatDateTime(task.createdAt) }}</dd></div>
+                </dl>
+                <q-linear-progress :value="task.total ? task.completed / task.total : 0" size="6px" rounded color="primary" aria-label="批量查询进度" />
 
                 <div v-if="resultOffset > 0 || nextResultOffset >= 0" class="row q-gutter-x-sm text-caption text-grey-8 q-mt-sm">
                     <strong>整个任务</strong>
@@ -110,36 +120,17 @@
                         outlined
                         clearable
                         v-model="pageDomainFilter"
-                        placeholder="搜索本页域名…"
+                        aria-label="搜索本页域名" placeholder="搜索本页域名…"
                         style="min-width: 200px; max-width: 260px"
                     >
                         <template #prepend><q-icon name="search" size="18px" /></template>
                     </q-input>
-                    <div class="result-counts" role="group" aria-label="筛选本页结果">
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="pageStatusFilter !== 'all'"
-                            color="primary"
-                            text-color="white"
-                            @click="pageStatusFilter = 'all'"
-                        >
-                            本页全部 {{ results.length }}
-                        </q-chip>
-                        <q-chip
-                            v-for="(label, key) in resultLabels"
-                            :key="key"
-                            clickable
-                            dense
-                            square
-                            :outline="pageStatusFilter !== key"
-                            :color="resultColors[key] || 'grey-7'"
-                            text-color="white"
-                            @click="pageStatusFilter = pageStatusFilter === key ? 'all' : key"
-                        >
-                            {{ label }} {{ pageCounts[key] || 0 }}
-                        </q-chip>
+                    <div class="status-filters" role="group" aria-label="筛选本页结果">
+                        <button type="button" :aria-pressed="pageStatusFilter === 'all'" @click="pageStatusFilter = 'all'">本页全部 <span>{{ results.length }}</span></button>
+                        <button v-for="(label, key) in resultLabels" :key="key" type="button" :aria-pressed="pageStatusFilter === key"
+                            @click="pageStatusFilter = pageStatusFilter === key ? 'all' : key">
+                            {{ label }} <span>{{ pageCounts[key] || 0 }}</span>
+                        </button>
                     </div>
                 </div>
 
@@ -204,7 +195,7 @@
                 </div>
 
                 <p class="text-caption text-grey-7 q-mb-sm">
-                    提示：未完成任务导出文件名带 <code>-partial</code>；分页按输入索引读取，点击域名可查看完整原始响应与注册期详情。
+                    点击域名查看详情与原始响应。未完成任务导出的文件名带 <code>-partial</code>。
                 </p>
 
                 <q-table
@@ -212,6 +203,8 @@
                     bordered
                     :rows="filteredPageResults"
                     :columns="columns"
+                    :visible-columns="$q.screen.lt.sm ? ['domain', 'status'] : undefined"
+                    aria-label="批量任务查询结果"
                     row-key="domain"
                     :pagination="{ rowsPerPage: 0 }"
                     hide-pagination
@@ -409,7 +402,7 @@ const taskOptions = computed(() =>
     }))
 );
 const columns = [
-    { name: "domain", label: "域名（点击查看原文）", field: "domain", align: "left" },
+    { name: "domain", label: "域名", field: "domain", align: "left" },
     { name: "status", label: "结果", field: "status", align: "left" },
     { name: "lookupType", label: "协议", field: "lookupType", align: "left" },
     { name: "expiryDate", label: "到期日", field: "expiryDate", align: "left" },
@@ -684,22 +677,9 @@ h3 {
     font-weight: 600;
     margin: 0;
 }
-.section-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 16px;
-}
-.section-heading p {
-    color: #53677b;
-    font-size: 13.5px;
-    line-height: 1.6;
-    margin: 4px 0 0;
-}
 .batch-options {
     display: grid;
-    grid-template-columns: repeat(3, minmax(110px, 1fr)) auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
     align-items: start;
 }
@@ -720,7 +700,7 @@ h3 {
 }
 .task-title code {
     font-size: 12.5px;
-    background: #f1f5f9;
+    background: var(--tint);
     padding: 2px 8px;
     border-radius: 4px;
     overflow-wrap: anywhere;
@@ -738,11 +718,10 @@ h3 {
     gap: 10px;
     margin: 14px 0;
 }
-.result-counts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
+.result-filter-row .status-filters { margin: 0; }
+.task-facts { display: flex; flex-wrap: wrap; gap: 12px 36px; margin: 15px 0 12px; }
+.task-facts dt { color: var(--muted); font-size: 12px; }
+.task-facts dd { margin: 2px 0 0; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .result-pager {
     display: flex;
     align-items: center;
@@ -751,7 +730,7 @@ h3 {
     padding: 14px 0 2px;
 }
 .empty-state {
-    color: #53677b;
+    color: var(--muted);
     padding: 28px 4px;
     margin: 0;
     line-height: 1.7;
@@ -760,20 +739,9 @@ h3 {
     width: 800px;
     max-width: 94vw;
 }
-.detail-meta {
-    display: grid;
-    gap: 4px;
-    color: #33475b;
-}
 @media (max-width: 600px) {
     .batch-options {
         grid-template-columns: 1fr 1fr;
-    }
-    .batch-options .q-btn {
-        grid-column: 1 / -1;
-    }
-    .section-heading {
-        flex-direction: column;
     }
     .result-pager {
         flex-wrap: wrap;

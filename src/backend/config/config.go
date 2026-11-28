@@ -1,9 +1,13 @@
 package config
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"github.com/spf13/viper"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/net/idna"
 	"gopkg.in/yaml.v3"
 	"net/url"
@@ -18,9 +22,10 @@ import (
 var mu sync.RWMutex
 var configFile string
 var changeHooks []func()
-var config = Config{LogLevel: "Info", WhoisTimeout: 5, DnsTimeout: 3, RdapTimeout: 10,
+var defaults = Config{LogLevel: "Info", WhoisTimeout: 5, DnsTimeout: 3, RdapTimeout: 10,
 	DnsConcurrency: 15, WhoisConcurrency: 15, RdapConcurrency: 4, DnsRate: 20, WhoisRate: 2, RdapRate: 4,
 	WebCheckConcurrencyLimit: 15, WebCheckDomainLimit: 500, BulkCheckConcurrencyLimit: 32, RetryMax: 2, RetryInterval: 1, AuthExpireDays: 1}
+var config = defaults
 
 // RegisterChangeHook registers a callback invoked after configuration loads or updates.
 func RegisterChangeHook(fn func()) {
@@ -44,10 +49,11 @@ func notifyChangeHooks() {
 type Config struct {
 	LogLevel string `json:"logLevel"` //日志等级
 
-	AuthUsername   string `json:"authUsername"`   //认证账号
-	AuthPassword   string `json:"authPassword"`   //认证密码
-	AuthExpireDays int    `json:"authExpireDays"` //认证有效期
-	JwtSecretKey   string `json:"jwtSecretKey"`   //JWT密钥
+	AuthUsername     string `json:"authUsername"`   //认证账号
+	AuthPassword     string `json:"authPassword"`   //认证密码
+	AuthExpireDays   int    `json:"authExpireDays"` //认证有效期
+	JwtSecretKey     string `json:"jwtSecretKey"`   //JWT密钥
+	authPasswordHash string // File-only override created by an explicit administrator password change.
 
 	RdapTimeout      int `json:"rdapTimeout"`
 	DnsConcurrency   int `json:"dnsConcurrency"`
@@ -114,14 +120,25 @@ func Load(path string) error {
 	if err := v.ReadInConfig(); err != nil {
 		return err
 	}
-	next := GetConfig()
+	next := defaults
 	if err := v.Unmarshal(&next); err != nil {
 		return err
 	}
-	for key, dst := range map[string]*string{"POWERWHOIS_ADMIN_USER": &next.AuthUsername, "POWERWHOIS_ADMIN_PASSWORD": &next.AuthPassword, "POWERWHOIS_JWT_SECRET": &next.JwtSecretKey} {
+	for key, dst := range map[string]*string{"POWERWHOIS_ADMIN_USER": &next.AuthUsername, "POWERWHOIS_JWT_SECRET": &next.JwtSecretKey} {
 		if value := os.Getenv(key); value != "" {
 			*dst = value
 		}
+	}
+	next.authPasswordHash = v.GetString("authPasswordHash")
+	if next.authPasswordHash != "" {
+		if _, err := bcrypt.Cost([]byte(next.authPasswordHash)); err != nil {
+			return fmt.Errorf("invalid stored administrator password hash")
+		}
+		next.AuthPassword = ""
+	} else if seed := os.Getenv("POWERWHOIS_ADMIN_PASSWORD"); seed != "" {
+		next.AuthPassword = seed
+	} else if strings.TrimSpace(next.AuthPassword) == "123456" {
+		return fmt.Errorf("replace the historical configuration template password or set POWERWHOIS_ADMIN_PASSWORD")
 	}
 	next.normalizeProxy()
 	next.normalizeRoutingTLDs()
@@ -137,6 +154,27 @@ func Load(path string) error {
 	return nil
 }
 func GetConfig() Config { mu.RLock(); defer mu.RUnlock(); return clone(config) }
+
+func (c Config) MatchesPassword(password string) bool {
+	digest := sha256.Sum256([]byte(password))
+	if c.authPasswordHash != "" {
+		return bcrypt.CompareHashAndPassword([]byte(c.authPasswordHash), digest[:]) == nil
+	}
+	legacy := sha256.Sum256([]byte(c.AuthPassword))
+	return c.AuthPassword != "" && subtle.ConstantTimeCompare(digest[:], legacy[:]) == 1
+}
+
+// AdminJWTKey preserves existing sessions until a password change publishes a new salted hash.
+func (c Config) AdminJWTKey() []byte {
+	key := []byte(c.JwtSecretKey)
+	if c.authPasswordHash == "" {
+		return key
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(c.authPasswordHash))
+	return mac.Sum(nil)
+}
+
 func clone(c Config) Config {
 	c.GlobalProxyTlds = slices.Clone(c.GlobalProxyTlds)
 	c.MixedDnsTlds = slices.Clone(c.MixedDnsTlds)
@@ -165,9 +203,8 @@ func PublicSettings() map[string]interface{} {
 	status := map[string]interface{}{
 		"authUsername": map[string]bool{"configured": c.AuthUsername != "", "managed": os.Getenv("POWERWHOIS_ADMIN_USER") != ""},
 	}
-	for key, value := range map[string]string{"authPassword": c.AuthPassword, "jwtSecretKey": c.JwtSecretKey, "socketProxyPassword": c.SocketProxyPassword} {
-		env := map[string]string{"authPassword": "POWERWHOIS_ADMIN_PASSWORD", "jwtSecretKey": "POWERWHOIS_JWT_SECRET"}[key]
-		status[key] = map[string]bool{"configured": value != "", "managed": env != "" && os.Getenv(env) != ""}
+	for key, configured := range map[string]bool{"authPassword": c.AuthPassword != "" || c.authPasswordHash != "", "jwtSecretKey": c.JwtSecretKey != "", "socketProxyPassword": c.SocketProxyPassword != ""} {
+		status[key] = map[string]bool{"configured": configured, "managed": key == "jwtSecretKey" && os.Getenv("POWERWHOIS_JWT_SECRET") != ""}
 		out[key] = ""
 	}
 	for _, key := range []string{"whoisApis", "registerApis"} {
@@ -197,8 +234,8 @@ func Validate(c Config) error {
 	if c.WebCheckDomainLimit < 1 || c.WebCheckDomainLimit > 10000 {
 		return fmt.Errorf("web domain limit must be 1..10000")
 	}
-	if c.AuthUsername == "" || len(c.AuthPassword) < 12 || len(c.JwtSecretKey) < 32 {
-		return fmt.Errorf("configure administrator credentials (password >=12, JWT secret >=32 characters)")
+	if c.AuthUsername == "" || (strings.TrimSpace(c.AuthPassword) == "" && c.authPasswordHash == "") || len(c.JwtSecretKey) < 32 {
+		return fmt.Errorf("configure an administrator username, a nonblank password and a JWT secret of at least 32 characters")
 	}
 	if c.AuthExpireDays < 1 || c.AuthExpireDays > 30 {
 		return fmt.Errorf("auth expiry must be 1..30 days")
@@ -252,6 +289,8 @@ func validAPI(address string, positive, negative []string) bool {
 func UpdateConfig(next Config, secretActions ...map[string]string) error {
 	mu.Lock()
 	defer mu.Unlock()
+	next.authPasswordHash = config.authPasswordHash
+	setPassword := false
 	if len(secretActions) > 0 {
 		for key, pair := range map[string][2]*string{"authPassword": {&next.AuthPassword, &config.AuthPassword}, "jwtSecretKey": {&next.JwtSecretKey, &config.JwtSecretKey}, "socketProxyPassword": {&next.SocketProxyPassword, &config.SocketProxyPassword}} {
 			switch secretActions[0][key] {
@@ -261,7 +300,13 @@ func UpdateConfig(next Config, secretActions ...map[string]string) error {
 				if *pair[0] == "" {
 					return fmt.Errorf("%s replacement is empty", key)
 				}
+				if key == "authPassword" {
+					setPassword = true
+				}
 			case "clear":
+				if key == "authPassword" {
+					return fmt.Errorf("administrator password cannot be cleared")
+				}
 				*pair[0] = ""
 			default:
 				return fmt.Errorf("invalid secret action for %s", key)
@@ -286,7 +331,20 @@ func UpdateConfig(next Config, secretActions ...map[string]string) error {
 			}
 		}
 	}
-	for env, value := range map[string]string{"POWERWHOIS_ADMIN_USER": next.AuthUsername, "POWERWHOIS_ADMIN_PASSWORD": next.AuthPassword, "POWERWHOIS_JWT_SECRET": next.JwtSecretKey} {
+	if setPassword || next.AuthPassword != config.AuthPassword {
+		if strings.TrimSpace(next.AuthPassword) == "" {
+			return fmt.Errorf("administrator password must not be blank")
+		}
+		// A fixed-size input retains every byte of long passwords beyond bcrypt's 72-byte limit.
+		digest := sha256.Sum256([]byte(next.AuthPassword))
+		hash, err := bcrypt.GenerateFromPassword(digest[:], bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		next.authPasswordHash = string(hash)
+		next.AuthPassword = ""
+	}
+	for env, value := range map[string]string{"POWERWHOIS_ADMIN_USER": next.AuthUsername, "POWERWHOIS_JWT_SECRET": next.JwtSecretKey} {
 		if managed := os.Getenv(env); managed != "" && value != managed {
 			return fmt.Errorf("%s is managed by the service environment; change it there and restart", env)
 		}
@@ -340,6 +398,9 @@ func WriteConfig(next Config) error {
 		if os.Getenv(env) != "" {
 			fields[key] = ""
 		}
+	}
+	if next.authPasswordHash != "" {
+		fields["authPasswordHash"] = next.authPasswordHash
 	}
 	data, err = yaml.Marshal(fields)
 	if err != nil {

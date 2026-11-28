@@ -1,21 +1,24 @@
 <template>
-    <q-card flat class="workspace-card overflow-hidden" v-if="domainResults.length > 0">
+    <q-card flat class="workspace-card result-card" v-if="domainResults.length > 0">
+        <div class="result-title"><h2>查询结果</h2><span>共 {{ domainResults.length }} 个域名</span></div>
         <q-table
             :rows="filteredResults"
             row-key="domainID"
             :columns="tableColumns"
-            :visibleColumns="visibleColumns"
+            :visibleColumns="$q.screen.lt.sm ? visibleColumns.filter(c => ['domain', 'status', 'registerStatus'].includes(c)) : visibleColumns"
             v-model:pagination="tablePagination"
             :selection="canRegister ? 'multiple' : 'none'"
             v-model:selected="selectedDomains"
             :rows-per-page-options="[25, 50, 100]"
             flat
+            aria-label="域名查询结果"
+            no-data-label="没有匹配的域名，可更换状态或清空搜索。"
             class="bg-white"
         >
             <template v-slot:top>
                 <div class="full-width">
                     <div class="row items-center q-gutter-sm">
-                        <q-input dense outlined v-model="filter" placeholder="搜索域名…" clearable style="min-width: 210px">
+                        <q-input dense outlined v-model="filter" aria-label="搜索结果域名" placeholder="搜索域名…" clearable class="result-search">
                             <template #prepend><q-icon name="filter_list" size="18px" /></template>
                         </q-input>
                         <q-btn
@@ -73,77 +76,12 @@
                         </q-btn>
                     </div>
 
-                    <div class="row items-center q-gutter-xs q-mt-sm text-caption">
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="statusFilter !== 'all'"
-                            color="primary"
-                            text-color="white"
-                            @click="toggleStatusFilter('all')"
-                        >
-                            全部 {{ domainResults.length }}
-                        </q-chip>
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="statusFilter !== 'Taken'"
-                            color="blue-8"
-                            text-color="white"
-                            @click="toggleStatusFilter('Taken')"
-                        >
-                            已注册 {{ summaryCounts.taken }}
-                        </q-chip>
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="statusFilter !== 'NotFound'"
-                            color="teal-8"
-                            text-color="white"
-                            @click="toggleStatusFilter('NotFound')"
-                        >
-                            未找到 {{ summaryCounts.free }}
-                        </q-chip>
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="statusFilter !== 'Unknown'"
-                            color="blue-grey-7"
-                            text-color="white"
-                            @click="toggleStatusFilter('Unknown')"
-                        >
-                            未知 {{ summaryCounts.unknown }}
-                        </q-chip>
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="statusFilter !== 'Timeout'"
-                            color="deep-orange-8"
-                            text-color="white"
-                            @click="toggleStatusFilter('Timeout')"
-                        >
-                            超时 {{ summaryCounts.timeout }}
-                        </q-chip>
-                        <q-chip
-                            clickable
-                            dense
-                            square
-                            :outline="statusFilter !== 'Error'"
-                            color="negative"
-                            text-color="white"
-                            @click="toggleStatusFilter('Error')"
-                        >
-                            错误 {{ summaryCounts.error }}
-                        </q-chip>
-                        <q-chip v-if="summaryCounts.pending > 0" dense square outline color="accent">
-                            待完成 {{ summaryCounts.pending }}
-                        </q-chip>
-                        <span class="text-grey-7 q-ml-xs">点击状态标签可筛选，点击域名或状态可查看查询详情与原始响应</span>
+                    <div class="status-filters" role="group" aria-label="筛选查询状态">
+                        <button v-for="item in filters" :key="item.key" type="button" :aria-pressed="statusFilter === item.key"
+                            @click="toggleStatusFilter(item.key)">
+                            {{ item.label }} <span>{{ item.count }}</span>
+                        </button>
+                        <span v-if="summaryCounts.pending" class="pending-count">待完成 {{ summaryCounts.pending }}</span>
                     </div>
                 </div>
             </template>
@@ -281,6 +219,7 @@
 
             <q-card-section>
                 <div v-if="checkedDetailRow" class="detail-meta text-body2 q-mb-sm">
+                    <div v-if="formatTypoTypes(checkedDetailRow)"><strong>变体规则：</strong>{{ formatTypoTypes(checkedDetailRow) }}</div>
                     <div v-if="checkedDetailRow.source || checkedDetailRow.lookupType">
                         <strong>查询来源：</strong>{{ checkedDetailRow.source || "—" }}（{{ checkedDetailRow.lookupType || "—" }}）
                     </div>
@@ -427,6 +366,11 @@ const summaryCounts = computed(() => {
 });
 
 const retryableCount = computed(() => summaryCounts.value.error + summaryCounts.value.timeout + summaryCounts.value.unknown);
+const filters = computed(() => [
+    { key: "all", label: "全部", count: props.domainResults.length },
+    ...[["Taken", "taken"], ["NotFound", "free"], ["Unknown", "unknown"], ["Timeout", "timeout"], ["Error", "error"]]
+        .map(([key, count]) => ({ key, label: statusLabels[key], count: summaryCounts.value[count] }))
+]);
 
 const filteredResults = computed(() => {
     const keyword = (filter.value || "").trim().toLowerCase();
@@ -557,7 +501,7 @@ function registerSelectedDomains() {
         $q.notify({
             position: "top",
             type: "warning",
-            message: "请先在上方选择注册接口"
+            message: "请先展开上方的「手动注册接口」并选择注册商"
         });
         return;
     }

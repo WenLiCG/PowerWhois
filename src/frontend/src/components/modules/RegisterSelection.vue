@@ -1,32 +1,11 @@
 <template>
-    <q-item class="q-py-sm q-px-none">
-        <q-item-section side class="text-weight-bold text-grey-9" style="min-width: 84px">注册接口</q-item-section>
-        <q-item-section>
-            <div class="flex justify-left items-center q-gutter-sm">
-                <q-radio
-                    v-model="registerType"
-                    checked-icon="check_circle"
-                    unchecked-icon="radio_button_unchecked"
-                    :val="api"
-                    :label="api"
-                    :disable="disable"
-                    v-for="api in settingStore.registerApis"
-                    :key="api"
-                />
-                <q-btn
-                    v-if="registerType"
-                    flat
-                    dense
-                    no-caps
-                    size="xs"
-                    color="grey-7"
-                    label="取消选择"
-                    :disable="disable"
-                    @click="registerType = null"
-                />
-            </div>
-        </q-item-section>
-    </q-item>
+    <q-expansion-item icon="shopping_cart" label="手动注册接口" class="suffix-options">
+        <div class="mode-options">
+            <q-radio v-for="api in settingStore.registerApis" :key="api" v-model="registerType" :val="api" :label="api" color="primary" :disable="disable" />
+            <q-btn v-if="registerType" flat dense no-caps label="取消选择" :disable="disable" @click="registerType = null" />
+        </div>
+        <p v-if="registerType" class="mode-description">已选 {{ registerType }}。勾选查询结果并确认后才会提交注册。</p>
+    </q-expansion-item>
 </template>
 
 <script setup>
