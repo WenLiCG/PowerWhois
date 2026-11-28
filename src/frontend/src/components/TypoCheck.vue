@@ -1,82 +1,35 @@
 <template>
-    <q-card flat class="workspace-card q-pa-md">
-        <div class="text-subtitle1 text-weight-bold text-grey-9 q-mb-sm">Typo 变体生成与查询</div>
-        <div class="row q-col-gutter-sm items-start">
-            <div class="col">
-                <q-input
-                    outlined
-                    autofocus
-                    clearable
-                    class="full-width"
-                    v-model="domainInput"
-                    label="原始主域名"
-                    hint="输入单个基准域名（如 example.com），自动生成拼写变体并查询注册状态"
-                    placeholder="example.com"
-                    @keyup.enter="typoCheckDomain()"
-                    :disable="webStore.busy"
-                />
-            </div>
-            <div class="col-12 col-sm-auto">
-                <div class="row q-gutter-sm no-wrap">
-                    <q-btn
-                        unelevated
-                        no-caps
-                        icon="send"
-                        color="primary"
-                        label="生成并查询"
-                        style="height: 56px"
-                        class="q-px-lg full-width"
-                        :loading="webStore.pendingQuery === 'typoCheck' || pendingCount > 0"
-                        :percentage="handleProgress"
-                        :disable="webStore.busy"
-                        @click="typoCheckDomain()"
-                    >
-                        <template v-slot:loading>
-                            <q-spinner-bars class="on-left" />
-                            <span v-if="webStore.pendingQuery === 'typoCheck'">正在提交变体查询…</span>
-                            <span v-else>{{ handleProgress }}%</span>
-                        </template>
-                    </q-btn>
-                    <q-btn
-                        v-if="pendingCount > 0"
-                        outline
-                        no-caps
-                        color="negative"
-                        icon="stop_circle"
-                        label="停止"
-                        style="height: 56px"
-                        @click="stopQuery"
-                        :loading="webStore.pendingQuery === 'stop'"
-                    />
-                </div>
+    <header class="page-heading"><h1>Typo 变体查询</h1><p>从一个域名生成拼写或后缀变体，并查询各候选域名的注册状态。</p></header>
+    <q-card flat class="workspace-card lookup-card">
+        <div class="lookup-grid">
+            <section class="domain-editor typo-editor">
+                <label class="section-label" for="typo-domain">原始域名</label>
+                <q-input id="typo-domain" outlined clearable v-model="domainInput" aria-label="原始主域名" placeholder="example.com"
+                    autocapitalize="none" autocomplete="off" spellcheck="false" @keyup.enter="typoCheckDomain()" :disable="webStore.busy" />
+                <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="webStore.busy" />
+                <q-expansion-item icon="public" class="suffix-options" :label="`后缀变体（已选 ${typoSelectedCcTLDs.length}）`">
+                    <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="webStore.busy" />
+                </q-expansion-item>
+            </section>
+            <aside class="query-sidebar">
+                <WhoisSelection v-model:queryType="queryType" :disable="webStore.busy" />
+                <RegisterSelection v-if="tokenStore.token && settingStore.registerApis.length" v-model:registerType="registerType" :disable="webStore.busy" />
+            </aside>
+        </div>
+        <div class="form-action-bar">
+            <span class="action-summary">已选 {{ typoTypeSelected.length }} 种拼写规则、{{ typoSelectedCcTLDs.length }} 个后缀</span>
+            <div class="form-buttons">
+                <q-btn v-if="pendingCount > 0" outline no-caps color="negative" icon="stop_circle" label="停止" @click="stopQuery"
+                    :loading="webStore.pendingQuery === 'stop'" />
+                <q-btn unelevated no-caps color="primary" icon="spellcheck" label="生成并查询" class="primary-action" @click="typoCheckDomain()"
+                    :loading="webStore.pendingQuery === 'typoCheck' || pendingCount > 0" :percentage="handleProgress" :disable="webStore.busy">
+                    <template #loading><q-spinner class="on-left" />{{ webStore.pendingQuery === "typoCheck" ? "正在生成…" : `查询中 ${handleProgress}%` }}</template>
+                </q-btn>
             </div>
         </div>
-        <div v-if="otherTabBusy" class="busy-elsewhere q-mt-sm" role="status">
-            <q-icon name="hourglass_top" size="16px" />
-            网页查询页面有查询或注册正在进行；完成或在该页面停止后可开始新的变体查询，本页结果会保留。
-        </div>
-
-        <q-separator class="q-mt-md" />
-
-        <TypoSelection v-model:typoTypeSelected="typoTypeSelected" :disable="webStore.busy" />
-
-        <q-separator />
-
-        <CcTldSelection v-model:selectedTlds="typoSelectedCcTLDs" :disable="webStore.busy" />
-
-        <q-separator />
-
-        <WhoisSelection v-model:queryType="queryType" :disable="webStore.busy" />
-
-        <template v-if="tokenStore.token && settingStore.registerApis.length">
-            <q-separator />
-            <RegisterSelection v-model:registerType="registerType" :disable="webStore.busy" />
-        </template>
+        <p v-if="otherTabBusy" class="busy-message" role="status">网页查询正在进行。完成后即可查询新的变体。</p>
     </q-card>
-
-    <div v-if="typoCheckDomains.length > 0" class="q-mt-md">
-        <CheckedResult :domainResults="typoCheckDomains" :resultType="resultType" :queryType="queryType" :registerType="registerType" />
-    </div>
+    <CheckedResult v-if="typoCheckDomains.length" :domainResults="typoCheckDomains" :resultType="resultType" :queryType="queryType" :registerType="registerType" />
 </template>
 
 <script setup>
@@ -180,13 +133,3 @@ const handleProgress = computed(() => {
     return Math.round(((typoCheckDomains.value.length - pendingCount.value) / typoCheckDomains.value.length) * 100);
 });
 </script>
-
-<style scoped>
-.busy-elsewhere {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: #8a5a00;
-    font-size: 13px;
-}
-</style>

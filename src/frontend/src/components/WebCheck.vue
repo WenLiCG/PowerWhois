@@ -1,108 +1,55 @@
 <template>
-    <q-card flat class="workspace-card q-pa-md">
-        <div class="row items-center justify-between q-mb-sm q-gutter-xs">
-            <div class="text-subtitle1 text-weight-bold text-grey-9">即时域名查询</div>
-            <div class="row items-center q-gutter-xs">
-                <q-badge
-                    :color="uniqueInputCount > settingStore.webCheckDomainLimit ? 'negative' : 'blue-grey-7'"
-                    outline
-                    class="q-px-sm q-py-xs"
-                >
-                    已输入 {{ uniqueInputCount }} / {{ settingStore.webCheckDomainLimit }} 个域名
-                </q-badge>
-                <q-btn
-                    flat
-                    dense
-                    no-caps
-                    size="sm"
-                    icon="auto_fix_high"
-                    color="primary"
-                    label="整理去重"
-                    :disable="webStore.busy || !domainInput"
-                    @click="cleanDomainInput"
-                />
-                <q-btn
-                    flat
-                    dense
-                    no-caps
-                    size="sm"
-                    icon="clear_all"
-                    color="grey-7"
-                    label="清空"
-                    :disable="webStore.busy || !domainInput"
-                    @click="domainInput = ''"
-                />
-            </div>
+    <header class="page-heading">
+        <h1>即时域名查询</h1>
+        <p>查询域名注册状态、到期日期与权威 DNS，逐条查看注册局响应。</p>
+    </header>
+    <q-card flat class="workspace-card lookup-card">
+        <div class="lookup-grid">
+            <section class="domain-editor">
+                <div class="input-heading">
+                    <label for="web-domains" class="section-label">域名列表</label>
+                    <div class="input-tools">
+                        <q-btn flat dense no-caps icon="auto_fix_high" label="整理去重" :disable="webStore.busy || !domainInput" @click="cleanDomainInput" />
+                        <q-btn flat dense no-caps icon="clear_all" label="清空" :disable="webStore.busy || !domainInput" @click="domainInput = ''" />
+                    </div>
+                </div>
+                <q-input id="web-domains" outlined v-model="domainInput" type="textarea" rows="4" class="domain-textarea"
+                    aria-label="查询域名列表" aria-describedby="domain-format" autocomplete="off" autocapitalize="none" spellcheck="false"
+                    placeholder="example.com&#10;example.org&#10;例子.中国" :disable="webStore.busy"
+                    @keydown.ctrl.enter.prevent="queryDomains()" @keydown.meta.enter.prevent="queryDomains()" />
+                <div class="editor-footnote">
+                    <span id="domain-format">每行一个域名，支持中文域名。</span>
+                    <span :class="{ 'text-negative': uniqueInputCount > settingStore.webCheckDomainLimit }">
+                        已输入 {{ uniqueInputCount }} / {{ settingStore.webCheckDomainLimit }}
+                    </span>
+                </div>
+            </section>
+            <aside class="query-sidebar">
+                <WhoisSelection v-model:queryType="queryType" :disable="webStore.busy" />
+                <RegisterSelection v-if="tokenStore.token && settingStore.registerApis.length" v-model:registerType="registerType" :disable="webStore.busy" />
+            </aside>
         </div>
-
-        <q-input
-            outlined
-            label="查询域名列表"
-            hint="每行一个纯域名（如 example.com，支持中文 IDN 域名；不含 http:// 或路径）。快捷键：Ctrl + Enter 开始查询"
-            class="full-width"
-            v-model="domainInput"
-            type="textarea"
-            autogrow
-            :input-style="{ minHeight: '110px', maxHeight: '280px' }"
-            placeholder="example.com&#10;example.org&#10;例子.中国"
-            :disable="webStore.busy"
-            @keydown.ctrl.enter.prevent="queryDomains()"
-            @keydown.meta.enter.prevent="queryDomains()"
-        />
-
-        <q-separator class="q-mt-md" />
-
-        <WhoisSelection v-model:queryType="queryType" :disable="webStore.busy" />
-
-        <template v-if="tokenStore.token && settingStore.registerApis.length">
-            <q-separator />
-            <RegisterSelection v-model:registerType="registerType" :disable="webStore.busy" />
-        </template>
-
-        <q-separator class="q-mb-md" />
-
-        <div class="row q-col-gutter-sm items-center">
-            <div class="col">
-                <q-btn
-                    unelevated
-                    no-caps
-                    color="primary"
-                    icon="search"
-                    label="开始查询"
-                    class="full-width"
-                    :loading="webStore.pendingQuery === 'webCheck' || pendingCount > 0"
-                    :percentage="handleProgress"
-                    :disable="webStore.busy"
-                    @click="queryDomains()"
-                >
-                    <template v-slot:loading>
-                        <q-spinner-bars class="on-left" />
-                        <span v-if="webStore.pendingQuery === 'webCheck'">正在提交查询…</span>
-                        <span v-else class="text-white">正在查询 {{ handleProgress }}%（剩余 {{ pendingCount }}）</span>
+        <div class="form-action-bar">
+            <span class="keyboard-hint"><kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>Enter</kbd> 开始查询</span>
+            <div class="form-buttons">
+                <q-btn v-if="pendingCount > 0" outline no-caps color="negative" icon="stop_circle" label="停止查询" @click="stopQuery"
+                    :loading="webStore.pendingQuery === 'stop'" />
+                <q-btn unelevated no-caps color="primary" icon="search" label="开始查询" class="primary-action"
+                    :loading="webStore.pendingQuery === 'webCheck' || pendingCount > 0" :percentage="handleProgress" :disable="webStore.busy" @click="queryDomains()">
+                    <template #loading>
+                        <q-spinner class="on-left" />
+                        <span>{{ webStore.pendingQuery === "webCheck" ? "正在提交…" : `查询中 ${handleProgress}%` }}</span>
                     </template>
                 </q-btn>
             </div>
-            <div class="col-auto" v-if="pendingCount > 0">
-                <q-btn
-                    outline
-                    no-caps
-                    color="negative"
-                    icon="stop_circle"
-                    label="停止查询"
-                    @click="stopQuery"
-                    :loading="webStore.pendingQuery === 'stop'"
-                />
-            </div>
         </div>
-        <div v-if="otherTabBusy" class="busy-elsewhere q-mt-sm" role="status">
-            <q-icon name="hourglass_top" size="16px" />
-            Typo 页面有查询或注册正在进行；完成或在 Typo 页面停止后可开始新的查询，本页结果会保留。
-        </div>
+        <p v-if="otherTabBusy" class="busy-message" role="status">Typo 查询正在进行。完成后即可开始新的网页查询。</p>
     </q-card>
 
-    <div v-if="webCheckDomains.length > 0" class="q-mt-md">
-        <CheckedResult :domainResults="webCheckDomains" :resultType="resultType" :queryType="queryType" :registerType="registerType" />
-    </div>
+    <CheckedResult v-if="webCheckDomains.length" :domainResults="webCheckDomains" :resultType="resultType" :queryType="queryType" :registerType="registerType" />
+    <section v-else class="results-placeholder" aria-label="查询结果">
+        <q-icon name="manage_search" size="32px" aria-hidden="true" /><div><h2>查询结果</h2><p>提交后，域名状态与查询详情将在这里显示。</p></div>
+    </section>
 </template>
 
 <script setup>
@@ -226,13 +173,3 @@ const handleProgress = computed(() => {
     return Math.round(((webCheckDomains.value.length - pendingCount.value) / webCheckDomains.value.length) * 100);
 });
 </script>
-
-<style scoped>
-.busy-elsewhere {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: #8a5a00;
-    font-size: 13px;
-}
-</style>

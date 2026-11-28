@@ -77,7 +77,7 @@ func TestWebSocketAuthorizationAndLimits(t *testing.T) {
 	send("adminAuth", strings.Repeat("query-only-token", 4))
 	send("register", Register{Confirmed: true})
 	expect("registerError", "需要管理员")
-	token, e := generateToken("ws-fixture")
+	token, e := generateToken(config.GetConfig())
 	if e != nil {
 		t.Fatal(e)
 	}

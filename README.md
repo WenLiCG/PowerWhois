@@ -24,7 +24,7 @@ test -e .env || install -m 600 .env.example .env
 ${EDITOR:-vi} .env
 ```
 
-Leave the fresh-install configuration directory at `./runtime/backend` and set the four credentials in `.env`. Choose an administrator username and a password of at least 12 characters. Generate independent random values of at least 32 characters for `POWERWHOIS_JWT_SECRET` and `POWERWHOIS_QUERY_TOKEN`. Keep `.env` outside version control.
+Leave the fresh-install configuration directory at `./runtime/backend` and set the four credentials in `.env`. Set the administrator username and an initial nonblank password. After signing in, change the password in System Settings. Saving takes effect immediately and requires administrators to sign in again. The replacement is stored as a hash in the mounted configuration and survives container recreation. Generate independent random values of at least 32 characters for `POWERWHOIS_JWT_SECRET` and `POWERWHOIS_QUERY_TOKEN`. Keep `.env` outside version control.
 
 ```sh
 sudo install -d -o 10001 -g 10001 -m 750 runtime/backend

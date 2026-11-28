@@ -56,7 +56,7 @@ func TestSafeConfigRoundTrip(t *testing.T) {
 	if err := Load(path); err != nil || GetConfig().SocketProxyPassword != c.SocketProxyPassword {
 		t.Fatal("YAML round trip", err)
 	}
-	c.AuthPassword = "different-password"
+	c.JwtSecretKey = strings.Repeat("different", 6)
 	if UpdateConfig(c) == nil {
 		t.Fatal("environment credential unexpectedly editable")
 	}
@@ -77,6 +77,9 @@ func TestSafeConfigRoundTrip(t *testing.T) {
 	}
 	if userMeta, ok := secretsMap["authUsername"].(map[string]bool); !ok || !userMeta["managed"] {
 		t.Fatalf("expected authUsername managed metadata, got %+v", secretsMap["authUsername"])
+	}
+	if pw := secretsMap["authPassword"].(map[string]bool); pw["managed"] || !pw["configured"] {
+		t.Fatal("an environment seed prevented Web password changes")
 	}
 	encoded, _ := json.Marshal(public)
 	for _, secret := range []string{c.AuthPassword, c.JwtSecretKey, c.SocketProxyPassword, c.WhoisApis[0].ApiUrl} {
@@ -100,6 +103,35 @@ func TestSafeConfigRoundTrip(t *testing.T) {
 	copy.WhoisApis[0].FreeText[0] = "mutated"
 	if GetConfig().WhoisApis[0].FreeText[0] == "mutated" {
 		t.Fatal("configuration snapshot aliases live data")
+	}
+}
+
+func TestPasswordSourcesWithoutEnvironmentSeed(t *testing.T) {
+	original, originalPath := GetConfig(), configFile
+	t.Cleanup(func() { mu.Lock(); config, configFile = original, originalPath; mu.Unlock() })
+	t.Setenv("POWERWHOIS_ADMIN_USER", "fixture")
+	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", "")
+	t.Setenv("POWERWHOIS_JWT_SECRET", strings.Repeat("b", 32))
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	for _, tc := range []struct {
+		yaml string
+		ok   bool
+	}{
+		{"authPassword: native-legacy-password", true},
+		{"authPassword: 123456", false},
+		{"authPassword: '   '", false},
+		{"logLevel: Info", false},
+		{"authPassword: native-legacy-password\nauthPasswordHash: damaged", false},
+	} {
+		if err := os.WriteFile(path, []byte(tc.yaml), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Load(path); (err == nil) != tc.ok {
+			t.Fatalf("unexpected credential source accepted=%t", err == nil)
+		}
+		if tc.ok && !GetConfig().MatchesPassword("native-legacy-password") {
+			t.Fatal("upgrade lost native configuration password")
+		}
 	}
 }
 

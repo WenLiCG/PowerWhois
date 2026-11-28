@@ -27,7 +27,7 @@ test -e .env || install -m 600 .env.example .env
 ${EDITOR:-vi} .env
 ```
 
-新安装保留 `POWERWHOIS_CONFIG_DIR=./runtime/backend`，并填写四项凭据。设置管理员用户名和至少 12 字符的密码，为 `POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN` 分别生成至少 32 字符的随机值。确保 `.env` 不进入 Git。
+新安装保留 `POWERWHOIS_CONFIG_DIR=./runtime/backend`，并填写四项凭据。设置管理员用户名和初始密码。登录后可在「系统设置」更换密码，长度由你决定，不能为空或全为空白。保存后使用新密码重新登录。新密码以哈希形式保存在挂载的配置目录，重建容器后仍有效。为 `POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN` 分别生成至少 32 字符的随机值。确保 `.env` 不进入 Git。
 
 ```sh
 sudo install -d -o 10001 -g 10001 -m 750 runtime/backend

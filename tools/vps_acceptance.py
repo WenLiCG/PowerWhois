@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run on a deployed VPS as its operator. Uses protected environment files, never prints secrets.
 Only public example-domain lookups and query tasks are submitted. Registration is never executed.
+After a Web password change, enter the current password at the prompt or supply POWERWHOIS_ADMIN_PASSWORD via the process environment.
 This restarts powerwhois.service once; run during an authorized maintenance window.
 """
 import base64
+import getpass
 import io
 import json
 import os
@@ -12,6 +14,7 @@ import re
 import secrets
 import socket
 import struct
+import sys
 import subprocess
 import time
 import urllib.error
@@ -51,7 +54,14 @@ def main():
     check('unknown API is not SPA HTML', rejected('/api/unknown', 404))
     check('anonymous API rejected', rejected('/api/v1/tasks', 401))
     check('query token cannot administer', rejected('/api/admin/setting', 401, credential=token))
-    admin = request('/api/login', {'username': env['POWERWHOIS_ADMIN_USER'], 'password': env['POWERWHOIS_ADMIN_PASSWORD']}, credential='')['token']
+    login = {'username': env['POWERWHOIS_ADMIN_USER'], 'password': os.environ.get('POWERWHOIS_ADMIN_PASSWORD', env.get('POWERWHOIS_ADMIN_PASSWORD', ''))}
+    try:
+        admin = request('/api/login', login, credential='')['token']
+    except urllib.error.HTTPError as error:
+        if error.code != 400 or not sys.stdin.isatty():
+            raise
+        login['password'] = getpass.getpass('Current Web administrator password: ')
+        admin = request('/api/login', login, credential='')['token']
     settings = request('/api/admin/setting', credential=admin)
     check('settings hide credentials', not any(settings[k] for k in ('authPassword', 'jwtSecretKey', 'socketProxyPassword')))
     settings['secretActions'] = {'authPassword': 'keep', 'jwtSecretKey': 'keep', 'socketProxyPassword': 'keep'}
@@ -150,7 +160,7 @@ def main():
     data,_=request('/api/admin/log',credential=admin,raw=True)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         text='\n'.join(archive.read(name).decode(errors='replace') for name in archive.namelist())
-        check('protected log download and secret scan', archive.testzip() is None and not any(env[k] in text for k in ('POWERWHOIS_ADMIN_PASSWORD','POWERWHOIS_JWT_SECRET','POWERWHOIS_QUERY_TOKEN','REDIS_PASSWORD')))
+        check('protected log download and secret scan', archive.testzip() is None and not any(value in text for value in (login['password'], env.get('POWERWHOIS_ADMIN_PASSWORD'), env['POWERWHOIS_JWT_SECRET'], token, env.get('REDIS_PASSWORD')) if value))
     subprocess.run(['systemctl','restart','powerwhois.service'],check=True)
     for _ in range(200):
         try:

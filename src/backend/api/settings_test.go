@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/gofiber/fiber/v2"
+	"gopkg.in/yaml.v3"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -13,6 +14,100 @@ import (
 	"testing"
 	"typonamer/config"
 )
+
+func TestWebPasswordChangeSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("authPassword: 123456\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("POWERWHOIS_ADMIN_USER", "fixture")
+	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", "old-environment-password")
+	t.Setenv("POWERWHOIS_JWT_SECRET", strings.Repeat("fixture!", 8))
+	if err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	app := fiber.New()
+	app.Route("/api", ApiRoute)
+	request := func(method, url, token string, payload any, want int) []byte {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(method, url, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := app.Test(req, 5000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("%s %s: status %d, want %d", method, url, resp.StatusCode, want)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	login := func(password string, want int) string {
+		t.Helper()
+		body := request("POST", "/api/login", "", LoginInfo{Username: "fixture", Password: password}, want)
+		if want != 200 {
+			return ""
+		}
+		var result struct{ Token string }
+		if err := json.Unmarshal(body, &result); err != nil || result.Token == "" {
+			t.Fatal("missing login token")
+		}
+		return result.Token
+	}
+	login("123456", 400)
+	old := login("old-environment-password", 200)
+	authenticatedBeforeChange := config.GetConfig()
+	fields := config.PublicSettings()
+	fields["secretActions"] = map[string]string{"authPassword": "set"}
+	fields["authPassword"] = " \t "
+	request("PUT", "/api/admin/setting", old, fields, 400)
+	fields["secretActions"] = map[string]string{"authPassword": "clear"}
+	request("PUT", "/api/admin/setting", old, fields, 400)
+	fields["secretActions"] = map[string]string{"authPassword": "set"}
+	fields["authPassword"] = "123456"
+	body := request("PUT", "/api/admin/setting", old, fields, 200)
+	if bytes.Contains(body, []byte("123456")) || bytes.Contains(body, []byte("authPasswordHash")) || bytes.Contains(body, []byte("old-environment-password")) {
+		t.Fatal("password change disclosed credentials")
+	}
+	newToken := login("123456", 200)
+	request("GET", "/api/admin/setting", old, nil, 401)
+	lateToken, err := generateToken(authenticatedBeforeChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request("GET", "/api/admin/setting", lateToken, nil, 401)
+	login("old-environment-password", 400)
+	saved, err := os.ReadFile(path)
+	var disk struct {
+		Password string `yaml:"authPassword"`
+		Hash     string `yaml:"authPasswordHash"`
+	}
+	if err != nil || yaml.Unmarshal(saved, &disk) != nil || disk.Password != "" || disk.Hash == "" || bytes.Contains(saved, []byte("old-environment-password")) {
+		t.Fatal("new credential not stored privately")
+	}
+	t.Setenv("POWERWHOIS_ADMIN_PASSWORD", "changed-bootstrap-password")
+	if err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	request("PUT", "/api/admin/setting", newToken, config.PublicSettings(), 200)
+	if err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	login("changed-bootstrap-password", 400)
+	login("old-environment-password", 400)
+	login("123456", 200)
+	request("GET", "/api/admin/setting", old, nil, 401)
+	request("GET", "/api/admin/setting", newToken, nil, 200)
+}
 
 func TestAdminSettingsNeverRoundTripCredentials(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -29,7 +124,7 @@ func TestAdminSettingsNeverRoundTripCredentials(t *testing.T) {
 	if e := config.UpdateConfig(cfg); e != nil {
 		t.Fatal(e)
 	}
-	token, e := generateToken(cfg.AuthUsername)
+	token, e := generateToken(cfg)
 	if e != nil {
 		t.Fatal(e)
 	}

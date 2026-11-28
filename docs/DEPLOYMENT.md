@@ -17,9 +17,11 @@ make all
 
 后端输出到 `dist/backend/`；网页在 `src/frontend/dist/spa/`。Makefile 不覆盖现有部署目录。非 make 环境可以在 `src/backend` 分别运行 `go build`、`go build ./cmd/powerwhois`、`go build ./cmd/powerwhois-mcp`。
 
-启动时配置 `POWERWHOIS_CONFIG` 为 YAML 路径（未设置则读取可执行文件同目录 config.yaml），提供 `POWERWHOIS_ADMIN_USER`、`POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN`。密码至少 12 字符，密钥/token 至少 32 字符并使用密码学随机值。不要放入 shell 命令参数、Git、截图或共享日志。默认监听 `127.0.0.1:8080`；`REDIS_HOST/REDIS_PORT/REDIS_DB/REDIS_PASSWORD` 可配置数据库。只读二进制目录部署时，将 `POWERWHOIS_LOG_DIR` 指向服务可写的日志目录；日志 ZIP 和旧批量 CSV 按请求写入系统临时目录，下载结束时清理。临时目录需有足够可写空间，异常中止后可在停机时核对遗留的 powerwhois-download-* 文件。`POWERWHOIS_LOG_STDOUT=true` 时日志同时写到标准输出（Compose 默认开启，`docker compose logs typonamer` 可见），文件日志仍供网页下载。后端内置 Go 时区库，精简镜像或缺少 `/usr/share/zoneinfo` 的主机上 `TZ` 设置与下载文件名中的时间同样有效。
+启动时配置 `POWERWHOIS_CONFIG` 为 YAML 路径（未设置则读取可执行文件同目录 config.yaml），提供 `POWERWHOIS_ADMIN_USER`、`POWERWHOIS_ADMIN_PASSWORD`、`POWERWHOIS_JWT_SECRET` 和 `POWERWHOIS_QUERY_TOKEN`。管理员密码只要求非空且不全为空白。JWT 密钥和查询 token 仍各需至少 32 字符，并使用密码学随机值。不要放入 shell 命令参数、Git、截图或共享日志。默认监听 `127.0.0.1:8080`；`REDIS_HOST/REDIS_PORT/REDIS_DB/REDIS_PASSWORD` 可配置数据库。只读二进制目录部署时，将 `POWERWHOIS_LOG_DIR` 指向服务可写的日志目录；日志 ZIP 和旧批量 CSV 按请求写入系统临时目录，下载结束时清理。临时目录需有足够可写空间，异常中止后可在停机时核对遗留的 powerwhois-download-* 文件。`POWERWHOIS_LOG_STDOUT=true` 时日志同时写到标准输出（Compose 默认开启，`docker compose logs typonamer` 可见），文件日志仍供网页下载。后端内置 Go 时区库，精简镜像或缺少 `/usr/share/zoneinfo` 的主机上 `TZ` 设置与下载文件名中的时间同样有效。
 
-环境管理的管理员凭据不能在 Web 修改；配置保存不会把这些秘密落到 YAML。其他设置仍从 Web 修改并原子写入 YAML。配置目录必须可写（需要创建临时文件并替换原文件），仅挂载只读单文件会导致保存失败。自定义注册/API URL 可能包含秘密，配置文件应为 0600，目录限制访问；备份也要同等保护。
+已有实例升级后使用原密码登录。在「系统设置」更换管理员密码并保存后，旧密码和原登录会话失效。网页保存的密码哈希优先于初始密码环境变量，重启后继续生效。只保存其他设置时，环境中的密码不会写入文件。环境提供的管理员用户名和 JWT 密钥继续由部署配置管理。网页设置原子写入 YAML。配置目录必须可写（需要创建临时文件并替换原文件），仅挂载只读单文件会导致保存失败。自定义注册/API URL 可能包含秘密，配置文件应为 0600，目录限制访问；备份也要同等保护。
+
+**忘记网页密码时**，先停止后端并备份当前配置目录和环境文件。在受保护的环境文件中设置新的临时 `POWERWHOIS_ADMIN_PASSWORD`，同时轮换 `POWERWHOIS_JWT_SECRET`，避免恢复早期配置后旧会话重新生效。用编辑器仅移除实际挂载的 `config.yaml` 中的 `authPasswordHash` 字段，再以更新后的环境重建后端（Compose 运行 `docker compose up -d --no-deps --force-recreate typonamer`）。使用临时密码登录后即可在网页设置自己的密码。
 
 开发网页：在 `src/frontend` 运行 `npm run dev`，访问 `http://127.0.0.1:8090`，代理到 8080 后端。开发服务器不用于公网生产服务。
 
